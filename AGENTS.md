@@ -40,3 +40,123 @@ For every user given task, you must do the following:
 
 - [Changes Insturctions](.agents/instructions/changes.instruction.md)
 - [Commit Insturctions](.agents/instructions/commit.instruction.md)
+
+## Commands
+
+Run everything through the Makefile. The Makefile mirrors
+`.pre-commit-config.yaml`, so the two cannot drift. `make` with no target prints
+the full list.
+
+| Task | Command |
+|---|---|
+| Install | `make install` |
+| Activate hooks (**required** — without it no check fires) | `make hooks` |
+| Lint / format check | `make lint-check` / `make format-check` |
+| Type check | `make typecheck` (strict; warnings are errors) |
+| Complexity gate | `make complexity` (max 15) |
+| Tests | `make test` (coverage floor 80 applies) |
+| Tests on changed files only | `make testmon` |
+| Workflow validation | `make workflows` (parse + actionlint) |
+| Everything CI gates on | `make verify` |
+| Build a binary | `make binary` |
+| Clean | `make clean` |
+
+Style config lives in `pyproject.toml` — read it, do not restate it. That table
+is the canonical copy; `CONTRIBUTING.md` points here.
+
+## Failure ledger
+
+Traps that were hit for real in this repository. Do not re-trip them; verify the
+claim rather than re-deriving it.
+
+- **`make verify` was red from a gitleaks false positive.** The council
+  extraction file stored SHA-256 content hashes in a field named `dedup_key`;
+  gitleaks' `generic-api-key` rule matches on the substring `key` and a 64-char
+  hex value clears its entropy threshold. Fixed by purging history *and*
+  gitignoring `.agents/council/*.jsonl`. A delete-commit is **not** a purge:
+  gitleaks scans with `--filter=tuxdb`, which includes deletions. And
+  `git filter-branch` leaves `refs/original` holding the old blobs, so
+  `rm -rf .git/refs/original` plus `reflog expire` plus `gc --prune=now` is
+  mandatory or the gate still fails.
+- **`make run` used to fail with `TypeError: 'module' object is not callable`.**
+  The console script `bigdata-mcp = "bigdata_mcp:main"` resolves `main` on the
+  *package*, so a 0-byte `__init__.py` bound the submodule object. Fixed by
+  re-exporting. The matching regression test must use the console script's own
+  body, `from bigdata_mcp import main; main()` — the intuitive probe
+  `import bigdata_mcp; bigdata_mcp.main()` raises `AttributeError` instead and
+  **passes even with the bug present**.
+- **`make verify` failed intermittently on a cold start.** pytest-testmon's DB
+  layer checks whether its datafile exists *before* it may delete and recreate
+  it, so two concurrent processes both call `init_tables()`. `prek run
+  --all-files` dispatches the hook concurrently. Fixed by
+  `scripts/with_testmon_lock.py`. Do not replace it with the `flock` command: it
+  is absent on a stock macOS, and `macos-latest` is in the CI matrix.
+- **`prek`/`pre-commit` only consider git-tracked files.** A hook on a brand-new
+  untracked path reports "no files to check" and looks green. `git add` first.
+- **actionlint cannot parse GitHub's `parallel:` step syntax** in any released
+  version (latest v1.7.12, no v1.8.x). Use sequential steps.
+- **`on:` parses as the boolean `True`** in YAML 1.1, not the string `"on"`. Any
+  code reading a workflow must handle `data[True]`.
+- **The entry point has no CLI surface yet.** `main()` takes no arguments, so a
+  `--help` / `--version` smoke test would be vacuous. The release smoke test
+  asserts exit code 0 only, and `tests/test_main.py` is what gives that meaning.
+- **`.github/dependabot.yml` is not an Actions workflow.** actionlint rejects its
+  top-level `updates:` key. It is covered by `check-yaml` and the contract tests.
+
+## Testing instructions
+
+- Tests live in `tests/`, mirroring `src/` module by module.
+- Add or update tests for behaviour changes, unasked. Documentation-only changes
+  need none; when a change is genuinely untestable, say so rather than writing a
+  test that asserts nothing.
+- **Never delete or weaken a test to make the suite pass.**
+- **Every assertion must be able to fail.** A test you cannot prove fails is a
+  taxidermy test. Break the thing it covers, watch it go red, put it back, and
+  report the evidence.
+- Tests must never touch the public internet. Mock HTTP, or use local servers and
+  fixtures.
+- `tests/test_repo_contracts.py` asserts repository invariants — SHA-pinned
+  actions, the required status check covering every CI job, deny-all
+  permissions, no untrusted input in a `run:` body, coverage floor wiring. If one
+  of these fails, a safety property has been removed from the repository. Treat a
+  failure there as a real regression, not a test to adjust.
+- A guard that only fires when a scan finds nothing needs a paired
+  anti-vacuity assertion, or it passes vacuously forever.
+
+## Boundaries
+
+- Never commit secrets. Never commit directly to `main`.
+- Ask before adding dependencies or changing `pyproject.toml`.
+- Never hand-edit `uv.lock` or anything under `.github/` without running
+  `make workflows` (actionlint and shellcheck run there).
+- Workflows pin third-party actions to a 40-character commit SHA with a trailing
+  `# vX.Y.Z` comment. A mutable tag means whoever controls the tag controls the
+  code CI runs.
+- A workflow that runs on `pull_request_target` or `workflow_run` holds a write
+  token against attacker-influenceable code. It must contain **no checkout** and
+  must never execute untrusted code.
+- Untrusted input reaches a shell through `env:`, never interpolated into a `run:`
+  body. `github.event.*` fields other than `github.event.number` are
+  attacker-controlled text.
+- No abstractions for a single implementation. That is a review rule, not a tool
+  gate.
+
+## Workflow
+
+- Verify claims by fetching sources before relying on them. When external
+  research drives a durable product or architecture decision, record the evidence
+  under `docs/` so the reasoning stays auditable. `docs/research/README.md` is
+  the index.
+- Run `make verify` before declaring work done, and show the output.
+- Follow the AI policy in `CONTRIBUTING.md`. For work where AI did more than
+  trivial editing, use the agent-assisted pull request template.
+
+## PR instructions
+
+- Branch: `<type>/<short-kebab-description>`, e.g. `fix/connector-retries`.
+- Commit format: see `.agents/instructions/commit.instruction.md`. The subject
+  states the *why*; the body enumerates the changes.
+- One logical change per PR. Do not let review feedback expand it beyond the
+  original goal.
+- Never open a PR unless asked.
+- Run the full hook set before pushing; the pre-push stage is a security gate.

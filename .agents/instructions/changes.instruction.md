@@ -67,3 +67,19 @@ Additional instructions:
 - Timestamp string format should be `%Y%m%d_%H%M%S`
 - Use subagents to generate test-cases/test-suites relavant to the change based on spec. Generate relevant unit/integration/regression/e2e tests based on the users requirement.
 - Prefer creating test before changes.
+- Config-only changes are not exempt from tests. Add an assertion in
+  `tests/test_repo_contracts.py` that the configuration encodes the decision it
+  exists for, and that fails if the decision is reverted.
+
+Two failure modes to name explicitly in a PR description, because both survive
+review unnoticed:
+
+- **Taxidermy tests.** Well-formed tests that assert nothing. A test that only
+  proves "the code runs" passes whether or not the behaviour is correct. Every
+  assertion must be *able* to fail: break the thing it covers, watch it go red,
+  restore it, and report the evidence you saw.
+- **Symptom patches.** Making a consumer tolerate bad data instead of fixing the
+  producer. If a value is wrong at a boundary, fix it at the boundary.
+
+A subagent that reports "tests pass" without mutation evidence has not finished
+the task. Ask for the red-then-green transcript.
