@@ -72,6 +72,29 @@ the files asserted here removes a real safety property with no visible symptom:
   auto-merge gate rejects an all-patch roll-up; a lost ``versioning-strategy:
   increase`` lets ``uv.lock`` drift ahead of the ``>=X.Y.Z`` lower bounds the
   manifest declares.
+- ``cd.yml``'s ``release`` job losing ``ci`` or ``build`` from its ``needs``, or
+  the reusable call losing ``run-all: true``: a tag that moved only a markdown
+  file makes ``detect-changes`` skip the Python jobs, so a release gate that
+  accepted that ships untested code. CI is *called* rather than copied, because
+  the copy that gates releases is the one nobody updates.
+- ``cd.yml`` setting ``cancel-in-progress: true``, or leaving ``enable-cache``
+  to setup-uv's ``auto`` default: ``cancel-in-progress`` is evaluated on the
+  *arriving* run and both triggers resolve to the same ref, so the second run
+  cancels the first mid-publish and leaves a half-populated release; a poisoned
+  cache entry must never be able to influence a release artifact.
+- a second job in ``cd.yml`` gaining ``contents: write``, or the ``release``
+  job gaining a checkout: a write token can rewrite tags and releases, so it
+  belongs on the one job that publishes, and a checkout is how untrusted code
+  gets onto a runner holding one.
+- ``cd.yml``'s build matrix dropping a platform, losing the smoke test, or
+  leaving the artifact upload at its lenient default: the artifact is a frozen
+  binary, so a platform that only ever ran on its own builder proves nothing
+  about the other two, and ``if-no-files-found: warn`` yields a release missing
+  a platform rather than a failed build.
+- ``cd.yml`` dropping its ``actions/attest`` step, its ``id-token: write`` or
+  ``attestations: write``, or ``generate_release_notes: true``: an unattested
+  downloadable binary cannot be traced to the commit it was built from, and the
+  OIDC scope is what lets Sigstore sign it at all.
 
 Every assertion below is derived from file contents or from a real ``git``
 subprocess run, so each one can be observed to fail under a targeted mutation.
@@ -93,6 +116,10 @@ import pytest
 import yaml
 
 ALWAYS_CONDITION = "always()"
+# `actions/attest` is the current entry point for build provenance; the older
+# `attest-build-provenance` action is now a thin wrapper over it, so naming the
+# wrapper instead would gate on a deprecated path rather than on provenance.
+ATTEST_ACTION = "actions/attest"
 # A `./`-prefixed reference is a checked-out local action, and a `docker://`
 # one is a container image. `docker://` is deliberately *excluded* from the
 # auto-merge allow-list even though the pinning rule above treats both as
@@ -101,6 +128,28 @@ ALWAYS_CONDITION = "always()"
 AUTO_MERGE_ALLOWED_LOCAL_PREFIX = "./"
 AUTO_MERGE_JOB_ID = "auto-merge"
 AUTO_MERGE_WORKFLOW_FILE = "dependabot-auto-merge.yml"
+BUILD_JOB = "build"
+# `cancel-in-progress` is evaluated on the *arriving* run, so the release
+# pipeline pins the bare boolean rather than a conditional expression: nothing
+# that arrives later may cancel a publish already in flight.
+CANCEL_IN_PROGRESS_KEY = "cancel-in-progress"
+CD_WORKFLOW_FILE = "cd.yml"
+CI_JOB = "ci"
+# The reusable-workflow call the release gate depends on. A `./` path is the
+# only spelling that keeps one definition of CI: a copy of its jobs inside the
+# release file drifts, and the copy that gates releases is the one nobody
+# remembers to update.
+CI_REUSABLE_WORKFLOW = "./.github/workflows/ci.yml"
+# The group is keyed on the ref alone, precisely so the tag-push and
+# release-published runs of one tag serialise behind each other rather than
+# running concurrently into the same release.
+CONCURRENCY_REF_REFERENCE = "github.ref"
+CONTENTS_READ = "read"
+CONTENTS_SCOPE = "contents"
+# `dist/` is the pyinstaller output directory, and every build-side path
+# assertion keys on it together with the per-OS artifact name: that pairing is
+# what ties an attested name to a file that was actually produced.
+DIST_PREFIX = "dist/"
 CHECKOUT_ACTION = "actions/checkout"
 CODEOWNERS_WILDCARD = "* @iamwatchdogs"
 CODEQL_ANALYZE_ACTION = "github/codeql-action/analyze"
@@ -124,6 +173,11 @@ ELIGIBLE_FALSE_ASSIGNMENT = "eligible=false"
 # `eligible=true` inside a branch body is not counted either.
 ELIGIBLE_TRUE_RE = re.compile(r"^\s*eligible=true\s*$", re.MULTILINE)
 ELIGIBLE_UPDATE_TYPE = "version-update:semver-patch"
+# setup-uv's own default for this input is `auto`, which already resolves to
+# "no cache" on a tag push and on a release event. Stating it explicitly is
+# what stops a future bump of that default from silently re-enabling a cache a
+# release build restores from.
+ENABLE_CACHE_KEY = "enable-cache"
 ENV_KEY = "env"
 EVENT_NAME_REFERENCE = "github.event_name"
 EXPECTED_DEPENDABOT_ECOSYSTEMS = frozenset({"github-actions", "pre-commit", "uv"})
@@ -133,27 +187,55 @@ EXPECTED_PATH_FILTERS = frozenset({"json", "python", "workflows"})
 # `elif` branches is a failure rather than a silent widening of the policy.
 EXCLUDED_ECOSYSTEMS = frozenset({"docker", "github-actions", "pre-commit"})
 FETCH_METADATA_ACTION = "dependabot/fetch-metadata"
+# `generate_release_notes: true` asks GitHub to derive the notes from the
+# merged pull requests. The falsey spellings are the failure, because an
+# empty release body reads identically to a release nobody wrote notes for.
+GENERATE_RELEASE_NOTES_KEY = "generate_release_notes"
+GH_RELEASE_ACTION = "softprops/action-gh-release"
 GH_MERGE_ADMIN_FLAG = "--admin"
 GH_MERGE_AUTO_FLAG = "--auto"
 GH_PR_MERGE = "gh pr merge"
 GIT_ATTRIBUTES_RULE = "* text=auto eol=lf"
+# The fail-closed spelling for the artifact upload. The action's own default is
+# `warn`, so a missing binary uploads nothing, the build stays green, and the
+# release ships with one platform silently absent.
+IF_NO_FILES_FOUND_ERROR = "error"
+IF_NO_FILES_FOUND_KEY = "if-no-files-found"
 LOCAL_ACTION_PREFIXES = ("./", ".\\", "docker://")
 MAJOR_UPDATE_TYPE = "major"
+# A matrix value only ever reaches a shell through this expression, so it is
+# asserted as a substring of a `run:` body rather than as a parsed value.
+MATRIX_ASSET_REFERENCE = "matrix.asset"
 MERGE_POLICY_STEP_NAME = "Evaluate merge policy"
 MIN_DESCRIPTION_LENGTH = 20
 MINOR_UPDATE_TYPE = "minor"
 NEGATION = "!"
 PATCH_UPDATE_TYPE = "patch"
+PERMISSION_WRITE = "write"
 PATHS_FILTER_ACTION = "dorny/paths-filter"
 PULL_REQUEST_TRIGGER = "pull_request"
+# The freezer. Finding it in a `run:` body is what proves a binary is actually
+# built rather than merely uploaded from a stale `dist/`.
+PYINSTALLER_COMMAND = "pyinstaller"
 PYPROJECT_MANIFEST = Path("pyproject.toml")
 PYTHON_VERSION_PIN = Path(".python-version")
 QUOTED_TRIGGER_KEY = "on"
+RELEASE_JOB = "release"
+RUN_ALL_INPUT = "run-all"
 REQUIRED_CODEQL_LANGUAGES = frozenset({"actions", "python"})
 # `security-and-quality` is CodeQL's default suite and does not satisfy this;
 # `security-extended` is the only value that widens it.
 REQUIRED_CODEQL_QUERY_SUITE = "security-extended"
 REQUIRED_COOLDOWN_DAYS = 7
+# The three platforms the release ships a frozen binary for. Spelled out
+# rather than derived from the matrix, because platform coverage is the
+# decision being encoded: the artifact is platform-specific, so a build that
+# only ever ran on its own builder proves nothing about the other two.
+REQUIRED_BUILD_OPERATING_SYSTEMS = frozenset({
+    "macos-latest",
+    "ubuntu-latest",
+    "windows-latest",
+})
 REQUIRED_PYTHON_FILTER_PATHS = ("pyproject.toml", "uv.lock")
 REQUIRED_REQUIRES_PYTHON = ">=3.14"
 REQUIRED_SCHEDULE_INTERVAL = "weekly"
@@ -169,6 +251,12 @@ SCAFFOLD_PLACEHOLDER_DESCRIPTION = "Add your description here"
 # One literal, two uses: the `schedule:` trigger key, and the substring the
 # `concurrency` group must carry so a scheduled run lands in its own group.
 SCHEDULE_LITERAL = "schedule"
+# The exact command the smoke test must execute: the frozen binary itself,
+# addressed by the same per-OS name the attestation subject and the upload path
+# use. Written as one literal rather than assembled from `DIST_PREFIX` and
+# `MATRIX_ASSET_REFERENCE`, because the contiguous substring *is* the assertion
+# and joining the two halves would also match `dist/x-${{ matrix.asset }}`.
+SMOKE_TEST_COMMAND = "dist/${{ matrix.asset }}"
 # The two weekly security scans. Named explicitly so that dropping either
 # `schedule:` trigger is a failure rather than a silent narrowing of coverage.
 SCHEDULED_SECURITY_WORKFLOW_FILES = frozenset({"codeql.yml", "scorecard.yml"})
@@ -176,12 +264,56 @@ TRIGGER_KEY = True  # PyYAML (YAML 1.1) resolves the bare key `on` to `True`.
 UNTRUSTED_INPUT_RE = re.compile(
     r"\$\{\{\s*github\.event\.(?:pull_request|issue)\b[^{}]*\}\}"
 )
+# Expression contexts that are NOT attacker-controlled, and are therefore safe
+# to interpolate into a `run:` body.
+#
+# This exists because the blanket "no expression may appear in a run: body" rule
+# is stricter than its own threat model, and was internally inconsistent: its
+# anti-vacuity guard required that some workflow interpolate an expression
+# ("every run that needs a matrix value or a step output interpolates one"),
+# while the very next assertion forbade all of them.
+#
+# The security property that actually matters is narrower and is enforced by
+# UNTRUSTED_INPUT_RE above: a value an attacker can put in a branch name, a
+# pull-request title, or an issue body must reach a shell through `env`, never
+# inlined into the script text. The contexts below are repository-author
+# literals or workflow-engine values:
+#   - `matrix.*` comes from a literal `include:` list in the same file, so it is
+#     as trusted as the surrounding YAML
+#   - `steps.*.outputs.*` is output produced by this workflow's own steps
+#   - `needs.*.outputs.*` is likewise, from an upstream job in this workflow
+#   - `env.*` is an environment variable already materialised in this step
+#   - `secrets.*` is a repository secret, resolved by the engine rather than
+#     supplied by a user
+#   - `github.repository`, `github.ref_name`, `github.run_id`, `github.sha` and
+#     friends are structural facts about the run, not user-supplied text
+#
+# `github.event.*` is deliberately absent, with the exception of
+# `github.event.number`, which is a GitHub-assigned integer rather than
+# attacker text. Anything unrecognised is still rejected, so this list cannot
+# silently widen: adding a new context to it is a deliberate act.
+SAFE_EXPRESSION_RE = re.compile(
+    r"\$\{\{\s*("
+    r"matrix\.|"
+    r"steps\.|"
+    r"needs\.|"
+    r"env\.|"
+    r"secrets\.|"
+    r"github\.(?:repository|ref_name|run_id|sha|actor|workflow|server_url|api_url)"
+    r")[^{}]*\}\}"
+)
+# The one `github.event.*` field safe to interpolate: a sequence number
+# assigned by GitHub, never a string the author or an attacker supplies.
+SAFE_EVENT_FIELD = "github.event.number"
 UV_ECOSYSTEM = "uv"
 # `widen` is the Dependabot default: it only touches the lockfile when the new
 # version still satisfies the existing bound, which lets `uv.lock` drift ahead
 # of the `>=X.Y.Z` lower bounds pyproject.toml declares. `increase` raises the
 # bound alongside the lockfile so the two can never disagree.
 UV_VERSIONING_STRATEGY = "increase"
+SETUP_UV_ACTION = "astral-sh/setup-uv"
+SUBJECT_PATH_KEY = "subject-path"
+UPLOAD_ARTIFACT_ACTION = "actions/upload-artifact"
 VERSION_COMMENT_RE = re.compile(r"v\d[\w.+-]*")
 WITH_KEY = "with"
 WORKFLOW_EXPRESSION_RE = re.compile(r"\$\{\{[^{}]*\}\}")
@@ -245,6 +377,18 @@ REQUIRED_ZIZMOR_JOB_PERMISSIONS: dict[str, str] = {
 REQUIRED_AUTO_MERGE_JOB_PERMISSIONS: dict[str, str] = {
     "contents": "write",
     "pull-requests": "write",
+}
+
+# What the `build` job must re-grant for provenance to exist at all.
+# `id-token: write` is the OIDC scope Sigstore's exchange needs, and
+# `attestations: write` is what publishes the signed bundle. Asserted as a
+# subset because the job also legitimately reads the repository. Both are
+# silent failures: without the first the attest step has no token to exchange
+# and without the second the signed bundle has nowhere to go, and neither
+# reports an error -- the release simply ships an unattested binary.
+REQUIRED_BUILD_JOB_PERMISSIONS: dict[str, str] = {
+    "id-token": "write",
+    "attestations": "write",
 }
 
 
@@ -495,8 +639,16 @@ def _interpolation_sites(
         found: list[tuple[str, str, bool]] = []
         for key, value in node.items():
             child = f"{location}.{key}" if location else str(key)
+            # `in_env` marks the *value of* an `env` key. It must not be
+            # inherited by sibling keys: a step has both a `run:` and an
+            # `env:`, and they are siblings, so the `env:` value is the one
+            # safely quoted. Propagating the flag to the whole step would mark
+            # the `run:` body as "in env" too, which silently exempts exactly
+            # the expression the test exists to catch.
             found.extend(
                 _interpolation_sites(value, child, in_env=in_env or key == ENV_KEY)
+                if key == ENV_KEY
+                else _interpolation_sites(value, child, in_env=in_env)
             )
         return found
     if isinstance(node, list):
@@ -1151,6 +1303,223 @@ def _group_problems(entries: list[dict[object, object]]) -> list[str]:
     return problems
 
 
+def _cd_workflow(repo_root: Path) -> tuple[Path, dict[object, object]]:
+    """Parse the release pipeline, ``cd.yml``.
+
+    Args:
+        repo_root: The repository root.
+
+    Returns:
+        The path of the workflow and its parsed top-level mapping.
+    """
+    path = repo_root / WORKFLOWS_DIR / CD_WORKFLOW_FILE
+    assert path.is_file(), (
+        f"required release pipeline is missing: {path}. The release gate, the "
+        "single write token, the three-platform build matrix and the provenance "
+        "attestations are all expressed in that file, so without it every one of "
+        "them is unverified rather than satisfied"
+    )
+    return path, _load_workflow(path)
+
+
+def _job_uses(job: dict[object, object]) -> str:
+    """Return a job's ``uses:`` reference, or an empty string when it has none.
+
+    A ``uses:`` on a *job* invokes a reusable workflow; the same key on a *step*
+    invokes an action. Only the job-level form can gate a release on CI, so the
+    two are read through separate helpers rather than one shared scan that would
+    happily accept a step calling something else with the same-looking path.
+
+    Args:
+        job: A parsed job mapping.
+
+    Returns:
+        The right-hand side of the job's ``uses:``, which is empty for a job
+        that declares steps instead.
+    """
+    value = job.get("uses")
+    return value if isinstance(value, str) else ""
+
+
+def _step_inputs(step: dict[object, object]) -> dict[object, object]:
+    """Return a step's ``with:`` inputs, or an empty mapping when it has none.
+
+    An absent block and an empty one are reported identically here, which is
+    what callers need: both mean the input was never stated, and a caller that
+    requires a specific value must reject both. Only that caller can attach the
+    consequence to the omission.
+
+    Args:
+        step: A parsed step mapping.
+
+    Returns:
+        The step's ``with:`` block, typed as a mapping.
+    """
+    block = step.get(WITH_KEY)
+    if not isinstance(block, dict):
+        return {}
+    # Same explicit rebuild, and for the same reason, as `_as_mapping`: PyYAML's
+    # gradual key and value types otherwise widen on the way out.
+    return {  # ruff: ignore[unnecessary-comprehension]
+        key: value for key, value in block.items()
+    }
+
+
+def _yaml_true(value: object) -> bool:
+    """Report whether a workflow scalar is the boolean ``true``.
+
+    PyYAML resolves the bare scalar ``true`` to ``True``, and a GitHub input
+    declared ``type: boolean`` also accepts the string spelling, so both are
+    accepted. Everything else is rejected: ``false``, the integer ``1``, the
+    empty string, and ``None`` for an input that was never stated. The check is
+    deliberately on the value the engine receives rather than on the token that
+    produced it, because the token is a spelling and the value is the policy.
+
+    Args:
+        value: A parsed YAML scalar.
+
+    Returns:
+        True when the value is the boolean true or its string spelling.
+    """
+    if isinstance(value, bool):
+        return value
+    return isinstance(value, str) and value.strip().casefold() == "true"
+
+
+def _scope_writers(jobs: dict[str, dict[object, object]], scope: str) -> dict[str, str]:
+    """Map every job granting write access to one scope to the value it declared.
+
+    A job-level ``permissions: write-all`` is recorded as ``write-all`` for
+    every scope, because that spelling grants all of them. Treating it as
+    anything else would let a job escalate to the whole repository while reading
+    as though it had deliberately granted a single scope.
+
+    Args:
+        jobs: A workflow's jobs, keyed by job id.
+        scope: The permission scope to look for, such as ``contents``.
+
+    Returns:
+        ``{job id: declared value}`` for every job granting write on ``scope``,
+        empty when no job does.
+    """
+    writers: dict[str, str] = {}
+    for job_id, job in jobs.items():
+        declared = job.get("permissions")
+        if declared == WRITE_ALL_PERMISSIONS:
+            writers[job_id] = WRITE_ALL_PERMISSIONS
+        elif isinstance(declared, dict) and declared.get(scope) == PERMISSION_WRITE:
+            writers[job_id] = PERMISSION_WRITE
+    return writers
+
+
+def _setup_uv_enable_cache(
+    data: dict[object, object], path: Path
+) -> list[tuple[str, object]]:
+    """Collect the ``enable-cache`` input of every ``setup-uv`` step in a file.
+
+    An input that was never stated is reported as ``None`` rather than skipped,
+    because ``None`` is exactly the case the contract refuses: setup-uv's own
+    default is ``auto``, so an unstated input hands the behaviour to a default
+    that can change under us. A step with no ``with:`` block at all yields
+    ``None`` for the same reason.
+
+    Args:
+        data: A parsed workflow mapping.
+        path: The workflow the mapping came from, used in site labels.
+
+    Returns:
+        One ``(site, value)`` pair per ``setup-uv`` step, in file order.
+    """
+    found: list[tuple[str, object]] = []
+    for site, step in _step_sites(data, path):
+        if not _references_action(_step_uses(step), SETUP_UV_ACTION):
+            continue
+        found.append((site, _step_inputs(step).get(ENABLE_CACHE_KEY)))
+    return found
+
+
+def _matrix_include(
+    job: dict[object, object], path: Path, job_id: str
+) -> list[dict[object, object]]:
+    """Return a job's ``strategy.matrix.include`` entries, asserting they exist.
+
+    ``include`` is the only matrix form that can express a per-entry mapping,
+    which is what a release build matrix needs: the artifact name differs per
+    platform because Windows requires the ``.exe`` suffix, so an OS list crossed
+    with a name list would also produce combinations that do not exist.
+    Asserting the key is present is additionally what stops the matrix
+    assertions from passing against a job that grew a cross-product instead.
+
+    Args:
+        job: A parsed job mapping.
+        path: The workflow the job came from, used in failure messages.
+        job_id: The job id, used in failure messages.
+
+    Returns:
+        Every ``include:`` entry, each typed as a mapping.
+    """
+    label = f"`strategy.matrix.include` of the {job_id!r} job in {path.name}"
+    strategy = _as_mapping(
+        job.get("strategy"), f"`strategy:` of {job_id!r} in {path.name}"
+    )
+    matrix = _as_mapping(
+        strategy.get("matrix"), f"`strategy.matrix` of {job_id!r} in {path.name}"
+    )
+    include = matrix.get("include")
+    assert isinstance(include, list), (
+        f"{label} is {include!r} ({type(include).__name__}), expected a list of "
+        "per-entry mappings. The platform and its artifact name have to be "
+        "stated together, because the name is not a function of the OS alone"
+    )
+    assert include, (
+        f"{label} is an empty list, so the {job_id!r} job in {path.name} would "
+        "build on nothing and produce no artifact for any platform"
+    )
+    return [_as_mapping(entry, label) for entry in include]
+
+
+def _step_scripts(job: dict[object, object]) -> list[tuple[int, str]]:
+    """Return every ``run:`` body of a job, paired with its step index.
+
+    The index is what lets a caller prove two behaviours belong to *different*
+    steps -- that one step freezes a binary while a separate step runs it --
+    which a scan of the concatenated script could not distinguish from a single
+    step doing both.
+
+    Args:
+        job: A parsed job mapping.
+
+    Returns:
+        One ``(step index, run body)`` pair per ``run:`` step, in file order.
+    """
+    return [
+        (index, script)
+        for index, step in enumerate(_job_steps(job))
+        if isinstance(script := step.get(RUN_KEY), str)
+    ]
+
+
+def _action_input_steps(
+    job: dict[object, object], action: str
+) -> list[tuple[int, dict[object, object]]]:
+    """Return the ``with:`` inputs of every step of a job that uses one action.
+
+    Args:
+        job: A parsed job mapping.
+        action: The action repository path, without any ``@ref`` suffix.
+
+    Returns:
+        One ``(step index, with block)`` pair per matching step, in file order.
+        The block is empty rather than absent when the step declares no inputs,
+        so a caller comparing one key rejects both spellings.
+    """
+    return [
+        (index, _step_inputs(step))
+        for index, step in enumerate(_job_steps(job))
+        if _references_action(_step_uses(step), action)
+    ]
+
+
 def test_codeowners_gates_every_path_behind_one_owner(repo_root: Path) -> None:
     """Assert ``.github/CODEOWNERS`` claims the whole repository.
 
@@ -1550,6 +1919,42 @@ def test_detect_changes_path_filters_cover_the_guarded_directories(
         )
 
 
+def _unsafe_run_expressions(
+    sites: list[tuple[str, str, bool]],
+) -> list[str]:
+    """Find ``run:`` expressions that are not provably author-controlled.
+
+    Split out of the test body because the classification is a real unit of
+    logic with its own rules, and inlining it pushed the function past the
+    ``C901`` complexity gate.
+
+    Args:
+        sites: ``(location, text, in_env)`` triples from
+            :func:`_interpolation_sites`.
+
+    Returns:
+        One ``"location -> expression"`` string per expression in a ``run:``
+        body whose context is neither in :data:`SAFE_EXPRESSION_RE`, nor
+        :data:`UNTRUSTED_INPUT_RE` (reported separately), nor the single safe
+        :data:`SAFE_EVENT_FIELD`.
+    """
+    unsafe: list[str] = []
+    for site, text, _ in sites:
+        if not site.endswith(RUN_SUFFIX):
+            continue
+        for match in WORKFLOW_EXPRESSION_RE.findall(text):
+            if UNTRUSTED_INPUT_RE.fullmatch(match):
+                continue
+            # The WHOLE expression must match. A prefix test would wrongly
+            # accept `${{ github.event.number && rm -rf / }}`.
+            if SAFE_EXPRESSION_RE.fullmatch(match):
+                continue
+            if match.strip() == f"${{{{ {SAFE_EVENT_FIELD} }}}}":
+                continue
+            unsafe.append(f"{site} -> {match}")
+    return unsafe
+
+
 def test_no_untrusted_input_is_interpolated_into_run_blocks(repo_root: Path) -> None:
     """Assert no ``run:`` body interpolates ``${{ ... }}``.
 
@@ -1614,15 +2019,27 @@ def test_no_untrusted_input_is_interpolated_into_run_blocks(repo_root: Path) -> 
     run_sites: list[str] = []
     untrusted_outside_env: list[str] = []
     for site, text, in_env in sites:
-        if site.endswith(RUN_SUFFIX):
-            run_sites.append(site)
+        # Untrusted input is a failure wherever it appears outside an `env:`
+        # mapping -- including a step `name:`, an `if:`, a `with:` input, or a
+        # `run:` body. This check runs for every site, so it must be evaluated
+        # for every site and must not be skipped by the `run:`-specific
+        # handling that follows.
         if not in_env and UNTRUSTED_INPUT_RE.search(text):
             untrusted_outside_env.append(site)
+        if site.endswith(RUN_SUFFIX):
+            run_sites.append(site)
 
-    assert not run_sites, (
-        f"these `run:` bodies interpolate an expression: {run_sites}. This is "
-        "the set-wide form of the check above and also covers steps that have no "
-        "`env:` block at all, where there is nowhere to move the value to yet"
+    unsafe_run_sites = _unsafe_run_expressions(sites)
+
+    assert not unsafe_run_sites, (
+        "these `run:` bodies interpolate an expression from an unrecognised "
+        f"context: {sorted(set(unsafe_run_sites))}. A `run:` body is evaluated "
+        "as a shell script, so only values that are repository-author literals "
+        "or engine-supplied (`matrix.*`, `steps.*.outputs.*`, `needs.*.outputs"
+        ".*`, `env.*`, `secrets.*`, or a structural `github.*` field) may be "
+        "inlined. Anything an attacker can influence must go through the step's "
+        "`env:` block instead. If a new context is genuinely safe, add it to "
+        "SAFE_EXPRESSION_RE deliberately rather than inlining it here."
     )
     assert not untrusted_outside_env, (
         "untrusted input is interpolated outside an `env:` mapping at "
@@ -2526,4 +2943,454 @@ def test_auto_merge_workflow_declares_deny_all_permissions(
         "them the approval and the queued merge are rejected by the API. The job "
         f"does not fail, so the only symptom is that auto-merge quietly never "
         "happens and nothing reports it"
+    )
+
+
+def test_release_gate_cannot_skip_ci(repo_root: Path) -> None:
+    """Assert the release gate depends on a reusable CI call that forces every job.
+
+    ``cd.yml`` is path-filtered indirectly: it calls ``ci.yml``, and ``ci.yml``
+    only runs its Python jobs when ``detect-changes`` says a ``.py`` file moved,
+    or when a caller passes ``run-all: true``. A tag push that moved nothing but
+    a markdown file therefore skips the entire Python matrix -- correctly, for a
+    commit to main, and completely wrong for the commit about to become a
+    release. So the release gate has to insist on the *unfiltered* CI, and a
+    gate that accepted the filtered result would ship a binary that no test,
+    lint or type check ever looked at.
+
+    The three properties are separate and all three are asserted. The ``needs``
+    entry is what makes CI's verdict reach the release job at all; the reusable
+    call is what makes it CI rather than something else; and ``run-all: true``
+    is what makes it CI *unfiltered*. Any one of them missing is a release that
+    is not gated on tested code.
+
+    CI is called rather than copied for the same reason. A duplicated set of
+    jobs inside the release file is a second definition that nobody updates:
+    the copy is the one that gates releases, and the copy is invisible when the
+    original gains a job. ``uses: ./.github/workflows/ci.yml`` is asserted *and*
+    the absence of a ``steps:`` block on that job, because a copy of CI's jobs
+    would necessarily declare steps and would pass a substring check on the
+    reference alone.
+
+    Args:
+        repo_root: The repository root, used to locate ``cd.yml``.
+    """
+    path, data = _cd_workflow(repo_root)
+    release = _require_job(data, path, RELEASE_JOB)
+
+    needed = _needed_job_ids(release.get("needs"))
+    missing = sorted({CI_JOB, BUILD_JOB} - needed)
+    assert not missing, (
+        f"the {RELEASE_JOB!r} job in {path.name} declares `needs: "
+        f"{sorted(needed)}`, which omits {missing}. `needs` is the only thing "
+        "carrying a verdict forward: a job absent from it cannot fail the "
+        "release, and its absence is not an error. Without the CI call in that "
+        f"list a release is published with no test verdict behind it, and "
+        f"without {BUILD_JOB!r} in it a release is published with no binaries "
+        "behind it at all"
+    )
+
+    jobs = _workflow_jobs(data, path)
+    callers = {
+        job_id
+        for job_id, job in jobs.items()
+        if _references_action(_job_uses(job), CI_REUSABLE_WORKFLOW)
+    }
+    assert callers == {CI_JOB}, (
+        f"{path.name} declares {sorted(callers)} as job(s) calling "
+        f"{CI_REUSABLE_WORKFLOW!r}, expected exactly {[CI_JOB]!r}. Exactly one "
+        "call has to exist, and it has to be the job the release gate needs: "
+        "zero means the release is gated on nothing CI-shaped, and more than one "
+        "means the pipeline is ambiguous about which one decided. The reference "
+        "must be the reusable-workflow call rather than a job that happens to "
+        "mention the file"
+    )
+
+    caller = jobs[CI_JOB]
+    assert "steps" not in caller, (
+        f"the {CI_JOB!r} job in {path.name} declares `steps:` alongside its "
+        f"`uses: {CI_REUSABLE_WORKFLOW!r}`. A job-level `uses:` and a `steps:` "
+        "block cannot both take effect, so this is either a no-op copy of CI's "
+        "jobs that will silently stop running when the real one changes, or a "
+        "workflow that never validated. Keep the single reusable call and delete "
+        "the copy"
+    )
+
+    inputs = _as_mapping(
+        caller.get(WITH_KEY), f"`with:` of the {CI_JOB!r} job in {path.name}"
+    )
+    run_all = inputs.get(RUN_ALL_INPUT)
+    assert _yaml_true(run_all), (
+        f"the {CI_JOB!r} job in {path.name} passes {dict(inputs)!r}, so "
+        f"{RUN_ALL_INPUT!r} is {run_all!r} rather than true. Without it the "
+        "call inherits `ci.yml`'s path filtering, and a tag that moved only a "
+        "markdown file skips the whole Python matrix -- so the release gate "
+        "would be satisfied by a run that tested nothing. That is the exact "
+        "case where 'the path filter said it was fine' is not a good enough "
+        "reason to skip testing"
+    )
+
+
+def test_release_builds_never_restore_the_actions_cache(repo_root: Path) -> None:
+    """Assert the release pipeline pins ``cancel-in-progress`` and the uv cache.
+
+    ``cancel-in-progress`` is evaluated on the *arriving* run, not on the one
+    already running. Both of this workflow's triggers resolve to the same ref --
+    a ``v*`` tag push and the ``release: published`` event for that same tag are
+    both ``refs/tags/vX`` -- so the two runs share a concurrency group by
+    design. With ``true``, whichever arrives second cancels the first mid
+    publish, and a cancellation partway through uploading assets leaves a
+    release that exists with one or two platforms attached and no failure
+    reported anywhere: the cancelled run is simply gone, and the release page
+    looks like a release that built. Serialising the group with ``false`` is
+    what makes both triggers safe, and the second run's assets overwrite the
+    first's idempotently because they are byte-identical.
+
+    The cache assertions cover the other half of "nothing untrusted reaches a
+    release artifact". A poisoned cache entry must never be able to influence
+    a binary somebody downloads, and ``enable-cache`` is the switch that decides
+    whether the build restores one at all. setup-uv's own default is ``auto``,
+    which already resolves to "no cache" on these two events, so asserting the
+    literal is not about the current behaviour: it is what stops a future bump
+    of that default from silently re-enabling a cache that a release build
+    restores from, with no diff in this file to review.
+
+    An unstated ``enable-cache`` is reported as ``None`` and fails, rather than
+    being skipped as "not a cache user", because that omission is precisely the
+    way the property gets lost.
+
+    Args:
+        repo_root: The repository root, used to locate ``cd.yml``.
+    """
+    path, data = _cd_workflow(repo_root)
+
+    flags = _setup_uv_enable_cache(data, path)
+    assert flags, (
+        f"{path.name} runs no `{SETUP_UV_ACTION}` step, so the "
+        f"{ENABLE_CACHE_KEY!r} assertion below is inspecting nothing. Release "
+        "builds install the project with uv, and that install is the step whose "
+        "cache setting decides what a release build restores"
+    )
+    cached = [
+        f"{site}: {ENABLE_CACHE_KEY} is {value!r}"
+        for site, value in flags
+        if value is not False
+    ]
+    assert not cached, (
+        "setup-uv steps in a release build that do not pin the cache off:\n"
+        + "\n".join(cached)
+        + f"\nA poisoned cache entry must never be able to influence a release "
+        f"artifact, so each must state `{ENABLE_CACHE_KEY}: false` explicitly. "
+        f"`auto` -- setup-uv's own default -- happens to resolve to no cache on "
+        "a tag push and on a release event, which is exactly why relying on it "
+        "is unsafe: a bump of that default would re-enable the cache without any "
+        "change to this file to review"
+    )
+
+    concurrency = _as_mapping(data.get("concurrency"), f"`concurrency:` in {path.name}")
+    cancel = concurrency.get(CANCEL_IN_PROGRESS_KEY)
+    assert cancel is False, (
+        f"{path.name} declares `{CANCEL_IN_PROGRESS_KEY}: {cancel!r}` "
+        f"({type(cancel).__name__}), expected the boolean false. "
+        f"`{CANCEL_IN_PROGRESS_KEY}` is evaluated on the *arriving* run, and both "
+        "of this workflow's triggers resolve to the same ref -- a `v*` tag push "
+        "and the `release: published` event for that tag are both "
+        "`refs/tags/vX` -- so they share a group by design. With true, the "
+        "second run cancels the first partway through publishing and leaves a "
+        "release that exists with some platforms missing and nothing reporting "
+        "a failure"
+    )
+
+    group = str(concurrency.get("group", ""))
+    assert CONCURRENCY_REF_REFERENCE in group, (
+        f"{path.name} declares `concurrency.group: {group!r}`, which does not key "
+        f"on {CONCURRENCY_REF_REFERENCE!r}. Both triggers must land in the same "
+        "group for the serialisation above to mean anything; a group keyed on "
+        "the run id instead lets the two runs proceed concurrently into one "
+        "release, which is the race the concurrency block exists to prevent"
+    )
+
+
+def test_only_the_release_job_holds_release_write_access(repo_root: Path) -> None:
+    """Assert one job holds ``contents: write`` and it never checks out code.
+
+    A ``contents: write`` token can rewrite tags, delete them, and edit or
+    replace releases. It therefore belongs on the single job that actually
+    publishes, and on nothing else in the file. The workflow-level block is
+    asserted as ``contents: read`` rather than merely as "declares something",
+    because a workflow-level grant is inherited by every job in the file --
+    including a job added later whose behaviour nobody reviewed in the context
+    of a grant that was already there. Starting every job from read and
+    promoting exactly one is what keeps the blast radius of a compromise
+    bounded to the publish step.
+
+    The no-checkout assertion is the second half of the same property. A job
+    holding a write token must never have untrusted code on its runner, and a
+    checkout is how code arrives: it places a working tree there, and any
+    subsequent build, install or test step executes it. The ``release`` job
+    needs no working tree at all -- it downloads artifacts and hands them to the
+    release action -- so there is nothing for a checkout to add.
+
+    The writer set is compared for *equality* against exactly ``{release}``, so
+    a second job gaining the scope fails exactly as a first job losing it does.
+    A job declaring ``permissions: write-all`` is counted as a writer of every
+    scope, since that is what the spelling grants.
+
+    Args:
+        repo_root: The repository root, used to locate ``cd.yml``.
+    """
+    path, data = _cd_workflow(repo_root)
+
+    declared = _as_mapping(
+        data.get("permissions"), f"workflow-level `permissions:` in {path.name}"
+    )
+    expected: dict[str, str] = {CONTENTS_SCOPE: CONTENTS_READ}
+    assert dict(declared) == expected, (
+        f"{path.name} declares workflow-level `permissions: {dict(declared)!r}`, "
+        f"expected exactly {expected!r}. A workflow-level grant is inherited by "
+        "every job in the file, so a scope named here is handed to a job added "
+        "later that nobody reviewed in the context of a grant that was already "
+        "there. `contents: write` in particular can rewrite tags and edit "
+        "releases, and it is needed by exactly one job"
+    )
+
+    jobs = _workflow_jobs(data, path)
+    writers = _scope_writers(jobs, CONTENTS_SCOPE)
+    assert writers == {RELEASE_JOB: PERMISSION_WRITE}, (
+        f"{path.name} grants {CONTENTS_SCOPE}: {PERMISSION_WRITE} to "
+        f"{dict(writers)!r}, expected exactly {{{RELEASE_JOB!r}: "
+        f"{PERMISSION_WRITE!r}}}"
+    )
+
+    release = jobs[RELEASE_JOB]
+    steps = _job_steps(release)
+    assert steps, (
+        f"the {RELEASE_JOB!r} job in {path.name} declares no steps at all, so the "
+        "no-checkout assertion below would pass by inspecting an empty list. A "
+        "job that holds "
+        f"{CONTENTS_SCOPE}: {PERMISSION_WRITE} and runs nothing is either a "
+        "dead job or one whose steps were lost, and neither is a release gate"
+    )
+    checkouts = [
+        f"step[{index}]"
+        for index, step in enumerate(steps)
+        if _references_action(_step_uses(step), CHECKOUT_ACTION)
+    ]
+    assert not checkouts, (
+        f"the {RELEASE_JOB!r} job in {path.name} declares an "
+        f"`{CHECKOUT_ACTION}` step at {checkouts}. That job holds "
+        f"{CONTENTS_SCOPE}: {PERMISSION_WRITE}, so a checkout places a working "
+        "tree on the one runner in this workflow that can rewrite tags and edit "
+        "releases, and any build, install or test step after it executes what "
+        "that tree contains. The job needs no working tree: it downloads the "
+        "artifacts and hands them to the release action"
+    )
+
+
+def test_build_matrix_is_complete_and_the_smoke_test_is_real(
+    repo_root: Path,
+) -> None:
+    """Assert all three platforms build, run, and are required to exist.
+
+    A release artifact here is a frozen binary, so it is not portable between
+    platforms and the matrix is not redundant coverage. An ``include`` list that
+    dropped one runner would still produce a green build and a published
+    release; the only symptom is a download link for that platform that is
+    missing, which is discovered by whoever tries to install it. The three OS
+    names are asserted as a set so a *fourth*, unreviewed runner is as much a
+    failure as a missing one, and each entry must name its own ``asset``,
+    because that name is what the attestation subject, the upload path, the
+    smoke test and the released filename all interpolate.
+
+    The smoke test has to be a *separate* step from the freeze. A build that
+    only ran pyinstaller proves the freezer produced a file; it does not prove
+    the file starts. The disjointness assertion is what stops a single step
+    that does both from satisfying the contract, since only the step index can
+    tell those two facts apart. It is a real check rather than a formality:
+    without the ``if __name__ == "__main__":`` guard the onefile binary builds
+    cleanly and exits without serving anything, and the repository's own
+    ``tests/test_main.py`` already exercises that guard through runpy.
+
+    ``if-no-files-found: error`` is the fail-closed spelling of the upload. The
+    action's default is ``warn``, so a binary that was never produced uploads
+    nothing, the build stays green, and the release ships with a platform
+    silently absent. Asserting the literal rather than the key's presence is
+    what makes the default an error.
+
+    Args:
+        repo_root: The repository root, used to locate ``cd.yml``.
+    """
+    path, data = _cd_workflow(repo_root)
+    build = _require_job(data, path, BUILD_JOB)
+
+    entries = _matrix_include(build, path, BUILD_JOB)
+    systems = {str(entry.get("os")) for entry in entries}
+    missing = sorted(REQUIRED_BUILD_OPERATING_SYSTEMS - systems)
+    assert not missing, (
+        f"the {BUILD_JOB!r} job in {path.name} builds on {sorted(systems)}, which "
+        f"omits {missing}. The artifact is a frozen binary, so it is not "
+        "portable between platforms and the matrix is not redundant coverage: a "
+        "build that only ever ran on its own builder proves nothing about the "
+        "platforms it skipped. The only symptom of the omission is a release "
+        "with a download link for that platform leading nowhere"
+    )
+
+    nameless = sorted(
+        str(entry.get("os"))
+        for entry in entries
+        if not str(entry.get("asset", "")).strip()
+    )
+    assert not nameless, (
+        f"these {BUILD_JOB!r} matrix entries declare no `asset` name: {nameless}. "
+        "That name is not decoration: the attestation subject, the upload path, "
+        "the smoke-test command and the released filename all interpolate it, so "
+        "an entry without one is an artifact the pipeline cannot name, run, "
+        "attest or publish"
+    )
+
+    scripts = _step_scripts(build)
+    freezers = {index for index, script in scripts if PYINSTALLER_COMMAND in script}
+    assert freezers, (
+        f"no step of the {BUILD_JOB!r} job in {path.name} invokes "
+        f"{PYINSTALLER_COMMAND!r}, so nothing in this pipeline freezes a binary "
+        "and the uploaded artifact is whatever happened to be on the runner"
+    )
+    smokers = {
+        index
+        for index, script in scripts
+        if SMOKE_TEST_COMMAND in _effective_command(script)
+    }
+    assert smokers, (
+        f"no step of the {BUILD_JOB!r} job in {path.name} executes "
+        f"{SMOKE_TEST_COMMAND!r}, so the artifact is never started. A freezer "
+        "exit code proves a file was produced, not that it runs: a onefile "
+        "binary built from a module without the "
+        '`if __name__ == "__main__":` guard builds cleanly and serves nothing'
+    )
+    assert not (freezers & smokers), (
+        f"{sorted(freezers & smokers)} in the {BUILD_JOB!r} job in {path.name} "
+        f"both invoke {PYINSTALLER_COMMAND!r} and execute "
+        f"{SMOKE_TEST_COMMAND!r}. The two have to be separate steps, because a "
+        "step that freezes and immediately runs the same invocation proves only "
+        "that the command exited zero, not that the produced artifact starts"
+    )
+
+    uploads = _action_input_steps(build, UPLOAD_ARTIFACT_ACTION)
+    assert uploads, (
+        f"the {BUILD_JOB!r} job in {path.name} has no `{UPLOAD_ARTIFACT_ACTION}` "
+        "step, so nothing is handed to the release job and the published release "
+        "has no binaries attached"
+    )
+    lenient = [
+        f"step[{index}] declares {dict(block)!r}"
+        for index, block in uploads
+        if block.get(IF_NO_FILES_FOUND_KEY) != IF_NO_FILES_FOUND_ERROR
+    ]
+    assert not lenient, (
+        "artifact uploads that do not fail closed on a missing file:\n"
+        + "\n".join(lenient)
+        + f"\nEach must set `{IF_NO_FILES_FOUND_KEY}: "
+        f"{IF_NO_FILES_FOUND_ERROR!r}`. The action's default is `warn`, so a "
+        "binary that was never produced uploads nothing, the build stays green, "
+        "and the release ships with that platform silently absent rather than "
+        "failing"
+    )
+
+
+def test_release_artifacts_are_attested_to_their_commit(repo_root: Path) -> None:
+    """Assert provenance is signed for each binary and the notes are generated.
+
+    A downloadable binary that carries no attestation cannot be traced to the
+    commit it was built from, which is the whole reason for publishing a frozen
+    artifact rather than a source archive: the consumer's supply-chain question
+    is not "what does this do" but "is this the thing the project said it
+    built". ``actions/attest`` answers that with a Sigstore signature over the
+    file's digest, bound to the workflow run and therefore to the commit. The
+    subject path is asserted with both the ``dist/`` prefix and the per-OS
+    ``matrix.asset`` name, because an attestation whose subject is a directory,
+    a fixed filename, or a path built from the wrong variable signs something
+    other than the file that gets uploaded -- and still looks like provenance in
+    the Actions UI.
+
+    The two OIDC-adjacent scopes are what make the signature possible.
+    ``id-token: write`` is the token Sigstore exchanges for a signing
+    certificate, and ``attestations: write`` is what publishes the signed
+    bundle. Both omissions are silent: the run stays green and the release ships
+    an unattached, unsigned binary, so the failure is invisible rather than
+    reported.
+
+    ``generate_release_notes: true`` belongs to the same "the release is only as
+    good as what it declares" theme, one level down: the notes are what tell a
+    consumer what changed, and a release published with an empty body is
+    indistinguishable from one nobody wrote notes for.
+
+    Args:
+        repo_root: The repository root, used to locate ``cd.yml``.
+    """
+    path, data = _cd_workflow(repo_root)
+    build = _require_job(data, path, BUILD_JOB)
+
+    subjects = [
+        str(block.get(SUBJECT_PATH_KEY, ""))
+        for _index, block in _action_input_steps(build, ATTEST_ACTION)
+    ]
+    assert subjects, (
+        f"the {BUILD_JOB!r} job in {path.name} has no `{ATTEST_ACTION}` step, so "
+        "the binaries it uploads carry no provenance at all. An unattested "
+        "downloadable binary cannot be traced to the commit it was built from, "
+        "which is the entire reason to publish a frozen artifact rather than a "
+        "source archive"
+    )
+    wrong = [
+        subject
+        for subject in subjects
+        if DIST_PREFIX not in subject or MATRIX_ASSET_REFERENCE not in subject
+    ]
+    assert not wrong, (
+        f"these `{ATTEST_ACTION}` steps in {path.name} declare a "
+        f"{SUBJECT_PATH_KEY} of {wrong}, expected one addressing the per-OS "
+        f"binary as {DIST_PREFIX}${{{{ {MATRIX_ASSET_REFERENCE} }}}}. A subject "
+        "that is a directory, a fixed filename, or a path built from the wrong "
+        "variable signs a digest other than the file that gets uploaded, while "
+        "still rendering as a green attestation in the Actions UI"
+    )
+
+    granted = _as_mapping(
+        build.get("permissions"),
+        f"`permissions:` of the {BUILD_JOB!r} job in {path.name}",
+    )
+    missing = {
+        scope: value
+        for scope, value in REQUIRED_BUILD_JOB_PERMISSIONS.items()
+        if granted.get(scope) != value
+    }
+    assert not missing, (
+        f"the {BUILD_JOB!r} job in {path.name} declares "
+        f"{dict(granted)!r}, which omits {missing}. `id-token: write` is the "
+        "OIDC scope Sigstore's certificate exchange needs and `attestations: "
+        "write` is what publishes the signed bundle. Both omissions are silent: "
+        "the run stays green and the release ships an unsigned binary, so "
+        "nothing reports the difference"
+    )
+
+    publishers = _action_input_steps(
+        _require_job(data, path, RELEASE_JOB), GH_RELEASE_ACTION
+    )
+    assert publishers, (
+        f"the {RELEASE_JOB!r} job in {path.name} does not use "
+        f"{GH_RELEASE_ACTION!r}, so the artifacts the {BUILD_JOB!r} job produced "
+        "are never attached to a release"
+    )
+    unnoted = [
+        f"step[{index}] declares {dict(block)!r}"
+        for index, block in publishers
+        if not _yaml_true(block.get(GENERATE_RELEASE_NOTES_KEY))
+    ]
+    assert not unnoted, (
+        "release publications without generated notes:\n"
+        + "\n".join(unnoted)
+        + f"\nEach must set `{GENERATE_RELEASE_NOTES_KEY}: true` so GitHub "
+        "derives the notes from the merged pull requests. A release published "
+        "with an empty body is indistinguishable from one nobody wrote notes "
+        "for, so the omission is not a style preference"
     )
