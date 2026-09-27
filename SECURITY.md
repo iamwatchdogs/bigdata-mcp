@@ -29,9 +29,9 @@ vulnerability report most often targets:
 - **`.github/workflows/`** — CI, CD, and the Dependabot auto-merge policy. The
   auto-merge workflow runs with write permissions on `pull_request_target`, so
   report anything that could let it merge untrusted code
-- **`.devcontainer/`** and any future container or build configuration
 - the `prek` pre-commit and pre-push hook configuration, including the pinned
   third-party hook revisions
+- any future container or build configuration
 
 Out of scope: vulnerabilities in upstream dependencies with no workaround in
 this repository — report those upstream, and mention the dependency here if the

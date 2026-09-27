@@ -15,8 +15,13 @@
 # The `pre-commit` entry keeps the `rev:` pins in .pre-commit-config.yaml fresh
 # (ruff-pre-commit, pre-commit-hooks, actionlint, zizmor-pre-commit,
 # osv-scanner). Dependabot parses that file and skips `repo: local` entries, so
-# the three local hooks are not covered. See the "known gaps" section in
-# .github/workflows/dependabot-auto-merge.yml for what that means for merging.
+# the four local hooks are NOT covered: ty, complexipy, pytest-testmon, and
+# gitleaks. Of those, the gitleaks pin is the one that needs manual attention --
+# it is an `additional_dependencies:` entry on a local hook, which Dependabot
+# structurally cannot see or bump. Check it by hand when reviewing hook
+# changes. See the "what is deliberately not auto-merged" section in
+# .github/workflows/dependabot-auto-merge.yml for why this whole ecosystem is
+# excluded from merging.
 version: 2
 updates:
   - package-ecosystem: github-actions

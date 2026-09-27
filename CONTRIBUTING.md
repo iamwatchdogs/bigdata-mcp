@@ -23,9 +23,7 @@ By participating you agree to abide by the
 
 ### Development environment
 
-The devcontainer is the easiest route: it ships Python 3.14, `uv`, and every
-tool listed below, and wires up the hooks for you. To set up manually you need
-[`uv`](https://docs.astral.sh/uv/) and Python 3.14+:
+You need [`uv`](https://docs.astral.sh/uv/) and Python 3.14+:
 
 ```bash
 make install    # uv sync
@@ -106,14 +104,16 @@ concerns a vulnerability, use the private channel in `SECURITY.md` instead.
 - Review is requested from the code owners automatically via
   [`.github/CODEOWNERS`](.github/CODEOWNERS).
 
-GitHub shows a template chooser when you open a pull request. Pick the one that
-matches how the work was produced:
+Two templates exist. GitHub auto-applies the default one; the agent-assisted one
+must be selected explicitly.
 
-- **Default pull request template** — for typical contributions: summary, linked
-  issue, type of change, and the checks you ran.
-- **Agent-assisted pull request template** — when AI tooling did substantial
-  work. It adds required AI disclosure, a human-understanding attestation, and
-  evidence of a closed verification loop.
+- **Default** — applied automatically when you open a pull request: summary,
+  linked issue, type of change, and the checks you ran.
+- **Agent-assisted** — required when AI tooling did substantial work. It adds
+  mandatory AI disclosure, a human-understanding attestation, and evidence of a
+  closed verification loop. Select it from the pull request page's template
+  picker, or by appending `?template=agent-assisted-pull-request.md` to the
+  compare URL.
 
 ## AI-assisted contributions
 
@@ -123,8 +123,8 @@ time. They set a bar for evidence and understanding, not a limit on tools.
 
 - **Disclose.** AI assistance beyond trivial editor tab-completion must be
   disclosed in the issue or pull request, naming the tool and the extent. The
-  issue forms and the agent-assisted pull request template both have a required
-  field for this.
+  issue forms all have a required field for this, and so does the
+  agent-assisted pull request template.
 - **Stay in the loop.** You, not the tool, are responsible for every line you
   submit. You must be able to explain what your change does and how it interacts
   with the rest of the project, without assistance.

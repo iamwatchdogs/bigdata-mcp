@@ -3,6 +3,8 @@ name = "bigdata-mcp"
 version = "0.1.0"
 description = "MCP server that registers multiple read-only big data sources so agents can query them through a single interface"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "iamwatchdogs", email = "shamith301102@gmail.com" }
 ]

@@ -100,6 +100,11 @@ claim rather than re-deriving it.
 - **The entry point has no CLI surface yet.** `main()` takes no arguments, so a
   `--help` / `--version` smoke test would be vacuous. The release smoke test
   asserts exit code 0 only, and `tests/test_main.py` is what gives that meaning.
+- **The ruleset must not require a check context the repo never emits.** CodeQL's
+  contexts are its matrix-expanded job names `Analyze (python)` and
+  `Analyze (actions)`, not `CodeQL`. Requiring a context named `CodeQL` can
+  never be satisfied and wedges every merge. `iamwatchdogs/learning-hog` carries
+  exactly that defect. CodeQL is gated by the `code_scanning` rule instead.
 - **`.github/dependabot.yml` is not an Actions workflow.** actionlint rejects its
   top-level `updates:` key. It is covered by `check-yaml` and the contract tests.
 
@@ -130,11 +135,13 @@ claim rather than re-deriving it.
 - Never hand-edit `uv.lock` or anything under `.github/` without running
   `make workflows` (actionlint and shellcheck run there).
 - Workflows pin third-party actions to a 40-character commit SHA with a trailing
-  `# vX.Y.Z` comment. A mutable tag means whoever controls the tag controls the
-  code CI runs.
+  version comment (`# v7.0.1`, or `# v2` where the upstream tag is bare). A mutable
+  tag means whoever controls the tag controls the code CI runs.
 - A workflow that runs on `pull_request_target` or `workflow_run` holds a write
   token against attacker-influenceable code. It must contain **no checkout** and
   must never execute untrusted code.
+- A `workflow_run` filter matches on a workflow's `name:`, not its filename. A
+  rename on either side silently stops the dependent job from ever running.
 - Untrusted input reaches a shell through `env:`, never interpolated into a `run:`
   body. `github.event.*` fields other than `github.event.number` are
   attacker-controlled text.

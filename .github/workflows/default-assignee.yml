@@ -18,6 +18,10 @@ on:
     types: [opened]
 
   workflow_run: # zizmor: ignore[dangerous-triggers]
+    # Must match `name:` in codeql.yml EXACTLY. A `workflow_run` filter matches
+    # on the workflow's name, not its file, so a rename on either side silently
+    # stops the code-scanning assignment from ever running again -- with no
+    # error anywhere. tests/test_repo_contracts.py asserts the two agree.
     workflows: ["CodeQL Advanced"]
     types: [completed]
   workflow_dispatch:

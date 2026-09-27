@@ -95,6 +95,35 @@ the files asserted here removes a real safety property with no visible symptom:
   ``attestations: write``, or ``generate_release_notes: true``: an unattested
   downloadable binary cannot be traced to the commit it was built from, and the
   OIDC scope is what lets Sigstore sign it at all.
+- the ``allow()`` helper inside ``ci-status-checker`` dropping its
+  ``[ "$1" = false ]`` provenance term, or any of its three lines: that clause
+  is the fail-closed mechanism the whole gate design rests on, GitHub counts a
+  *skipped* required check as success, and a cancelled run leaves never-started
+  jobs reported as "skipped" (github.com/actions/runner#3041).
+- a scheduled workflow falling back to the bare boolean
+  ``cancel-in-progress: true``: ``cancel-in-progress`` is evaluated on the
+  *arriving* run, so the bare boolean lets the next push kill a security scan
+  that was supposed to complete, and a scan that silently never completes is
+  worse than one that fails because nothing reports it.
+- the ruleset in ``scripts/apply_ruleset.sh`` requiring a status-check context
+  the repository never emits -- ``CodeQL`` in particular, whose real contexts are
+  the matrix-expanded ``Analyze (python)`` / ``Analyze (actions)`` job names. A
+  context GitHub never reports can never be satisfied, so it wedges every merge
+  until somebody edits the ruleset under pressure.
+- a ``workflow_run`` filter naming a workflow that no longer exists: the filter
+  matches on a workflow's ``name:``, not its filename, so a rename on either
+  side silently stops the dependent job from ever running again, with no error
+  anywhere in the Actions UI.
+- a privileged job gaining scope beyond what it needs: the existing checks are
+  subset checks, so an unnecessary ``contents: write`` on a
+  ``pull_request_target`` / ``workflow_run`` job reads exactly like a correct
+  one. ``default-assignee.yml`` runs on both of those triggers, so the excess
+  scope would be a push-capable token with no visible symptom.
+- the release pipeline's reusable CI call dropping ``secrets.CODECOV_TOKEN`` on
+  either side of the call: a reusable workflow does not inherit the caller's
+  secrets implicitly, so a missing entry leaves the secret empty inside
+  ``ci.yml``, and actionlint rejects a caller passing a secret the callee never
+  declares.
 
 Every assertion below is derived from file contents or from a real ``git``
 subprocess run, so each one can be observed to fail under a targeted mutation.
@@ -102,6 +131,7 @@ subprocess run, so each one can be observed to fail under a targeted mutation.
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import shutil
@@ -116,6 +146,20 @@ import pytest
 import yaml
 
 ALWAYS_CONDITION = "always()"
+# The three lines of the `ci-status-checker` gate's `allow()` helper, quoted
+# exactly. Every character is load-bearing: the second line's `&&` chain has to
+# join *both* the skipped-result test and the filter-provenance test, because
+# `[ "$2" = skipped ] && return 0` is the same gate with its safety property
+# removed, and it is a shorter edit to make by accident than by intent.
+ALLOW_DENY_LINE = "return 1"
+ALLOW_FUNCTION_NAME = "allow"
+ALLOW_SKIPPED_LINE = '[ "$2" = skipped ] && [ "$1" = false ] && return 0'
+ALLOW_SUCCESS_LINE = '[ "$2" = success ] && return 0'
+REQUIRED_ALLOW_LINES = frozenset({
+    ALLOW_SUCCESS_LINE,
+    ALLOW_SKIPPED_LINE,
+    ALLOW_DENY_LINE,
+})
 # `actions/attest` is the current entry point for build provenance; the older
 # `attest-build-provenance` action is now a thin wrapper over it, so naming the
 # wrapper instead would gate on a deprecated path rather than on provenance.
@@ -128,6 +172,16 @@ ATTEST_ACTION = "actions/attest"
 AUTO_MERGE_ALLOWED_LOCAL_PREFIX = "./"
 AUTO_MERGE_JOB_ID = "auto-merge"
 AUTO_MERGE_WORKFLOW_FILE = "dependabot-auto-merge.yml"
+# The only scopes the auto-merge job may hold, asserted as an exact set rather
+# than as a subset. The existing contract checks that `contents: write` and
+# `pull-requests: write` are *present*, which is precisely the check that cannot
+# see a third scope somebody added for convenience.
+ALLOWED_ASSIGN_NEW_WORK_PERMISSIONS: dict[str, str] = {
+    "issues": "write",
+    "pull-requests": "write",
+}
+ASSIGN_ALERTS_JOB_ID = "assign-code-scanning-alerts"
+ASSIGN_NEW_WORK_JOB_ID = "assign-new-work"
 BUILD_JOB = "build"
 # `cancel-in-progress` is evaluated on the *arriving* run, so the release
 # pipeline pins the bare boolean rather than a conditional expression: nothing
@@ -135,6 +189,11 @@ BUILD_JOB = "build"
 CANCEL_IN_PROGRESS_KEY = "cancel-in-progress"
 CD_WORKFLOW_FILE = "cd.yml"
 CI_JOB = "ci"
+# The job implementing the single required status check. Addressed by job id
+# rather than by `name:` here so a rename of the gate shows up as a failure to
+# find it, which is the same signal a ruleset pointing at the old name gives.
+CI_STATUS_JOB_ID = "ci-status-checker"
+CI_WORKFLOW_FILE = "ci.yml"
 # The reusable-workflow call the release gate depends on. A `./` path is the
 # only spelling that keeps one definition of CI: a copy of its jobs inside the
 # release file drifts, and the copy that gates releases is the one nobody
@@ -153,10 +212,24 @@ DIST_PREFIX = "dist/"
 CHECKOUT_ACTION = "actions/checkout"
 CODEOWNERS_WILDCARD = "* @iamwatchdogs"
 CODEQL_ANALYZE_ACTION = "github/codeql-action/analyze"
+CODEQL_ANALYZE_JOB_NAME_RE = re.compile(r"Analyze \([^()]+\)")
 CODEQL_INIT_ACTION = "github/codeql-action/init"
 CODEQL_UPLOAD_SARIF_ACTION = "github/codeql-action/upload-sarif"
 COMMIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
 CODEQL_WORKFLOW_FILE = "codeql.yml"
+# A context that looks like it would name the CodeQL gate and cannot: the real
+# check contexts are the matrix-expanded job names, which are asserted here to
+# be `Analyze (...)`. Naming this one required would wedge every merge.
+CODEQL_UNSATISFIABLE_CONTEXT = "CodeQL"
+# The only secret threaded from the release pipeline into the reusable CI call.
+# Asserted on both sides of the call, because a reusable workflow does not
+# inherit the caller's secrets implicitly and actionlint rejects a caller
+# passing a secret the callee never declares. This is the secret's *name*, which
+# every workflow spelling it literally; the constant is named for what it is
+# rather than for the string so a secret-shaped identifier does not read as a
+# hardcoded credential.
+CODECOV_CREDENTIAL_NAME = "CODECOV_TOKEN"
+CONTEXT_KEY = "context"
 COUNCIL_ARTIFACT = Path(".agents/council/extraction-candidates.jsonl")
 # Exactly the two events zizmor's `dangerous-triggers` audit flags, and exactly
 # the two that run with a write token against code an attacker can influence.
@@ -180,6 +253,20 @@ ELIGIBLE_UPDATE_TYPE = "version-update:semver-patch"
 ENABLE_CACHE_KEY = "enable-cache"
 ENV_KEY = "env"
 EVENT_NAME_REFERENCE = "github.event_name"
+# The exact grant the code-scanning-alert assignment job may hold. It talks to
+# one API and to nothing else, so a fourth scope is never justified; the
+# equality is what makes "excess" a test failure rather than a review note.
+EXACT_ALERT_JOB_PERMISSIONS: dict[str, str] = {"security-events": "write"}
+# The exact grant the auto-merge job may hold. `contents: write` moves the ref
+# when the queued merge lands, `pull-requests: write` approves and enables the
+# queue, and `issues: write` is required because labels are served by the issues
+# API. Nothing else in that workflow touches the repository, and a token is
+# only as narrow as the widest thing it was handed for.
+EXACT_AUTO_MERGE_JOB_PERMISSIONS: dict[str, str] = {
+    "contents": "write",
+    "pull-requests": "write",
+    "issues": "write",
+}
 EXPECTED_DEPENDABOT_ECOSYSTEMS = frozenset({"github-actions", "pre-commit", "uv"})
 EXPECTED_PATH_FILTERS = frozenset({"json", "python", "workflows"})
 # Exactly the three ecosystems the merge policy refuses to auto-merge, whatever
@@ -210,6 +297,10 @@ MERGE_POLICY_STEP_NAME = "Evaluate merge policy"
 MIN_DESCRIPTION_LENGTH = 20
 MINOR_UPDATE_TYPE = "minor"
 NEGATION = "!"
+# A `name:` on a workflow or a job. For a workflow this is the value a
+# `workflow_run:` filter matches against; for a job it is the status-check
+# context GitHub reports.
+NAME_KEY = "name"
 PATCH_UPDATE_TYPE = "patch"
 PERMISSION_WRITE = "write"
 PATHS_FILTER_ACTION = "dorny/paths-filter"
@@ -247,7 +338,22 @@ REPOSITORY_SLUG = "iamwatchdogs/bigdata-mcp"
 REQUIRED_WORKFLOWS_FILTER_PATH = ".github/workflows/*.yml"
 RUN_KEY = "run"
 RUN_SUFFIX = f".{RUN_KEY}"
+# The ruleset that gates merges is not a YAML file in this repository; it is a
+# JSON payload in a heredoc inside a shell script, because it has to be
+# reviewable in place and must reach GitHub with `~DEFAULT_BRANCH` unexpanded.
+# Reading it out of the heredoc is therefore the only way to keep the required
+# status check and the check this repository actually emits in agreement.
+RULESET_HEREDOC_DELIMITER = "JSON"
+RULESET_SCRIPT = Path("scripts/apply_ruleset.sh")
+RULE_STATUS_CHECK_TYPE = "required_status_checks"
 SCAFFOLD_PLACEHOLDER_DESCRIPTION = "Add your description here"
+# A reusable workflow does not inherit the caller's secrets implicitly, so both
+# ends of the call name the secret explicitly. Asserted on both ends below.
+SECRETS_KEY = "secrets"
+# Matched against a raw `run:` body to locate a shell function's opening line.
+# Parsing is not an option: the function is not YAML structure, and the closing
+# brace is found by scanning for the first line whose stripped form is `}`.
+SHELL_FUNCTION_RE = re.compile(r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*\{")
 # One literal, two uses: the `schedule:` trigger key, and the substring the
 # `concurrency` group must carry so a scheduled run lands in its own group.
 SCHEDULE_LITERAL = "schedule"
@@ -311,6 +417,11 @@ UV_ECOSYSTEM = "uv"
 # of the `>=X.Y.Z` lower bounds pyproject.toml declares. `increase` raises the
 # bound alongside the lockfile so the two can never disagree.
 UV_VERSIONING_STRATEGY = "increase"
+# The two trigger names that decide whether a workflow is privileged and whether
+# a job's token is a push token. `workflow_call` is the reusable-workflow entry
+# point whose `secrets:` block has to match what the caller passes.
+WORKFLOW_CALL_TRIGGER = "workflow_call"
+WORKFLOW_RUN_TRIGGER = "workflow_run"
 SETUP_UV_ACTION = "astral-sh/setup-uv"
 SUBJECT_PATH_KEY = "subject-path"
 UPLOAD_ARTIFACT_ACTION = "actions/upload-artifact"
@@ -1518,6 +1629,233 @@ def _action_input_steps(
         for index, step in enumerate(_job_steps(job))
         if _references_action(_step_uses(step), action)
     ]
+
+
+def _executable_lines(script: str) -> list[str]:
+    """Return the non-blank, non-comment lines of a shell script, stripped.
+
+    Unlike ``_effective_command`` this does *not* re-tokenise with ``shlex``,
+    because the caller here is matching whole lines literally and a shell test
+    line such as ``[ "$2" = success ] && return 0`` only has that exact spelling
+    before the quotes are removed. Dropping comments is still required: a line
+    that merely names a condition changes nothing, so it must not be able to
+    satisfy an assertion about what the function does.
+
+    Args:
+        script: A ``run:`` body, or one shell function's worth of one.
+
+    Returns:
+        Every line that a shell would act on, left- and right-stripped.
+    """
+    return [
+        stripped
+        for line in script.splitlines()
+        if (stripped := line.strip()) and not stripped.startswith("#")
+    ]
+
+
+def _shell_function_body(script: str, name: str) -> str:
+    """Return the body of one shell function defined in a ``run:`` body.
+
+    A POSIX shell delimits a function body with the first line whose stripped
+    form is exactly ``}``, which is how the ``fi`` of an enclosing conditional
+    and anything after it are excluded. Locating the function textually rather
+    than by parsing is the point: the body is shell, and the assertions about it
+    are about characters in a line.
+
+    Args:
+        script: A ``run:`` body.
+        name: The function's name, without the parameter list.
+
+    Returns:
+        The lines between the opening brace and the closing one, joined by
+        newlines and without the braces themselves. A function that is opened
+        and never closed is a failure, not a body running to the end of the
+        script.
+
+    """
+    lines = script.splitlines()
+    start = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if (match := SHELL_FUNCTION_RE.match(line)) is not None
+            and match.group("name") == name
+        ),
+        None,
+    )
+    assert start is not None, (
+        f"no shell function named {name!r} is defined in the {len(lines)}-line "
+        "script (which starts with "
+        f"{lines[0].strip()!r}). The policy this function expresses is the "
+        "fail-closed mechanism the whole gate rests on, so its absence is the "
+        "contract being violated rather than a shape this test has to tolerate"
+    )
+    remainder = lines[start + 1 :]
+    end = next(
+        (index for index, line in enumerate(remainder) if line.strip() == "}"),
+        None,
+    )
+    assert end is not None, (
+        f"the shell function {name!r} is opened but never closed with a line "
+        f"containing only `}}`; the script has {len(lines)} lines and starts "
+        f"with {lines[0].strip()!r}. The body would then be everything after it, "
+        "including code that has nothing to do with the function, so an "
+        "assertion about the body would be asserting about the rest of the "
+        "script"
+    )
+    return "\n".join(remainder[:end])
+
+
+def _heredoc_body(text: str, delimiter: str) -> str:
+    """Return the body of a quoted shell heredoc, with the delimiters removed.
+
+    The payload is read out of the heredoc rather than out of a rendered file
+    because the script never writes one: the ruleset is applied over a pipe, and
+    a copy written elsewhere could drift from the copy that is actually applied.
+
+    Args:
+        text: The whole shell script.
+        delimiter: The heredoc delimiter, without the surrounding quotes.
+
+    Returns:
+        Every line between the opening line and the terminator, joined by
+        newlines. An unterminated heredoc is a failure, not a longer body: the
+        rest of the script would otherwise be spliced into the payload.
+
+    """
+    lines = text.splitlines()
+    start = next(
+        (index for index, line in enumerate(lines) if f"<<'{delimiter}'" in line),
+        None,
+    )
+    assert start is not None, (
+        f"no <<'{delimiter}' heredoc appears in the {len(lines)}-line script "
+        f"(which starts with {lines[0].strip()!r}). The payload asserted below "
+        "lives inside that heredoc, so its absence means there is nothing to "
+        "assert rather than that the payload is right"
+    )
+    remainder = lines[start + 1 :]
+    end = next(
+        (index for index, line in enumerate(remainder) if line.strip() == delimiter),
+        None,
+    )
+    assert end is not None, (
+        f"the <<'{delimiter}' heredoc is opened but never terminated by a line "
+        f"containing only {delimiter!r}; the script has {len(lines)} lines and "
+        f"starts with {lines[0].strip()!r}. Reading to the end of the file would "
+        "splice the rest of the script into the payload and make any assertion "
+        "about it vacuous"
+    )
+    return "\n".join(remainder[:end])
+
+
+def _ruleset_payload(repo_root: Path) -> dict[object, object]:
+    """Parse the branch-ruleset payload out of the apply script's heredoc.
+
+    Args:
+        repo_root: The repository root.
+
+    Returns:
+        The decoded payload, typed as a mapping.
+    """
+    path = repo_root / RULESET_SCRIPT
+    assert path.is_file(), f"required gating file is missing: {path}"
+    raw = _heredoc_body(path.read_text(encoding="utf-8"), RULESET_HEREDOC_DELIMITER)
+    return _as_mapping(json.loads(raw), f"the ruleset payload in {path.name}")
+
+
+def _ruleset_required_status_checks(
+    payload: dict[object, object],
+) -> list[str]:
+    """Collect every required status-check context declared by the ruleset.
+
+    Args:
+        payload: The decoded ruleset payload.
+
+    Returns:
+        One context string per entry of the ``required_status_checks`` rule, in
+        declaration order and including duplicates, so that listing the same
+        context twice is as visible as listing a second one.
+    """
+    rules = payload.get("rules")
+    assert isinstance(rules, list), (
+        f"the ruleset payload declares `rules: {rules!r}` "
+        f"({type(rules).__name__}), expected the list of rule objects the "
+        f"{RULE_STATUS_CHECK_TYPE!r} rule is one of"
+    )
+    contexts: list[str] = []
+    for rule in rules:
+        if not isinstance(rule, dict) or rule.get("type") != RULE_STATUS_CHECK_TYPE:
+            continue
+        parameters = rule.get("parameters")
+        assert isinstance(parameters, dict), (
+            f"the {RULE_STATUS_CHECK_TYPE!r} rule declares `parameters: "
+            f"{parameters!r}` ({type(parameters).__name__}), so it names no check "
+            "and gates nothing"
+        )
+        declared = parameters.get(RULE_STATUS_CHECK_TYPE)
+        assert isinstance(declared, list), (
+            f"the {RULE_STATUS_CHECK_TYPE!r} rule declares "
+            f"{RULE_STATUS_CHECK_TYPE!r}: {declared!r} "
+            f"({type(declared).__name__}), expected the list of required checks"
+        )
+        contexts.extend(
+            str(_as_mapping(entry, "a required-check entry")[CONTEXT_KEY])
+            for entry in declared
+        )
+    return contexts
+
+
+def _workflow_names(repo_root: Path) -> dict[Path, str]:
+    """Map every workflow file to the ``name:`` it declares.
+
+    The name, not the filename, is what a ``workflow_run:`` filter matches
+    against, and what the Actions UI shows, so the set of declared names is the
+    thing a filter has to be drawn from.
+
+    Args:
+        repo_root: The repository root.
+
+    Returns:
+        One entry per workflow file, in sorted path order.
+    """
+    return {
+        path: str(_load_workflow(path).get(NAME_KEY, ""))
+        for path in _workflow_paths(repo_root)
+    }
+
+
+def _job_display_names(data: dict[object, object], path: Path) -> list[tuple[str, str]]:
+    """Collect the ``name:`` every job in one workflow displays.
+
+    Args:
+        data: A parsed workflow mapping.
+        path: The workflow the mapping came from, used in failure messages.
+
+    Returns:
+        One ``(job id, declared name)`` pair per job, in declaration order.
+    """
+    return [
+        (job_id, str(job.get(NAME_KEY, "")))
+        for job_id, job in _workflow_jobs(data, path).items()
+    ]
+
+
+def _trigger_block(data: dict[object, object], event: str) -> object:
+    """Return the value one named event's trigger maps to.
+
+    Args:
+        data: A parsed workflow mapping.
+        event: The event name to look up.
+
+    Returns:
+        The trigger's value, or ``None`` when the event is not declared.
+    """
+    triggers = _trigger_value(data)
+    if not isinstance(triggers, dict):
+        return None
+    return triggers.get(event)
 
 
 def test_codeowners_gates_every_path_behind_one_owner(repo_root: Path) -> None:
@@ -3393,4 +3731,473 @@ def test_release_artifacts_are_attested_to_their_commit(repo_root: Path) -> None
         "derives the notes from the merged pull requests. A release published "
         "with an empty body is indistinguishable from one nobody wrote notes "
         "for, so the omission is not a style preference"
+    )
+
+
+def test_ci_status_gate_requires_provenance_for_a_skipped_job(
+    repo_root: Path,
+) -> None:
+    """Assert the ``CI Status`` gate's fail-closed allow() is present and exact.
+
+    This is the mechanism the whole single-required-check design rests on.
+    GitHub reports a *skipped* job as a successful required check, and a
+    cancelled run leaves every job that never started reported as "skipped"
+    rather than "cancelled" (github.com/actions/runner#3041). The
+    ``ci-status-checker`` job's own ``allow()`` helper exists to close exactly
+    that: a skipped result passes only when the path filter explicitly reported
+    ``false``, which is the one provenance value that means "this job did not
+    apply". Everything else fails, and the job then exits non-zero.
+
+    So the clause under test is currently the only thing standing between a
+    cancelled run and a bad merge, and the failure is silent by construction --
+    the gate passes. The assertion is on the exact three lines rather than on
+    "contains a provenance check", because ``[ "$2" = skipped ] && return 0``
+    is the same gate with that clause deleted, and it is a shorter edit to make
+    by accident than by intent. A fourth ``[ ...`` line is rejected for the
+    same reason: a function that both grants and withholds the same exemption
+    is unreadable, and whichever line the shell reaches first wins silently.
+
+    Args:
+        repo_root: The repository root, used to locate ``ci.yml``.
+    """
+    path = repo_root / WORKFLOWS_DIR / CI_WORKFLOW_FILE
+    assert path.is_file(), f"required gating file is missing: {path}"
+
+    job = _require_job(_load_workflow(path), path, CI_STATUS_JOB_ID)
+    carriers = [
+        script
+        for _index, script in _step_scripts(job)
+        if f"{ALLOW_FUNCTION_NAME}()" in script
+    ]
+    assert len(carriers) == 1, (
+        f"expected exactly one step of the {CI_STATUS_JOB_ID!r} job in "
+        f"{path.name} to define {ALLOW_FUNCTION_NAME}(), found {len(carriers)}. "
+        "The provenance rule under test lives in that function, so zero means "
+        "the policy is absent rather than satisfied, and more than one means "
+        "which of them the gate actually runs is not determined by this file"
+    )
+
+    lines = _executable_lines(_shell_function_body(carriers[0], ALLOW_FUNCTION_NAME))
+    missing = sorted(REQUIRED_ALLOW_LINES - set(lines))
+    assert not missing, (
+        f"{ALLOW_FUNCTION_NAME}() in the {CI_STATUS_JOB_ID!r} job of {path.name} "
+        f"is missing {missing}; it is {lines!r}. A *skipped* result counts as a "
+        "successful required check in GitHub, and a cancelled run reports every "
+        "never-started job as skipped, so without the "
+        '`[ "$1" = false ]` provenance term on the skipped line a cancelled '
+        "run passes this gate and broken code merges. Without the `return 1` "
+        "deny line, an unrecognised result falls through as a pass"
+    )
+
+    unrecognised = sorted(
+        {line for line in lines if line.startswith("[")} - REQUIRED_ALLOW_LINES
+    )
+    assert not unrecognised, (
+        f"{ALLOW_FUNCTION_NAME}() in the {CI_STATUS_JOB_ID!r} job of {path.name} "
+        f"contains shell test line(s) {unrecognised} that are not among "
+        f"{sorted(REQUIRED_ALLOW_LINES)}. Each test in this function has to be "
+        "one of the three the gate is specified in terms of, because a second "
+        "one can only either duplicate an exemption or quietly widen the set of "
+        "results that pass, and the shell honours whichever it reaches first "
+        "without saying so"
+    )
+
+
+def test_a_scheduled_workflow_never_uses_a_bare_cancel_in_progress(
+    repo_root: Path,
+) -> None:
+    """Assert every scheduled workflow's ``cancel-in-progress`` is conditional.
+
+    ``cancel-in-progress`` is evaluated on the *arriving* run, not the one
+    already queued. The bare boolean ``true`` therefore does not mean "cancel
+    superseded runs of the same kind" -- it means "whenever anything new enters
+    this group, cancel whatever is there". A scheduled security scan sharing a
+    concurrency group with ordinary pushes is therefore killed by the next
+    push, and the kill is indistinguishable from any other cancellation: a
+    security scan that silently never completes is worse than one that fails,
+    because a failure at least appears in the Security tab.
+
+    The rule is deliberately scoped to workflows that declare a ``schedule``
+    trigger. ``ci.yml`` keys its group on ``head_ref || run_id`` and pins the
+    bare boolean, which is correct there and would be a false positive under a
+    repo-wide reading: on a tag or main push, nothing else can arrive in the
+    same group, so a bare ``true`` costs nothing. A scheduled run is the
+    opposite case, and only the presence of a schedule makes the distinction
+    matter.
+
+    Args:
+        repo_root: The repository root, used to locate ``.github/workflows``.
+    """
+    offenders: list[str] = []
+    scheduled: list[str] = []
+    for path in _workflow_paths(repo_root):
+        data = _load_workflow(path)
+        if SCHEDULE_LITERAL not in _trigger_keys(data):
+            continue
+        relative = str(path.relative_to(repo_root))
+        scheduled.append(relative)
+        concurrency = _as_mapping(
+            data.get("concurrency"), f"`concurrency:` in {relative}"
+        )
+        cancel = concurrency.get(CANCEL_IN_PROGRESS_KEY)
+        if _yaml_true(cancel):
+            offenders.append(
+                f"{relative}: {CANCEL_IN_PROGRESS_KEY} is {cancel!r} "
+                f"({type(cancel).__name__})"
+            )
+
+    assert scheduled, (
+        f"no workflow under {WORKFLOWS_DIR} declares a `{SCHEDULE_LITERAL}:` "
+        "trigger, so this scan is inspecting nothing. A weekly security scan is "
+        "the only thing that surfaces findings from newly released rules against "
+        "a codebase nobody is currently changing, and its cancellation policy is "
+        "the part that is easy to get wrong"
+    )
+    assert not offenders, (
+        "these scheduled workflows use a bare boolean "
+        f"`{CANCEL_IN_PROGRESS_KEY}`:\n" + "\n".join(offenders) + "\n"
+        f"`{CANCEL_IN_PROGRESS_KEY}` is evaluated on the *arriving* run, so the "
+        "bare boolean cancels the scheduled run itself the moment any other run "
+        "joins the group. Use a string expression that excludes the schedule "
+        f"event, e.g. `${{{{ {EVENT_NAME_REFERENCE} != '{SCHEDULE_LITERAL}' }}}}`"
+    )
+
+
+def test_every_required_ruleset_context_is_a_context_this_repo_emits(
+    repo_root: Path,
+) -> None:
+    """Assert each ruleset context is ``CI Status`` and is actually produced.
+
+    A required status check names a string GitHub publishes as a check run. A
+    context nothing ever publishes can never be satisfied, so the ruleset
+    blocks every merge from the moment it is applied until somebody notices and
+    edits it -- and the pressure to notice arrives only when a merge is
+    blocked, which is the worst possible time to be reading a ruleset.
+
+    The failure this guards against is specific. CodeQL's check contexts are the
+    matrix-expanded job names ``Analyze (python)`` and ``Analyze (actions)``,
+    never a context called ``CodeQL``, so requiring one is unsatisfiable by
+    construction. The reference repository ``iamwatchdogs/learning-hog`` does
+    require exactly that and carries the same latent defect; CodeQL is gated
+    here by the ruleset's ``code_scanning`` rule instead, which is a merge
+    condition rather than a check context. So the assertion is not "no
+    interesting context may ever be required" -- it is that every context listed
+    is one a job in this repository is named.
+
+    Args:
+        repo_root: The repository root, used to locate the ruleset script and
+            ``.github/workflows``.
+    """
+    contexts = _ruleset_required_status_checks(_ruleset_payload(repo_root))
+    assert contexts, (
+        f"{RULESET_SCRIPT} declares no "
+        f"{RULE_STATUS_CHECK_TYPE!r} entry, so it gates merges on nothing at "
+        "all. The ruleset is the only thing making the CI gate mandatory: a "
+        "workflow can succeed perfectly and still be merged over"
+    )
+
+    unexpected = sorted(set(contexts) - {REQUIRED_STATUS_CHECK_NAME})
+    assert not unexpected, (
+        f"{RULESET_SCRIPT} requires status-check context(s) {unexpected}, but "
+        f"this repository only emits {REQUIRED_STATUS_CHECK_NAME!r}. A required "
+        "context that no job ever publishes is unsatisfiable, so the ruleset "
+        "blocks every merge until it is edited under pressure. A per-job check "
+        "name cannot be required here either: path filtering legitimately skips "
+        "jobs, and GitHub counts a skipped required check as success, which is "
+        "the bypass the single fail-closed gate exists to prevent"
+    )
+
+    emitted = [
+        f"{path.relative_to(repo_root)}::{job_id}"
+        for path in _workflow_names(repo_root)
+        for job_id, name in _job_display_names(_load_workflow(path), path)
+        if name == REQUIRED_STATUS_CHECK_NAME
+    ]
+    assert len(emitted) == 1, (
+        f"expected exactly one job in {WORKFLOWS_DIR} to be named "
+        f"{REQUIRED_STATUS_CHECK_NAME!r}, found {emitted}. The ruleset names "
+        "that exact string, so a second job with the same display name makes the "
+        "required check ambiguous -- GitHub accepts a check run from either one"
+    )
+
+    assert CODEQL_UNSATISFIABLE_CONTEXT not in contexts, (
+        f"{RULESET_SCRIPT} requires a context named "
+        f"{CODEQL_UNSATISFIABLE_CONTEXT!r}, which no job in this repository can "
+        "ever publish"
+    )
+    codeql_path = repo_root / WORKFLOWS_DIR / CODEQL_WORKFLOW_FILE
+    assert codeql_path.is_file(), f"required gating file is missing: {codeql_path}"
+    codeql_jobs = _job_display_names(_load_workflow(codeql_path), codeql_path)
+    assert codeql_jobs, (
+        f"{CODEQL_WORKFLOW_FILE} declares no jobs, so there is no job name to "
+        f"compare the {CODEQL_UNSATISFIABLE_CONTEXT!r} context against"
+    )
+    misnamed = [
+        f"{job_id}: {name!r}"
+        for job_id, name in codeql_jobs
+        if not CODEQL_ANALYZE_JOB_NAME_RE.fullmatch(name)
+    ]
+    assert not misnamed, (
+        "these CodeQL jobs are not named `Analyze (...)`: "
+        f"{misnamed}. CodeQL's check contexts are the matrix-expanded job names, "
+        "so the only contexts this file publishes are the per-language ones, and "
+        "a job renamed away from that shape changes what a ruleset can require. "
+        "The matrix is what makes one job publish two differently named checks; "
+        "a generically named job publishes one context per cell and nothing in "
+        "the ruleset refers to any of them"
+    )
+
+
+def test_every_workflow_run_filter_names_a_workflow_that_exists(
+    repo_root: Path,
+) -> None:
+    """Assert each ``workflow_run`` filter matches a declared workflow name.
+
+    A ``workflow_run`` filter matches on a workflow's ``name:``, not on its
+    filename. That is a silent contract in three places at once -- the filter
+    in the dependent workflow, the ``name:`` of the upstream workflow, and
+    nothing else -- so a rename on either side simply stops the dependent jobs
+    from ever running again. There is no error anywhere: the workflow is
+    syntactically valid, the upstream workflow runs on schedule, and the
+    dependent workflow's run does not appear in the Actions UI at all. The
+    failure is discovered when somebody goes looking for the result the missing
+    job was supposed to produce.
+
+    The filter is therefore checked against the *declared names* of every
+    workflow in the directory rather than against the set of files, which is
+    the same reason the check cannot be satisfied by pointing at a file that
+    happens to exist.
+
+    Args:
+        repo_root: The repository root, used to locate ``.github/workflows``.
+    """
+    declared = {name for name in _workflow_names(repo_root).values() if name}
+    waiting: list[str] = []
+    unknown: list[str] = []
+    for path in _workflow_paths(repo_root):
+        data = _load_workflow(path)
+        block = _trigger_block(data, WORKFLOW_RUN_TRIGGER)
+        if block is None:
+            continue
+        relative = str(path.relative_to(repo_root))
+        waiting.append(relative)
+        mapping = _as_mapping(
+            block, f"the `{WORKFLOW_RUN_TRIGGER}:` trigger in {relative}"
+        )
+        wanted = mapping.get("workflows")
+        assert isinstance(wanted, list), (
+            f"{relative} declares `{WORKFLOW_RUN_TRIGGER}:` with "
+            f"`workflows: {wanted!r}` ({type(wanted).__name__}), expected a list "
+            f"of workflow names. A filter naming nothing matches every completed "
+            "run of every workflow"
+        )
+        assert wanted, (
+            f"{relative} declares `{WORKFLOW_RUN_TRIGGER}:` with an empty "
+            f"`workflows:` list, so its dependent jobs fire far more often than "
+            "intended rather than not at all"
+        )
+        unknown.extend(
+            f"{relative} waits for {str(entry)!r}"
+            for entry in wanted
+            if str(entry) not in declared
+        )
+
+    assert waiting, (
+        f"no workflow under {WORKFLOWS_DIR} declares a "
+        f"`{WORKFLOW_RUN_TRIGGER}:` trigger, so this scan is inspecting nothing. "
+        "Assigning unassigned code-scanning alerts is the work such a job exists "
+        "to do, and it has no other trigger that fires after CodeQL finishes"
+    )
+    assert not unknown, (
+        "these filters name the `name:` of no workflow in the directory:\n"
+        + "\n".join(unknown)
+        + f"\nA `{WORKFLOW_RUN_TRIGGER}` filter matches on a workflow's NAME, not "
+        "its filename, so an upstream rename -- or a filter written against the "
+        "file rather than the name -- stops the dependent job from ever running "
+        "again. The dependent run then does not appear in the Actions UI at all, "
+        "and the upstream workflow still runs on schedule, so nothing reports it"
+    )
+
+
+def test_privileged_jobs_hold_no_scope_beyond_what_they_use(
+    repo_root: Path,
+) -> None:
+    """Assert the privileged jobs' grants match their use, with nothing extra.
+
+    The existing permission contracts are subset checks: they assert that a
+    required scope is *present*, which is the right check for a missing grant
+    and precisely the wrong check for an extra one. So nothing in the suite
+    notices a fourth scope added "while I was in here" -- the job still grants
+    everything it needs, the diff reads as a one-line addition, and the token is
+    quietly wider than the workflow's stated purpose.
+
+    That matters most in ``default-assignee.yml``, which runs on both
+    ``pull_request_target`` and ``workflow_run``: a ``contents: write`` added
+    there is a push-capable token against a privileged trigger, with no visible
+    symptom, on a workflow whose whole safety argument is that it runs no
+    untrusted code. ``contents: write`` there can rewrite the default branch.
+    The grants are therefore asserted as exact sets, and the assignment job --
+    which calls exactly one ``gh api`` endpoint, served by the issues API -- is
+    held to a subset so that a legitimate future scope is a deliberate edit.
+
+    Args:
+        repo_root: The repository root, used to locate ``.github/workflows``.
+    """
+    auto_merge_path, auto_merge_data = _auto_merge_workflow(repo_root)
+    auto_merge_job = _require_job(auto_merge_data, auto_merge_path, AUTO_MERGE_JOB_ID)
+    auto_merge_granted = _as_mapping(
+        auto_merge_job.get("permissions"),
+        f"`permissions:` of the {AUTO_MERGE_JOB_ID!r} job in {auto_merge_path.name}",
+    )
+    assert dict(auto_merge_granted) == EXACT_AUTO_MERGE_JOB_PERMISSIONS, (
+        f"the {AUTO_MERGE_JOB_ID!r} job in {auto_merge_path.name} declares "
+        f"{dict(auto_merge_granted)!r}, expected exactly "
+        f"{EXACT_AUTO_MERGE_JOB_PERMISSIONS!r}. This job runs on "
+        "`pull_request_target` holding a write token against the base "
+        "repository, so every extra scope is extra authority for whoever "
+        "reaches the job. `issues: write` is required because labels are served "
+        "by the issues API; nothing beyond the three listed has a caller in this "
+        "workflow"
+    )
+
+    assignee_path = repo_root / WORKFLOWS_DIR / DEFAULT_ASSIGNEE_WORKFLOW_FILE
+    assert assignee_path.is_file(), f"required gating file is missing: {assignee_path}"
+    assignee_data = _load_workflow(assignee_path)
+    new_work = _require_job(assignee_data, assignee_path, ASSIGN_NEW_WORK_JOB_ID)
+    new_work_granted = _as_mapping(
+        new_work.get("permissions"),
+        f"`permissions:` of the {ASSIGN_NEW_WORK_JOB_ID!r} job in {assignee_path.name}",
+    )
+    declared_scopes = {
+        str(scope): str(level) for scope, level in new_work_granted.items()
+    }
+    assert declared_scopes != {CONTENTS_SCOPE: PERMISSION_WRITE}, (
+        f"the {ASSIGN_NEW_WORK_JOB_ID!r} job in {assignee_path.name} holds "
+        f"{CONTENTS_SCOPE}: {PERMISSION_WRITE}. That file runs on both "
+        "`pull_request_target` and `workflow_run`, so this would be a "
+        "push-capable token against a privileged trigger. The job assigns one "
+        "user through one `gh api` call to an endpoint the issues API serves, "
+        "which needs no repository write at all"
+    )
+    excess = {
+        scope: level
+        for scope, level in declared_scopes.items()
+        if ALLOWED_ASSIGN_NEW_WORK_PERMISSIONS.get(scope) != level
+    }
+    assert not excess, (
+        f"the {ASSIGN_NEW_WORK_JOB_ID!r} job in {assignee_path.name} declares "
+        f"{excess} beyond {ALLOWED_ASSIGN_NEW_WORK_PERMISSIONS!r} (it declares "
+        f"{declared_scopes!r}). The job's whole purpose is a single assignees "
+        "call, so a scope it does not use is authority nobody has to exploit to "
+        "abuse"
+    )
+
+    alerts = _require_job(assignee_data, assignee_path, ASSIGN_ALERTS_JOB_ID)
+    alerts_granted = _as_mapping(
+        alerts.get("permissions"),
+        f"`permissions:` of the {ASSIGN_ALERTS_JOB_ID!r} job in {assignee_path.name}",
+    )
+    assert dict(alerts_granted) == EXACT_ALERT_JOB_PERMISSIONS, (
+        f"the {ASSIGN_ALERTS_JOB_ID!r} job in {assignee_path.name} declares "
+        f"{dict(alerts_granted)!r}, expected exactly "
+        f"{EXACT_ALERT_JOB_PERMISSIONS!r}. That job runs on "
+        "`pull_request_target` and `workflow_run` with a write token, and it "
+        "paginates every open unassigned alert in the repository, so a scope "
+        "beyond the one the alerts API requires is a wider token around a "
+        "loop that touches a variable number of findings"
+    )
+
+    zizmor_path = repo_root / WORKFLOWS_DIR / ZIZMOR_WORKFLOW_FILE
+    assert zizmor_path.is_file(), f"required gating file is missing: {zizmor_path}"
+    zizmor_jobs = _workflow_jobs(_load_workflow(zizmor_path), zizmor_path)
+    assert zizmor_jobs, (
+        f"{ZIZMOR_WORKFLOW_FILE} declares no jobs, so the assertion below would "
+        "pass by inspecting an empty mapping rather than by finding the scope it "
+        "is looking for"
+    )
+    zizmor_writers = _scope_writers(zizmor_jobs, CONTENTS_SCOPE)
+    assert not zizmor_writers, (
+        f"these {ZIZMOR_WORKFLOW_FILE} jobs hold {CONTENTS_SCOPE}: "
+        f"{PERMISSION_WRITE}: {dict(zizmor_writers)!r}. That workflow's deny-all "
+        "`permissions: {}` is the reason a job cannot inherit write access it "
+        "did not ask for, and a grant inside it undoes the convention for every "
+        "job in the file rather than just its own"
+    )
+
+
+def test_release_pipeline_threads_the_coverage_secret_into_reusable_ci(
+    repo_root: Path,
+) -> None:
+    """Assert the reusable CI call and its callee agree on ``CODECOV_TOKEN``.
+
+    A reusable workflow does not inherit the caller's secrets implicitly: the
+    callee sees only the secrets its own ``workflow_call`` declares, and only
+    those the caller names. So the secret has to be declared on *both* ends of
+    the call, and actionlint rejects a caller passing a secret the callee never
+    declares -- which means the two halves cannot drift apart without a red
+    build, and cannot be silently half-wired either.
+
+    What the current wiring protects is a coupling nobody can see. Inside
+    ``ci.yml`` the coverage upload is gated on ``IS_COVERAGE_RUN``, which also
+    requires a push to ``refs/heads/main``; a release build runs on a tag, so
+    the upload step never fires there and the empty secret is currently
+    harmless. That is a four-way coupling between two files and a tag name,
+    and it survives only because no run takes the branch where the two
+    conditions both hold. Change either condition -- allow coverage on any
+    caller, or make a release build resolve the default branch -- and the
+    release goes red on a missing token, in the pipeline that can least afford
+    an unexplained failure. Asserting the wiring makes the coupling explicit
+    instead of load-bearing.
+
+    Args:
+        repo_root: The repository root, used to locate ``cd.yml`` and ``ci.yml``.
+    """
+    cd_path, cd_data = _cd_workflow(repo_root)
+    caller = _require_job(cd_data, cd_path, CI_JOB)
+    passed = caller.get(SECRETS_KEY)
+    assert isinstance(passed, dict), (
+        f"the {CI_JOB!r} job in {cd_path.name} calls {CI_REUSABLE_WORKFLOW!r} "
+        f"with `{SECRETS_KEY}: {passed!r}` ({type(passed).__name__}), expected a "
+        f"mapping naming {CODECOV_CREDENTIAL_NAME!r}. A reusable workflow does "
+        "not inherit the caller's secrets implicitly, so without this mapping "
+        f"`secrets.{CODECOV_CREDENTIAL_NAME}` is empty inside the callee. Today "
+        "that is invisible, because the coverage upload also requires a push to "
+        "refs/heads/main and a release runs on a tag -- a four-way coupling "
+        "across two files that any change to either condition turns into a red "
+        "release build. (`secrets: inherit` is refused for the same reason it "
+        "would be a poor answer here: it hands the callee every secret in the "
+        "repository rather than the one the callee declares)"
+    )
+    assert CODECOV_CREDENTIAL_NAME in passed, (
+        f"the {CI_JOB!r} job in {cd_path.name} passes {dict(passed)!r}, which "
+        f"omits {CODECOV_CREDENTIAL_NAME!r}. That is the secret ci.yml's coverage "
+        "upload reads, and the callee cannot see one the caller did not name"
+    )
+
+    ci_path = repo_root / WORKFLOWS_DIR / CI_WORKFLOW_FILE
+    assert ci_path.is_file(), f"required gating file is missing: {ci_path}"
+    call = _trigger_block(_load_workflow(ci_path), WORKFLOW_CALL_TRIGGER)
+    assert isinstance(call, dict), (
+        f"{ci_path.name} declares `{WORKFLOW_CALL_TRIGGER}: {call!r}` "
+        f"({type(call).__name__}), expected a mapping declaring the inputs and "
+        "secrets a caller may pass. Without that block the workflow cannot be "
+        f"called at all, and {cd_path.name}'s release gate is calling it"
+    )
+    declared = call.get(SECRETS_KEY)
+    assert isinstance(declared, dict), (
+        f"{ci_path.name} declares `{WORKFLOW_CALL_TRIGGER}.{SECRETS_KEY}: "
+        f"{declared!r}` ({type(declared).__name__}), expected a mapping naming "
+        f"{CODECOV_CREDENTIAL_NAME!r}. The callee can only be handed a secret it "
+        "declares, so this block is what makes the release's coverage token "
+        "reachable at all"
+    )
+    assert declared.get(CODECOV_CREDENTIAL_NAME) is not None, (
+        f"{ci_path.name} declares `{WORKFLOW_CALL_TRIGGER}.{SECRETS_KEY}:` as "
+        f"{dict(declared)!r}, which omits {CODECOV_CREDENTIAL_NAME!r}. The "
+        "coverage upload step reads that exact name, so a caller that does pass "
+        "it would still see an empty value, and the upload would fail closed on "
+        "`fail_ci_if_error` with nothing to authenticate with. actionlint rejects "
+        "a caller passing a secret the callee never declares, so both halves of "
+        "this contract are enforced by the linter as well; the assertion is here "
+        "so the reason survives the linter's wording"
     )

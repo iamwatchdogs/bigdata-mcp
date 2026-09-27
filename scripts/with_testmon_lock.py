@@ -20,14 +20,25 @@ Usage:
     python scripts/with_testmon_lock.py <command> [args...]
 
 The lock is an ``flock`` on a file in the system temp directory. ``flock(2)`` is
-advisory but that is sufficient here: every participant is this script, and it
-is available on both macOS and Linux. The external ``flock`` command is
-deliberately avoided, because a stock macOS does not ship it and
-``macos-latest`` is in the CI matrix.
+advisory, but that is sufficient here because every participant is this script
+and it is available on both macOS and Linux. The external ``flock`` command is
+deliberately avoided: a stock macOS does not ship it, and ``macos-latest`` is in
+the CI matrix, so a hook that silently fails there is worse than one that works.
+
+The lock file is intentionally left on disk after the run. Unlinking it would
+defeat the exclusion: a waiter blocked in ``flock()`` holds the original inode,
+and once the path is unlinked a third process's ``O_CREAT`` produces a *new*
+inode whose lock excludes nobody. A leftover empty file is harmless, because the
+next run reuses the same inode.
+
+``flock`` on a network filesystem such as NFSv3 can be client-local rather than
+server-coordinated, so this would not serialise across machines. That is
+acceptable here because the path is the system temp directory, which is local on
+both GitHub runners and macOS, and because concurrent *commits* from two
+machines do not share a testmon database anyway.
 
 The kernel releases an ``flock`` when the holding process exits, including on
-``SIGKILL``, so a crashed run cannot leave the hook permanently wedged. That is
-the reason to use ``flock`` over a lockfile plus a stale-timeout heuristic.
+``SIGKILL``, so a crashed run cannot leave the hook permanently wedged.
 """
 
 from __future__ import annotations
@@ -39,7 +50,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-LOCK_TIMEOUT_SECONDS = 300
+LOCK_NAME = "bigdata-mcp-testmon.lock"
 
 
 def _lock_path() -> Path:
@@ -50,7 +61,7 @@ def _lock_path() -> Path:
         two unrelated checkouts on one machine do not serialise against each
         other.
     """
-    return Path(tempfile.gettempdir()) / "bigdata-mcp-testmon.lock"
+    return Path(tempfile.gettempdir()) / LOCK_NAME
 
 
 def main(argv: list[str]) -> int:
@@ -60,7 +71,7 @@ def main(argv: list[str]) -> int:
         argv: Full argument vector. The first element is the command to run.
 
     Returns:
-        The command's exit status, or 1 if the lock could not be acquired.
+        The command's exit status, or 1 if the arguments are unusable.
     """
     if len(argv) < 2:
         print(f"usage: {argv[0]} <command> [args...]", file=sys.stderr)
@@ -68,7 +79,19 @@ def main(argv: list[str]) -> int:
 
     command = argv[1:]
     lock_file = _lock_path()
-    handle = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        handle = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as exc:
+        # A read-only or unwritable TMPDIR, or a lock file owned by another uid
+        # on a shared runner. Report it as a lock problem rather than letting a
+        # raw traceback out of a pre-commit hook.
+        print(
+            f"testmon: cannot open the lock file {lock_file}: {exc}. "
+            f"Set TMPDIR to a writable directory.",
+            file=sys.stderr,
+        )
+        return 1
+
     try:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -82,14 +105,16 @@ def main(argv: list[str]) -> int:
             command, check=False
         ).returncode
     finally:
-        # Closing the descriptor drops the lock. Also unlink so a stale file
-        # does not accumulate, though unlinking is not required for
-        # correctness.
-        try:
-            fcntl.flock(handle, fcntl.LOCK_UN)
-        finally:
-            os.close(handle)
-        lock_file.unlink(missing_ok=True)
+        # Closing the descriptor drops the lock and the kernel reclaims it even
+        # after SIGKILL, so a crashed run cannot wedge later commits.
+        #
+        # The lock file is deliberately NOT unlinked here. Doing so would break
+        # the exclusion this script exists to provide: a waiter blocked in
+        # flock() holds the ORIGINAL inode, and unlinking the path lets a third
+        # process O_CREAT a fresh inode and acquire a lock that excludes nobody.
+        # A leftover empty file is harmless -- the next run's O_CREAT reuses the
+        # same inode, so the lock still serialises correctly.
+        os.close(handle)
 
 
 if __name__ == "__main__":

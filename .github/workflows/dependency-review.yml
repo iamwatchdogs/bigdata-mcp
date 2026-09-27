@@ -37,11 +37,12 @@ jobs:
       - name: Dependency review
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
-          # Moderate and above blocks. Low and critical are deliberately
-          # *not* the whole story here: a critical finding introduced by a
-          # direct dependency is worth a human decision even when a fix
-          # requires a breaking upgrade, so low-severity noise is filtered
-          # and the policy decision stays with review.
+          # Moderate and above blocks the pull request outright, critical
+          # included. There is no severity band that defers to a human here:
+          # the check is a hard gate, and a human still reviews the diff on top
+          # of it. A critical finding that cannot be fixed without a breaking
+          # change is a reason to change the policy, not to let the PR through
+          # with a note.
           fail-on-severity: moderate
           # The advisory database snapshots can lag the pull request event, so a
           # snapshot warning is a race rather than a finding. Retrying is

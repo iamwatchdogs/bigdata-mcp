@@ -16,6 +16,13 @@ on:
         required: false
         default: false
         type: boolean
+    # Declared explicitly because a reusable workflow does not inherit the
+    # caller's secrets implicitly, and actionlint rejects a caller passing a
+    # secret the callee never declares. cd.yml passes CODECOV_TOKEN for the
+    # release gate; see the note there.
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -151,6 +158,21 @@ jobs:
           set -euo pipefail
           rg --files --hidden --no-follow --null -g '*.jsonl' \
             | xargs -0 -r -n1 python -m json.tool --json-lines --compact > /dev/null
+
+      # A plain .json document is a single JSON value, not JSON Lines, so
+      # `--json-lines` would reject it. It needs its own pass, and the `json`
+      # path filter matches .json as well as .jsonl, so without this a change
+      # touching only a malformed .json would flip the filter, run this job,
+      # validate nothing, and report green.
+      - name: Validate JSON
+        if: ${{ hashFiles('**/*.json') != '' }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(rg --files --hidden --no-follow --null -g '*.json')
+          for file in "${files[@]}"; do
+            printf 'json: %s\n' "$file"
+            python -m json.tool --compact "$file" > /dev/null
+          done
 
   precheck-ci-pipeline:
     needs: [detect-changes]

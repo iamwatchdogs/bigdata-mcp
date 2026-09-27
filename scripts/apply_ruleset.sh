@@ -10,12 +10,29 @@
 # treats a *skipped* required check as success and path filtering legitimately
 # skips jobs.
 #
+# CodeQL is deliberately NOT listed as a required context, even though
+# codeql.yml is more secure than the ci.yml gate in isolation. Its check
+# contexts are the matrix-expanded job names `Analyze (python)` and
+# `Analyze (actions)`, not `CodeQL`; requiring a context GitHub never emits
+# wedges every merge until someone edits the ruleset under pressure. The
+# reference repository iamwatchdogs/learning-hog requires a context literally
+# named `CodeQL` while its CodeQL jobs are likewise named `Analyze (...)`, so
+# that rule can never be satisfied. CodeQL findings are still gated, by the
+# `code_scanning` rule below: a CodeQL error or high-severity alert blocks the
+# merge regardless of the check context.
+#
 # `required_approving_review_count` is 0 because this is a single-maintainer
 # repository; requiring an approval would deadlock it. The controls that do
 # matter for an unattended merge are enforced instead by: the required status
 # check, the thread-resolution requirement, the
 # extra-approval-for-unattributed-changes rule, and the Dependabot auto-merge
 # policy, which itself refuses to merge anything but a `uv` semver-patch.
+#
+# Note that the auto-merge workflow's `gh pr review --approve` uses
+# GITHUB_TOKEN, and GitHub does not count token-created approvals toward a
+# review requirement. With a count of 0 that approval is therefore decorative;
+# the real gate is the required status check plus the auto-merge policy's own
+# allow-list.
 #
 # Run `make ruleset` to print, or `make ruleset-apply` to apply. Applying needs
 # `gh` authenticated with admin scope on the repository.
@@ -54,6 +71,11 @@ RULESET_NAME="${RULESET_NAME:-Default Branch Ruleset}"
 # The payload is a heredoc so it is reviewable in place rather than assembled
 # from string concatenation, and so the `~DEFAULT_BRANCH` token reaches GitHub
 # literally (in JSON it must not be expanded by the shell).
+#
+# RULESET_NAME is intentionally not parameterised into the payload: the payload
+# names the ruleset, and interpolating an env var into it would let a stray
+# value silently rename an existing ruleset. The lookup below uses the variable,
+# the payload uses the literal, and they are kept in sync by name.
 payload() {
   cat <<'JSON'
 {
@@ -114,14 +136,25 @@ fi
 
 command -v gh >/dev/null || { echo "error: gh is required to apply a ruleset" >&2; exit 1; }
 
+# GitHub documents two separate endpoints: POST /repos/{owner}/{repo}/rulesets
+# creates, PUT /repos/{owner}/{repo}/rulesets/{id} updates an existing one.
+# There is no "id 0 creates" behaviour, so the create path must use POST.
 existing="$(gh api "repos/$REPO/rulesets" --jq \
   ".[] | select(.name == \"$RULESET_NAME\") | .id" 2>/dev/null || true)"
 
+if [ -n "$existing" ]; then
+  endpoint="repos/$REPO/rulesets/$existing"
+  method="PUT"
+else
+  endpoint="repos/$REPO/rulesets"
+  method="POST"
+fi
+
 payload | gh api \
-  --method PUT \
+  --method "$method" \
   -H "Accept: application/vnd.github+json" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
-  "repos/$REPO/rulesets/${existing:-0}" \
+  "$endpoint" \
   --input - >/dev/null
 
 if [ -n "$existing" ]; then

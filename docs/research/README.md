@@ -58,6 +58,28 @@ adapter interface, and the quoter are kept independent of the language runtime.
 These cost roughly a day and are the highest-leverage work in the project. They
 exist so D1 can be revisited cheaply.
 
+### D4 — Repository hardening landed before the server exists — 2026-09-28
+
+The CI, dependency, and release infrastructure was built while `src/` was still
+a callable stub, on the argument that the gates are cheapest to add while there
+is almost no code to gate.
+
+Two decisions this changed, recorded because they are not obvious from the files:
+
+- **The release smoke test asserts exit code 0 only.** `learning-hog` smoke-tests
+  `--help`, `--version`, and a subcommand, but `bigdata_mcp.main()` takes no
+  arguments, so those assertions would be vacuous. `tests/test_main.py` exercises
+  the `__main__` guard, which is what gives the exit-0 assertion meaning. The
+  smoke test should grow a `--version` flag once the CLI does.
+- **Coverage reports from one matrix cell, but the floor applies to all three.**
+  The floor is `fail_under = 80` in `pyproject.toml`, so every cell enforces it;
+  only the upload is restricted to linux + 3.14 + a push to `main`, so three
+  numbers never race one Codecov project.
+
+**Not a research decision:** the tooling, hook, and workflow conventions live in
+`AGENTS.md` and the commit history, not here. This ledger tracks decisions about
+the *product*.
+
 ## Known unverified
 
 Carried forward from `language-evaluation.md` §Appendix B. None of these block

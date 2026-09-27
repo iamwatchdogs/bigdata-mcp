@@ -59,3 +59,10 @@ extent. Review and understand everything you submit.
 - [ ] One logical change; no unrelated refactors
 - [ ] Tests assert specific expected values, not just that code runs
 - [ ] Documentation and/or tests were updated where applicable
+
+---
+
+Working with an agent on this? Use the
+[agent-assisted template](?template=agent-assisted-pull-request.md) instead: it
+requires pasted verification output, AI disclosure, and a human-understanding
+attestation. The policy is in [CONTRIBUTING.md](CONTRIBUTING.md).

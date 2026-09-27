@@ -49,6 +49,15 @@ jobs:
       contents: read
     with:
       run-all: true
+    # A reusable workflow does NOT inherit the caller's secrets implicitly, and
+    # `secrets:` on a caller only NARROWS from the caller's own scope. A missing
+    # entry here means `secrets.CODECOV_TOKEN` is empty inside ci.yml. That is
+    # currently harmless, because IS_COVERAGE_RUN also requires
+    # `github.ref == 'refs/heads/main'` and a tag push never matches -- so this
+    # is an invisible four-way coupling that a future edit to either condition
+    # would turn into a red release build.
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     uses: ./.github/workflows/ci.yml
 
   build:
