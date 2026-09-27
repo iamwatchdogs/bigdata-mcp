@@ -23,7 +23,7 @@ HYGIENE := trailing-whitespace end-of-file-fixer mixed-line-ending \
         hooks-validate lint lint-check format format-check fmt fix typecheck \
         complexity actionlint workflows test testmon coverage coverage-html \
         hygiene checks security zizmor osv gitleaks verify ci run build binary \
-        clean clean-all
+        remote ruleset ruleset-apply clean clean-all
 
 ##@ Setup
 
@@ -145,6 +145,17 @@ verify: checks security ## Everything CI gates on: commit stage + security gate
 
 ci: verify ## Alias for verify
 
+##@ Repository
+
+remote: ## Show the configured origin remote
+	@git remote -v
+
+ruleset: ## Print the default-branch ruleset payload (does not apply it)
+	@sh scripts/apply_ruleset.sh --print
+
+ruleset-apply: ## Create or update the default-branch ruleset (needs gh + admin)
+	@sh scripts/apply_ruleset.sh
+
 ##@ Build & run
 
 run: ## Run the MCP server entry point
@@ -154,7 +165,13 @@ build: ## Build wheel + sdist into dist/
 	$(UV) build
 
 binary: ## Build standalone binary with pyinstaller
-	$(RUN) pyinstaller --onefile --name bigdata-mcp --paths src src/bigdata_mcp/main.py
+	@# Flags mirror the release pipeline in .github/workflows/cd.yml. `--clean`
+	@# and `--noconfirm` matter for correctness, not tidiness: without them a
+	@# stale build/ directory can be reused and silently produce a binary that
+	@# does not match the current source.
+	$(RUN) pyinstaller --onefile --clean --noconfirm \
+		--name bigdata-mcp --paths src src/bigdata_mcp/main.py
+	@./dist/bigdata-mcp && echo "binary built and smoke tested: dist/bigdata-mcp"
 
 ##@ Housekeeping
 
