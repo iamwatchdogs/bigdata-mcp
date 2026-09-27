@@ -1,12 +1,16 @@
 [project]
 name = "bigdata-mcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "MCP server that registers multiple read-only big data sources so agents can query them through a single interface"
 readme = "README.md"
 authors = [
     { name = "iamwatchdogs", email = "shamith301102@gmail.com" }
 ]
-requires-python = ">=3.13"
+# Keep this floor in step with .python-version, [tool.ty.environment]
+# python-version, and [tool.ruff] target-version. A floor below the version the
+# tools are pinned to advertises support that lint and type checking never
+# verified, and the CI matrix only tests 3.14.
+requires-python = ">=3.14"
 dependencies = []
 
 [project.scripts]
