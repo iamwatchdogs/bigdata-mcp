@@ -53,6 +53,25 @@ the files asserted here removes a real safety property with no visible symptom:
   back to the default query suite: the workflow files are the highest-value
   attack surface in this repository, and ``security-and-quality`` is the
   default suite and does *not* satisfy this.
+- ``dependabot-auto-merge.yml`` gaining a ``uses:`` beyond
+  ``dependabot/fetch-metadata``, or a checkout: it runs on
+  ``pull_request_target`` holding ``contents: write``, so a checkout plus any
+  later build or test step is remote code execution *with a push token*.
+- that workflow's Gate 1 dropping the account-type or repository clause: the
+  login alone is satisfiable by a human account named ``dependabot[bot]``, and
+  the repository clause is what stops the workflow being repurposed in a fork.
+- its merge policy losing the pre-chain ``eligible=false`` default, gaining a
+  second ``eligible=true`` branch, or losing the terminal ``else``: the policy
+  has to be an allow-list, because Dependabot introduces new update-types over
+  time and an unrecognised one is the normal case, not the exception.
+- any ``gh pr merge`` gaining ``--admin``: that flag bypasses the branch
+  protection the whole workflow exists to respect, which includes the single
+  required ``CI Status`` check.
+- ``.github/dependabot.yml`` drifting from that policy -- a group that mixes
+  ``patch`` with ``minor`` reports the whole group as ``semver-minor``, so the
+  auto-merge gate rejects an all-patch roll-up; a lost ``versioning-strategy:
+  increase`` lets ``uv.lock`` drift ahead of the ``>=X.Y.Z`` lower bounds the
+  manifest declares.
 
 Every assertion below is derived from file contents or from a real ``git``
 subprocess run, so each one can be observed to fail under a targeted mutation.
@@ -61,6 +80,7 @@ subprocess run, so each one can be observed to fail under a targeted mutation.
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 
 # This module must ask git directly, so `subprocess` is unavoidable. Every call
@@ -73,6 +93,14 @@ import pytest
 import yaml
 
 ALWAYS_CONDITION = "always()"
+# A `./`-prefixed reference is a checked-out local action, and a `docker://`
+# one is a container image. `docker://` is deliberately *excluded* from the
+# auto-merge allow-list even though the pinning rule above treats both as
+# local: a container image runs its own entrypoint, so it is code execution,
+# and nothing in that workflow needs one.
+AUTO_MERGE_ALLOWED_LOCAL_PREFIX = "./"
+AUTO_MERGE_JOB_ID = "auto-merge"
+AUTO_MERGE_WORKFLOW_FILE = "dependabot-auto-merge.yml"
 CHECKOUT_ACTION = "actions/checkout"
 CODEOWNERS_WILDCARD = "* @iamwatchdogs"
 CODEQL_ANALYZE_ACTION = "github/codeql-action/analyze"
@@ -89,13 +117,33 @@ COUNCIL_ARTIFACT = Path(".agents/council/extraction-candidates.jsonl")
 # demand a comment silencing an audit that never fires.
 DANGEROUS_TRIGGERS = frozenset({"pull_request_target", "workflow_run"})
 DEFAULT_ASSIGNEE_WORKFLOW_FILE = "default-assignee.yml"
+DEPENDABOT_CONFIG = Path(".github/dependabot.yml")
+ELIGIBLE_FALSE_ASSIGNMENT = "eligible=false"
+# Anchored per line so the `echo "eligible=$eligible"` that writes the value to
+# ``$GITHUB_OUTPUT`` is not mistaken for an assignment, and so a commented-out
+# `eligible=true` inside a branch body is not counted either.
+ELIGIBLE_TRUE_RE = re.compile(r"^\s*eligible=true\s*$", re.MULTILINE)
+ELIGIBLE_UPDATE_TYPE = "version-update:semver-patch"
 ENV_KEY = "env"
 EVENT_NAME_REFERENCE = "github.event_name"
+EXPECTED_DEPENDABOT_ECOSYSTEMS = frozenset({"github-actions", "pre-commit", "uv"})
 EXPECTED_PATH_FILTERS = frozenset({"json", "python", "workflows"})
+# Exactly the three ecosystems the merge policy refuses to auto-merge, whatever
+# their update-type. Each is named explicitly so that deleting one of the
+# `elif` branches is a failure rather than a silent widening of the policy.
+EXCLUDED_ECOSYSTEMS = frozenset({"docker", "github-actions", "pre-commit"})
+FETCH_METADATA_ACTION = "dependabot/fetch-metadata"
+GH_MERGE_ADMIN_FLAG = "--admin"
+GH_MERGE_AUTO_FLAG = "--auto"
+GH_PR_MERGE = "gh pr merge"
 GIT_ATTRIBUTES_RULE = "* text=auto eol=lf"
 LOCAL_ACTION_PREFIXES = ("./", ".\\", "docker://")
+MAJOR_UPDATE_TYPE = "major"
+MERGE_POLICY_STEP_NAME = "Evaluate merge policy"
 MIN_DESCRIPTION_LENGTH = 20
+MINOR_UPDATE_TYPE = "minor"
 NEGATION = "!"
+PATCH_UPDATE_TYPE = "patch"
 PATHS_FILTER_ACTION = "dorny/paths-filter"
 PULL_REQUEST_TRIGGER = "pull_request"
 PYPROJECT_MANIFEST = Path("pyproject.toml")
@@ -105,9 +153,15 @@ REQUIRED_CODEQL_LANGUAGES = frozenset({"actions", "python"})
 # `security-and-quality` is CodeQL's default suite and does not satisfy this;
 # `security-extended` is the only value that widens it.
 REQUIRED_CODEQL_QUERY_SUITE = "security-extended"
+REQUIRED_COOLDOWN_DAYS = 7
 REQUIRED_PYTHON_FILTER_PATHS = ("pyproject.toml", "uv.lock")
 REQUIRED_REQUIRES_PYTHON = ">=3.14"
+REQUIRED_SCHEDULE_INTERVAL = "weekly"
 REQUIRED_STATUS_CHECK_NAME = "CI Status"
+# Spelled out in full rather than derived from the remote, so a fork of this
+# repository that lifts the workflow fails the assertion instead of quietly
+# re-pointing Gate 1 at itself.
+REPOSITORY_SLUG = "iamwatchdogs/bigdata-mcp"
 REQUIRED_WORKFLOWS_FILTER_PATH = ".github/workflows/*.yml"
 RUN_KEY = "run"
 RUN_SUFFIX = f".{RUN_KEY}"
@@ -122,6 +176,12 @@ TRIGGER_KEY = True  # PyYAML (YAML 1.1) resolves the bare key `on` to `True`.
 UNTRUSTED_INPUT_RE = re.compile(
     r"\$\{\{\s*github\.event\.(?:pull_request|issue)\b[^{}]*\}\}"
 )
+UV_ECOSYSTEM = "uv"
+# `widen` is the Dependabot default: it only touches the lockfile when the new
+# version still satisfies the existing bound, which lets `uv.lock` drift ahead
+# of the `>=X.Y.Z` lower bounds pyproject.toml declares. `increase` raises the
+# bound alongside the lockfile so the two can never disagree.
+UV_VERSIONING_STRATEGY = "increase"
 VERSION_COMMENT_RE = re.compile(r"v\d[\w.+-]*")
 WITH_KEY = "with"
 WORKFLOW_EXPRESSION_RE = re.compile(r"\$\{\{[^{}]*\}\}")
@@ -130,6 +190,22 @@ WRITE_ALL_PERMISSIONS = "write-all"
 ZIZMOR_DANGEROUS_TRIGGERS_COMMENT = "zizmor: ignore[dangerous-triggers]"
 ZIZMOR_JOB_ID = "zizmor"
 ZIZMOR_WORKFLOW_FILE = "zizmor.yml"
+
+# The three conjuncts of the auto-merge workflow's Gate 1, quoted exactly as
+# GitHub's expression grammar spells them. Spelled as literals rather than
+# assembled from a `dependabot[bot]` constant because the whole point is to pin
+# the *string* an attacker would have to match, brackets included.
+REQUIRED_GATE_ONE_CLAUSES = frozenset({
+    "github.event.pull_request.user.login == 'dependabot[bot]'",
+    "github.event.pull_request.user.type == 'Bot'",
+    f"github.repository == '{REPOSITORY_SLUG}'",
+})
+
+# One parsed branch of a shell `if`/`elif`/`else` chain: its keyword, its
+# condition line, the body indented under it, and the index of the keyword line
+# within the script. The line index is what lets the pre-chain default be
+# compared against the position of the chain rather than a character offset.
+ShellBranch = tuple[str, str, str, int]
 
 # Matched against the raw line so the trailing comment requirement is actually
 # observable. Parsing alone would discard the comment entirely, and a bare
@@ -159,6 +235,16 @@ REQUIRED_DENY_ALL_PERMISSIONS: dict[str, str] = {}
 REQUIRED_ZIZMOR_JOB_PERMISSIONS: dict[str, str] = {
     "security-events": "write",
     "contents": "read",
+}
+
+# What the `auto-merge` job must re-grant, asserted as a subset for the same
+# reason: `contents: write` to move the ref when the queued merge completes and
+# `pull-requests: write` to approve and to enable the auto-merge queue. The file
+# also grants `issues: write`, which is legitimately required because labels are
+# served by the issues API, not the pull-requests one.
+REQUIRED_AUTO_MERGE_JOB_PERMISSIONS: dict[str, str] = {
+    "contents": "write",
+    "pull-requests": "write",
 }
 
 
@@ -700,6 +786,369 @@ def _init_query_suites(data: dict[object, object], path: Path) -> list[object]:
         if "queries" in mapping:
             suites.append(mapping["queries"])
     return suites
+
+
+def _auto_merge_workflow(repo_root: Path) -> tuple[Path, dict[object, object]]:
+    """Parse the dependabot auto-merge workflow.
+
+    Args:
+        repo_root: The repository root.
+
+    Returns:
+        The path of the workflow and its parsed top-level mapping.
+    """
+    path = repo_root / WORKFLOWS_DIR / AUTO_MERGE_WORKFLOW_FILE
+    assert path.is_file(), (
+        f"required gating file is missing: {path}. The auto-merge policy is what "
+        "keeps routine dependency bumps from waiting on a human, and every gate "
+        "asserted below is expressed in that file"
+    )
+    return path, _load_workflow(path)
+
+
+def _require_job(
+    data: dict[object, object], path: Path, job_id: str
+) -> dict[object, object]:
+    """Return one named job from a workflow, failing if it is absent.
+
+    Args:
+        data: A parsed workflow mapping.
+        path: The workflow the mapping came from, used in the failure message.
+        job_id: The job id to return.
+
+    Returns:
+        The parsed mapping of that job.
+    """
+    jobs = _workflow_jobs(data, path)
+    assert job_id in jobs, (
+        f"{path.name} declares no job named {job_id!r} (it declares "
+        f"{sorted(jobs)}), so the gate that job is supposed to express is absent "
+        "rather than satisfied"
+    )
+    return jobs[job_id]
+
+
+def _require_step(job: dict[object, object], name: str) -> dict[object, object]:
+    """Return the single step of a job carrying a given ``name:``.
+
+    Args:
+        job: A parsed job mapping.
+        name: The step name to select.
+
+    Returns:
+        The parsed mapping of that step.
+    """
+    matches = [step for step in _job_steps(job) if step.get("name") == name]
+    assert len(matches) == 1, (
+        f"expected exactly one step named {name!r} in the auto-merge job, found "
+        f"{len(matches)}. The policy asserted below lives in that step, so a "
+        "rename or a duplicate would leave the assertion inspecting the wrong "
+        "script rather than failing"
+    )
+    return matches[0]
+
+
+def _uses_references(path: Path) -> list[tuple[int, str]]:
+    """Collect every ``uses:`` reference in a file, at any nesting depth.
+
+    The raw-line form is used rather than the parsed step walk on purpose. A
+    ``uses:`` on a job invokes a reusable workflow, and a ``uses:`` on a step
+    invokes an action; both execute code from somewhere other than this
+    repository, and only the raw-line scan sees the first shape. It also cannot
+    be fooled by a ``uses:`` hidden in a key the step walk does not visit.
+
+    Args:
+        path: The file to scan.
+
+    Returns:
+        One ``(line number, reference)`` pair per ``uses:`` line, in file order.
+    """
+    found: list[tuple[int, str]] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        match = USES_LINE_RE.match(line)
+        if match is not None:
+            found.append((number, match.group("reference")))
+    return found
+
+
+def _effective_command(script: str) -> str:
+    """Reduce a shell script to the commands it actually executes.
+
+    A shell comment cannot change what a script does, so a run body that merely
+    *names* a flag in a comment is not passing that flag to anything. That
+    distinction has to be made here rather than by a raw substring search: the
+    auto-merge workflow's merge step documents ``--admin`` in a comment precisely
+    because it never uses it, and a raw search would either fail against a
+    correct file or push the next author into deleting the explanation.
+
+    The body is tokenised with ``shlex``, which also strips quoting, so
+    ``gh pr merge "--admin"`` is still detected. A line ``shlex`` cannot tokenise
+    (an unbalanced quote, say) falls back to its raw text, which is a superset of
+    the tokenised form, so the fallback can only make a check stricter.
+
+    Args:
+        script: A ``run:`` body.
+
+    Returns:
+        The non-comment lines, requoted and newline-joined.
+    """
+    commands: list[str] = []
+    for line in script.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        try:
+            commands.append(" ".join(shlex.split(stripped, comments=True)))
+        except ValueError:
+            commands.append(stripped)
+    return "\n".join(commands)
+
+
+def _shell_policy_branches(script: str) -> list[ShellBranch]:
+    """Split a shell script into its ``if``/``elif``/``else`` branches.
+
+    A branch body is every line indented further than its own ``if``/``elif``/
+    ``else`` keyword, which is how a POSIX shell delimits one and is why the
+    closing ``fi`` and any following block are not captured. Blank lines are
+    kept so indices stay aligned with the source, and a line whose stripped form
+    is exactly ``else`` is the only thing treated as the terminal branch, so a
+    comment that happens to contain the word cannot be mistaken for one.
+
+    Args:
+        script: A ``run:`` body.
+
+    Returns:
+        One ``(keyword, condition line, body, keyword line index)`` record per
+        branch, in source order.
+    """
+    lines = script.splitlines()
+    branches: list[ShellBranch] = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("if "):
+            keyword = "if"
+        elif stripped.startswith("elif "):
+            keyword = "elif"
+        elif stripped == "else":
+            keyword = "else"
+        else:
+            continue
+        indent = len(line) - len(line.lstrip())
+        body: list[str] = []
+        for candidate in lines[index + 1 :]:
+            if not candidate.strip():
+                body.append("")
+                continue
+            if len(candidate) - len(candidate.lstrip()) <= indent:
+                break
+            body.append(candidate)
+        branches.append((keyword, stripped, "\n".join(body), index))
+    return branches
+
+
+def _gh_pr_merge_violations(
+    repo_root: Path,
+) -> tuple[list[str], list[str], list[str]]:
+    """Audit every ``gh pr merge`` invocation across all workflows.
+
+    Args:
+        repo_root: The repository root.
+
+    Returns:
+        A triple of ``(merging steps, merges without ``--auto``, merges using
+        ``--admin``)``. The first is the input the other two are computed from,
+        and it is returned so the caller can assert the scan reached something.
+    """
+    merging: list[str] = []
+    without_auto: list[str] = []
+    with_admin: list[str] = []
+    for path in _workflow_paths(repo_root):
+        for site, step in _step_sites(_load_workflow(path), path):
+            script = step.get(RUN_KEY)
+            if not isinstance(script, str):
+                continue
+            command = _effective_command(script)
+            if GH_PR_MERGE not in command:
+                continue
+            label = f"{site} ({path.relative_to(repo_root)})"
+            merging.append(label)
+            if GH_MERGE_AUTO_FLAG not in command:
+                without_auto.append(label)
+            if GH_MERGE_ADMIN_FLAG in command:
+                with_admin.append(label)
+    return merging, without_auto, with_admin
+
+
+def _dependabot_entries(path: Path) -> list[dict[object, object]]:
+    """Parse the ``updates:`` entries of a Dependabot configuration.
+
+    Args:
+        path: The ``.github/dependabot.yml`` to parse.
+
+    Returns:
+        Every entry under ``updates:``, typed as a mapping.
+    """
+    config = _as_mapping(yaml.safe_load(path.read_text(encoding="utf-8")), str(path))
+    updates = config.get("updates")
+    assert isinstance(updates, list), (
+        f"{path.name} declares `updates: {updates!r}`, which is not the list of "
+        "ecosystem entries the auto-merge policy reasons about"
+    )
+    return [
+        _as_mapping(entry, f"an `updates:` entry in {path.name}") for entry in updates
+    ]
+
+
+def _entry_value(entry: dict[object, object], *keys: str) -> object:
+    """Read a nested Dependabot entry value, tolerating an absent parent.
+
+    Args:
+        entry: A parsed ``updates:`` entry.
+        keys: The successive mapping keys to descend through.
+
+    Returns:
+        The value found, or ``None`` when any key along the way is missing.
+    """
+    node: object = entry
+    for key in keys:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
+def _group_update_types(entry: dict[object, object]) -> dict[str, set[str]]:
+    """Map each declared Dependabot group to the update-types it contains.
+
+    Args:
+        entry: A parsed ``updates:`` entry.
+
+    Returns:
+        ``{group name: {update-type, ...}}`` for every group that declares an
+        ``update-types:`` list. A group that declares only ``patterns:`` is
+        omitted, because Dependabot's own default for it already spans every
+        update-type, so it is exactly the case this contract is about.
+    """
+    groups = entry.get("groups")
+    if not isinstance(groups, dict):
+        return {}
+    ecosystem = entry.get("package-ecosystem")
+    by_group: dict[str, set[str]] = {}
+    for name, spec in groups.items():
+        mapping = _as_mapping(spec, f"a `groups:` entry of the {ecosystem!r} ecosystem")
+        declared = mapping.get("update-types")
+        if isinstance(declared, list):
+            by_group[str(name)] = {str(value) for value in declared}
+    return by_group
+
+
+def _excluded_ecosystem_problems(branches: list[ShellBranch]) -> list[str]:
+    """Report merge-policy branches that mishandle a declared exclusion.
+
+    Two ways to get this wrong, both checked. An ecosystem whose name appears in
+    no branch has had its ``elif`` deleted, which routes it into the generic
+    semver branch and auto-merges it despite the header claiming otherwise. An
+    ecosystem whose branch sets ``eligible=true`` has been folded into the
+    eligible class, usually on the reasoning that a patch is safe -- true of
+    dependencies, false of ``pre-commit``, where required CI does not run the
+    full hook set.
+
+    Args:
+        branches: The parsed branches of the merge-policy script.
+
+    Returns:
+        One message per violation, empty when every exclusion is intact.
+    """
+    problems: list[str] = []
+    for ecosystem in sorted(EXCLUDED_ECOSYSTEMS):
+        hits = [branch for branch in branches if ecosystem in branch[1]]
+        if len(hits) != 1:
+            problems.append(
+                f"{ecosystem!r} appears in the condition of "
+                f"{len(hits)} branch(es) {[branch[1] for branch in hits]!r}, "
+                "expected exactly one. An ecosystem named by no branch falls "
+                "through to the generic semver branch and is auto-merged"
+            )
+            continue
+        if ELIGIBLE_TRUE_RE.search(hits[0][2]):
+            problems.append(
+                f"the {ecosystem!r} branch {hits[0][1]!r} sets `eligible=true`. "
+                "That ecosystem is excluded regardless of update-type, and a "
+                "patch is not evidence of coverage for it: for `pre-commit`, "
+                "required CI never runs the full hook set"
+            )
+    return problems
+
+
+def _cadence_problems(entries: list[dict[object, object]]) -> list[str]:
+    """Report Dependabot entries whose schedule or cooldown is wrong.
+
+    Args:
+        entries: The parsed ``updates:`` entries.
+
+    Returns:
+        One message per violation, empty when every entry is paced as required.
+    """
+    problems: list[str] = []
+    for entry in entries:
+        ecosystem = str(entry.get("package-ecosystem"))
+        interval = _entry_value(entry, "schedule", "interval")
+        if interval != REQUIRED_SCHEDULE_INTERVAL:
+            problems.append(
+                f"{ecosystem}: schedule.interval is {interval!r}, expected "
+                f"{REQUIRED_SCHEDULE_INTERVAL!r}"
+            )
+        cooldown = _entry_value(entry, "cooldown", "default-days")
+        if cooldown != REQUIRED_COOLDOWN_DAYS:
+            problems.append(
+                f"{ecosystem}: cooldown.default-days is {cooldown!r}, expected "
+                f"{REQUIRED_COOLDOWN_DAYS}"
+            )
+    return problems
+
+
+def _group_problems(entries: list[dict[object, object]]) -> list[str]:
+    """Report Dependabot group definitions that break the auto-merge gate.
+
+    Args:
+        entries: The parsed ``updates:`` entries.
+
+    Returns:
+        One message per violation, empty when every group splits patch away from
+        minor and major while still covering both.
+    """
+    problems: list[str] = []
+    for entry in entries:
+        ecosystem = str(entry.get("package-ecosystem"))
+        by_group = _group_update_types(entry)
+        if not by_group:
+            continue
+        covered: set[str] = set()
+        for types in by_group.values():
+            covered |= types
+        uncovered = [
+            required
+            for required in (PATCH_UPDATE_TYPE, MAJOR_UPDATE_TYPE)
+            if required not in covered
+        ]
+        problems.extend(
+            f"{ecosystem}: no group declares update-types {required!r} "
+            f"(the groups cover {sorted(covered)}). A missing {required!r} means "
+            "those updates arrive ungrouped, in whatever roll-up Dependabot "
+            "happens to report"
+            for required in uncovered
+        )
+        for group, types in by_group.items():
+            mixed = types & {MINOR_UPDATE_TYPE, MAJOR_UPDATE_TYPE}
+            if PATCH_UPDATE_TYPE in types and mixed:
+                problems.append(
+                    f"{ecosystem}: group {group!r} declares update-types "
+                    f"{sorted(types)}. The group rolls up to the highest severity "
+                    f"it contains, so mixing {PATCH_UPDATE_TYPE!r} with "
+                    f"{sorted(mixed)} reports the whole group as {min(mixed)!r} "
+                    "and the auto-merge gate rejects an all-patch roll-up"
+                )
+    return problems
 
 
 def test_codeowners_gates_every_path_behind_one_owner(repo_root: Path) -> None:
@@ -1562,4 +2011,519 @@ def test_codeql_covers_python_and_the_workflows(repo_root: Path) -> None:
         f"`{REQUIRED_CODEQL_QUERY_SUITE}`. `security-and-quality` is CodeQL's "
         "default suite, so falling back to it looks like a deliberate narrower "
         "choice while actually just being the unset default"
+    )
+
+
+def test_auto_merge_workflow_never_executes_untrusted_code(repo_root: Path) -> None:
+    """Assert the auto-merge workflow checks out nothing and runs nothing else.
+
+    This is the most important assertion in this file.
+
+    ``dependabot-auto-merge.yml`` runs on ``pull_request_target`` holding
+    ``contents: write`` and ``pull-requests: write``. That trigger executes with
+    a write token in the context of the base repository while still having
+    access to the pull request's contents, which makes the two properties
+    together worth more than the sum of their parts. A checkout in such a
+    workflow places attacker-controlled pull-request code on a runner that can
+    push, and any build or test step after it *executes* that code. The result
+    is remote code execution against the repository itself, with a token that
+    can land the result: not a red build, not a failed check, but a write to the
+    default branch.
+
+    Gate 1 cannot be what stops this, because Gate 1 only decides whether the
+    merge policy runs. A checkout placed *before* the policy is evaluated, or a
+    dependency install performed by a step the policy never inspects, executes
+    code regardless of which update-type the pull request claims. So the
+    workflow is constrained structurally instead: there is no ``actions/checkout``
+    step at all, and every ``uses:`` in the file is either
+    ``dependabot/fetch-metadata`` -- which reads metadata over the API and
+    touches no working tree -- or a ``./`` path, meaning code that is already in
+    this repository and already reviewed. ``docker://`` is excluded from that
+    allow-list even though the SHA-pinning rule treats it as a local reference,
+    because a container image runs its own entrypoint and is therefore code
+    execution too.
+
+    The companion sweep in ``test_privileged_triggers_never_check_out_code``
+    already forbids a checkout in any write-token workflow. This test is not a
+    restatement of it: it is scoped to the one file that actually holds a write
+    token and a policy that merges, and it additionally constrains the
+    *non-checkout* execution vectors that sweep does not see.
+
+    Args:
+        repo_root: The repository root, used to locate the workflow.
+    """
+    path, data = _auto_merge_workflow(repo_root)
+
+    checkouts = _checkout_sites(data, path)
+    assert not checkouts, (
+        f"{path.name} contains an `{CHECKOUT_ACTION}` step at {checkouts}. That "
+        f"file runs on `pull_request_target` and holds both `contents: write` and "
+        "`pull-requests: write`, so a checkout places attacker-controlled "
+        "pull-request code on a runner holding a push token, and any later build, "
+        "install or test step executes it. The result is remote code execution "
+        "against this repository. Gate 1 does not mitigate it: the checkout runs "
+        "before or independently of the merge policy, so it executes regardless of "
+        "the update-type the pull request claims. Remove the checkout"
+    )
+
+    references = _uses_references(path)
+    offenders = [
+        f"{path.name}:{number} {reference}"
+        for number, reference in references
+        if not (
+            _references_action(reference, FETCH_METADATA_ACTION)
+            or reference.startswith(AUTO_MERGE_ALLOWED_LOCAL_PREFIX)
+        )
+    ]
+    assert references, (
+        f"{path.name} declares no `uses:` reference at all, so the allow-list "
+        f"below is inspecting nothing. {FETCH_METADATA_ACTION} is expected: it is "
+        "Gate 2, and without it the merge policy has no metadata to evaluate. If "
+        "that step is genuinely gone, this test should be reworked rather than "
+        "left passing vacuously"
+    )
+    assert not offenders, (
+        f"{path.name} runs a `uses:` outside its allow-list:\n"
+        + "\n".join(offenders)
+        + f"\nOnly {FETCH_METADATA_ACTION} (which reads metadata over the API) and "
+        f"a {AUTO_MERGE_ALLOWED_LOCAL_PREFIX!r} local action (code already in this "
+        "repository, already reviewed) may appear. Every other `uses:` is code "
+        "fetched at run time and executed on a runner holding `contents: write` "
+        "on a privileged trigger, which is remote code execution with a push "
+        "token. `docker://` is excluded too: a container image runs its own "
+        "entrypoint, so it is execution rather than data"
+    )
+
+
+def test_auto_merge_gate_one_checks_identity_type_and_repository(
+    repo_root: Path,
+) -> None:
+    """Assert Gate 1 conjoins all three of its conditions.
+
+    Checking the actor login alone is not an identity check, it is a string
+    comparison against a name. The July 2023 wave of pull requests impersonating
+    Dependabot is the concrete case: an attacker who can open a pull request can
+    name it however they like, and a human account called ``dependabot[bot]``
+    satisfies a login comparison exactly as a real bot does. The account *type*
+    is the property that cannot be forged that way, because it is assigned by
+    GitHub rather than chosen by the account's owner.
+
+    The repository clause is the third axis and is not redundant with either of
+    the first two. It is what stops this workflow from being repurposed: the
+    same file, copied into a fork or pointed at by a ruleset change, would
+    otherwise merge into whatever repository it landed in, using credentials
+    that repository cannot scope. All three are therefore required, and
+    together they are not three spellings of one check.
+
+    The clauses are asserted as substrings *and* as top-level conjuncts. The
+    substring form gives the failure message something actionable; the conjunct
+    form is what stops the guard being defeated without deleting a single clause.
+    Rewriting ``A && B && C`` as ``A || B || C`` leaves all three strings present
+    and inverts the meaning, turning three necessary conditions into three
+    independently sufficient ones. Splitting on ``&&`` and requiring each clause
+    to be a whole conjunct rejects that, while still tolerating a legitimate
+    future addition of a fourth conjunct.
+
+    Args:
+        repo_root: The repository root, used to locate the workflow.
+    """
+    path, data = _auto_merge_workflow(repo_root)
+    job = _require_job(data, path, AUTO_MERGE_JOB_ID)
+
+    condition = _normalise_expression(str(job.get("if", "")))
+    assert condition, (
+        f"the {AUTO_MERGE_JOB_ID!r} job in {path.name} declares no `if:`, so the "
+        "workflow evaluates its merge policy and grants a write token against "
+        "every pull request, whatever its author. Gate 1 is the job-level "
+        "condition, not a step-level one: a step-level `if:` would be evaluated "
+        "after the token was already issued"
+    )
+
+    missing = sorted(
+        clause for clause in REQUIRED_GATE_ONE_CLAUSES if clause not in condition
+    )
+    assert not missing, (
+        f"the {AUTO_MERGE_JOB_ID!r} job in {path.name} has a Gate 1 that omits "
+        f"{missing}. Its `if:` is {condition!r}.\n"
+        "  - the login clause is defeated by a human account named "
+        "`dependabot[bot]`, which costs an attacker nothing to create\n"
+        "  - the account-type clause is what cannot be forged that way, because "
+        "GitHub assigns it rather than the account's owner choosing it\n"
+        "  - the repository clause is what stops this file being repurposed in a "
+        "fork, where it would merge into a repository the original scope cannot "
+        f"reach\nAll three are required; the resolved name is {REPOSITORY_SLUG!r}."
+    )
+
+    conjuncts = {part.strip() for part in condition.split("&&")}
+    weakened = sorted(REQUIRED_GATE_ONE_CLAUSES - conjuncts)
+    assert not weakened, (
+        f"the {AUTO_MERGE_JOB_ID!r} job in {path.name} contains {weakened} without "
+        f"conjoining it to the rest. Its `if:` is {condition!r}.\nEvery required "
+        "clause appears somewhere in that string, so a substring search alone is "
+        "satisfied by `A || B || C` just as happily as by `A && B && C` -- and a "
+        "disjunction turns three necessary conditions into three independently "
+        "sufficient ones, so the workflow would merge pull requests opened by "
+        "anyone at all. Each clause must be a whole top-level conjunct"
+    )
+
+
+def test_auto_merge_policy_is_an_allow_list_that_fails_closed(
+    repo_root: Path,
+) -> None:
+    """Assert the merge policy grants eligibility once and defaults to no.
+
+    The policy is written as a shell ``if``/``elif``/``else`` chain rather than
+    as a nested expression, and the shape of that chain is the property being
+    asserted. It has to be an *allow-list*: the default ``eligible=false`` is
+    assigned before the chain, exactly one branch promotes it to true, and a
+    terminal ``else`` catches everything the chain did not recognise.
+
+    A deny-list would be the more natural thing to write -- exclude the three
+    bad ecosystems, merge the rest -- and it is wrong. Dependabot adds
+    update-types over time, and a deny-list merges anything not explicitly
+    forbidden, so an unrecognised value is the normal case rather than the
+    exception. Digest updates, branch updates and every future type all arrive
+    through that terminal ``else``, and a policy whose default is permissive
+    merges the first new type nobody thought about. ``set -euo pipefail`` does
+    not close this: an unset ``eligible`` is still a string that reads as a
+    value, and the default is what makes an empty ``update-type`` inert.
+
+    The three excluded ecosystems are asserted individually, and asserted as
+    branches that do *not* grant eligibility, because the tempting refactor is
+    to fold them into the generic semver branch on the reasoning that a patch
+    is safe. It is not, for ``pre-commit``: required CI does not run the full
+    hook set, so a green pipeline is not evidence that a bumped hook still
+    works, and patches have exactly the same hole as minors.
+
+    Args:
+        repo_root: The repository root, used to locate the workflow.
+    """
+    path, data = _auto_merge_workflow(repo_root)
+    job = _require_job(data, path, AUTO_MERGE_JOB_ID)
+    script = str(_require_step(job, MERGE_POLICY_STEP_NAME)[RUN_KEY])
+
+    branches = _shell_policy_branches(script)
+    assert branches, (
+        f"the {MERGE_POLICY_STEP_NAME!r} step in {path.name} declares no shell "
+        f"`if`/`elif`/`else` chain, so the scan below is inspecting nothing. The "
+        "policy has to be a shell conditional: an allow-list is only observable as "
+        "a chain with a default, a single promotion and a terminal fallback"
+    )
+    keywords = [keyword for keyword, _, _, _ in branches]
+    assert keywords[0] == "if", (
+        f"the merge policy in {path.name} opens with {keywords[0]!r} rather than "
+        f"`if` (its branches are {keywords}), so the chain has no first test and "
+        "nothing decides eligibility"
+    )
+    assert keywords[-1] == "else", (
+        f"the merge policy in {path.name} ends with {keywords[-1]!r} rather than "
+        f"`else` (its branches are {keywords}). Without the terminal `else`, an "
+        "update-type the chain does not recognise leaves `eligible` at whatever "
+        "the script last assigned. That is the whole difference between failing "
+        "closed and failing open, and it is invisible until Dependabot introduces "
+        "a type this chain has never heard of"
+    )
+
+    lines = script.splitlines()
+    default_line = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.strip() == ELIGIBLE_FALSE_ASSIGNMENT
+        ),
+        None,
+    )
+    assert default_line is not None, (
+        f"the merge policy in {path.name} never assigns "
+        f"{ELIGIBLE_FALSE_ASSIGNMENT!r} (a bare line, outside the conditional "
+        f"chain). The full script is:\n{script}\nWithout that pre-chain default "
+        "the policy is a deny-list by omission: any update-type its chain does "
+        "not name is eligible, so a type Dependabot introduces later merges "
+        "unattended with nobody having reviewed it"
+    )
+    assert default_line < branches[0][3], (
+        f"the merge policy in {path.name} assigns "
+        f"{ELIGIBLE_FALSE_ASSIGNMENT!r} on line {default_line + 1}, which is not "
+        f"before the conditional chain starting on line {branches[0][3] + 1}. A "
+        "default assigned after the chain is not a default at all: the first "
+        "matching branch has already decided, and any branch that sets only a "
+        "reason inherits whatever value was current when it ran"
+    )
+
+    terminal = branches[-1]
+    assert "reason=" in terminal[2], (
+        f"the terminal `else` of the merge policy in {path.name} sets no `reason`, "
+        f"so a pull request falling through to it is refused with no explanation. "
+        f"Its body is:\n{terminal[2]}"
+    )
+    assert not ELIGIBLE_TRUE_RE.search(terminal[2]), (
+        f"the terminal `else` of the merge policy in {path.name} sets "
+        "`eligible=true`, which makes the fail-closed fallback the permissive "
+        f"branch. Its body is:\n{terminal[2]}\nThis is where every unrecognised "
+        "update-type arrives, including an empty one and every type Dependabot "
+        "adds later"
+    )
+
+    eligible = [branch for branch in branches if ELIGIBLE_TRUE_RE.search(branch[2])]
+    assert len(eligible) == 1, (
+        f"{len(eligible)} branches of the merge policy in {path.name} set "
+        f"`eligible=true`: {[branch[1] for branch in eligible]}. Exactly one may. "
+        "A second promotion is a second class of change merging unattended, and "
+        "it is invisible in review because each branch reads as a reasonable "
+        "narrowing of the one before it"
+    )
+    assert ELIGIBLE_UPDATE_TYPE in eligible[0][1], (
+        f"the branch that grants eligibility in {path.name} is "
+        f"{eligible[0][1]!r}, which does not mention {ELIGIBLE_UPDATE_TYPE!r}. "
+        "A patch is the one class of change that is behaviour-preserving by "
+        "contract; every minor and major needs a human"
+    )
+
+    ecosystem_problems = _excluded_ecosystem_problems(branches)
+    assert not ecosystem_problems, (
+        f"the merge policy in {path.name} mishandles an ecosystem it claims to "
+        "exclude:\n"
+        + "\n".join(ecosystem_problems)
+        + f"\nEach of {sorted(EXCLUDED_ECOSYSTEMS)} must have exactly one branch, "
+        "and that branch must set a reason without granting eligibility. An "
+        "ecosystem named by no branch falls through to the generic semver branch "
+        "and is auto-merged, despite the file's own header saying otherwise"
+    )
+
+
+def test_no_workflow_bypasses_branch_protection_when_merging(
+    repo_root: Path,
+) -> None:
+    """Assert every ``gh pr merge`` queues rather than overrides protection.
+
+    ``--admin`` is a bypass. It tells the API to ignore the branch ruleset, which
+    means it also ignores the required ``CI Status`` check -- the single status
+    check this repository's ruleset gates merges on, and the one job that
+    aggregates every other job in the pipeline. A merge carrying ``--admin``
+    lands a commit that CI never passed, which defeats the entire purpose of
+    having an auto-merge policy: it converts "merge when the tests are green"
+    into "merge immediately", while still reading as a careful, gated workflow.
+
+    ``--auto`` is the opposite and is what the policy should use. It enrolls the
+    pull request in GitHub's auto-merge queue, and the merge only completes once
+    branch protection is satisfied. So the required check still has to pass, the
+    merge still waits for it, and a failing pipeline cancels the queued merge
+    without anything having to detect the failure.
+
+    The check is scoped to the effective command rather than the raw text,
+    because the auto-merge workflow documents ``--admin`` in a comment to explain
+    that it never uses it. A run body that only *mentions* a flag is not passing
+    it, and a raw substring search would fail against a correct file while
+    pushing the next author into deleting the explanation instead.
+
+    Args:
+        repo_root: The repository root, used to locate ``.github/workflows``.
+    """
+    merging, without_auto, with_admin = _gh_pr_merge_violations(repo_root)
+
+    assert merging, (
+        f"no step in any workflow under {WORKFLOWS_DIR} runs `{GH_PR_MERGE}`, so "
+        "this scan is inspecting nothing. Merging is the one action whose flags "
+        "determine whether branch protection is respected, and the auto-merge "
+        "policy is expected to perform it"
+    )
+    assert not without_auto, (
+        "these steps merge a pull request without "
+        f"{GH_MERGE_AUTO_FLAG!r}:\n"
+        + "\n".join(without_auto)
+        + f"\nWithout {GH_MERGE_AUTO_FLAG!r} the merge happens immediately, so "
+        "nothing waits for the required `CI Status` check and the merge policy's "
+        "own eligibility decision becomes the only gate. `gh pr merge --auto` "
+        "enrolls the pull request in the auto-merge queue instead, and the merge "
+        "completes only once branch protection is satisfied"
+    )
+    assert not with_admin, (
+        "these steps merge a pull request with "
+        f"{GH_MERGE_ADMIN_FLAG!r}:\n"
+        + "\n".join(with_admin)
+        + f"\n{GH_MERGE_ADMIN_FLAG!r} bypasses the branch ruleset, and with it the "
+        "required `CI Status` check that every merge in this repository is "
+        "supposed to pass. A commit merged that way has not been tested by "
+        "anything. The flag is never needed: the policy grants a write token "
+        "precisely so `--auto` can be used"
+    )
+
+
+def test_dependabot_config_matches_the_auto_merge_assumptions(
+    repo_root: Path,
+) -> None:
+    """Assert ``dependabot.yml`` still produces what the merge policy expects.
+
+    The auto-merge gate reads one value from Dependabot and acts on it: the
+    ``update-type`` of the pull request. That value is a *roll-up* over the
+    whole pull request, and it equals the highest severity change in it. So a
+    group that mixes ``patch`` with ``minor`` is reported as ``semver-minor``
+    even when every member is a patch, and the gate rejects an all-patch
+    roll-up. A catch-all group is the shape that causes this: one minor release
+    anywhere in it reclassifies everything, so auto-merge stops firing on
+    exactly the updates it exists to absorb. Groups must therefore split patch
+    away from minor and major, while still covering all three so no update type
+    arrives ungrouped with whatever roll-up Dependabot defaults to.
+
+    The same roll-up is why ``major`` must be covered. A group spanning only
+    ``minor`` and ``patch`` never produces a major, so a major release would
+    escape the grouping entirely.
+
+    ``versioning-strategy`` is asserted for ``uv`` alone, and the reason is the
+    manifest rather than the lockfile. This repository declares lower bounds
+    (``>=X.Y.Z``) in ``pyproject.toml``. Dependabot's default strategy only
+    touches ``uv.lock`` when the new version still satisfies the existing
+    bound, so the lockfile drifts ahead of the declared minimum: the manifest
+    keeps advertising a floor the repository is not actually tested against,
+    and a reviewer reading the manifest has no way to see it. ``increase``
+    raises the bound alongside the lockfile, so the two can never disagree.
+
+    The weekly interval and the 7-day cooldown are asserted for every entry
+    because they are a supply-chain stance, not a scheduling preference: a
+    release that is compromised and then yanked typically is discovered within
+    days of publication, and a weekly scan with a week of cooldown gives that
+    window to elapse before the bump is offered. Stating them explicitly also
+    stops a platform default from silently becoming the policy.
+
+    Args:
+        repo_root: The repository root, used to locate ``.github/dependabot.yml``.
+    """
+    path = repo_root / DEPENDABOT_CONFIG
+    assert path.is_file(), (
+        f"required gating file is missing: {path}. The auto-merge policy is "
+        "written against the ecosystem list, cadence and group shape declared "
+        "there, so without it the workflow's assumptions are unverifiable"
+    )
+
+    entries = _dependabot_entries(path)
+    ecosystems = {str(entry.get("package-ecosystem")) for entry in entries}
+    assert ecosystems == EXPECTED_DEPENDABOT_ECOSYSTEMS, (
+        f"{path.name} configures {sorted(ecosystems)}, expected exactly "
+        f"{sorted(EXPECTED_DEPENDABOT_ECOSYSTEMS)}.\n"
+        "The set is compared in both directions on purpose. A missing ecosystem "
+        "means its dependencies go unpinned by Dependabot. An unasserted extra is "
+        "an unreviewed one: it would arrive with no group shape declared, so "
+        "whatever update-type it produced would be whatever Dependabot defaulted "
+        "to, which is the one input the auto-merge gate is reasoning about"
+    )
+
+    cadence = _cadence_problems(entries)
+    assert not cadence, (
+        f"{path.name} entries whose cadence departs from the policy:\n"
+        + "\n".join(cadence)
+        + f"\nEvery ecosystem must scan on a {REQUIRED_SCHEDULE_INTERVAL!r} "
+        f"schedule with a {REQUIRED_COOLDOWN_DAYS}-day cooldown. A release that "
+        "is compromised and then yanked is usually discovered within days of "
+        "publication, and the cooldown is the window that lets that be caught "
+        "before the bump is offered"
+    )
+
+    strategies = [
+        f"{entry.get('package-ecosystem')!s}: versioning-strategy is "
+        f"{entry.get('versioning-strategy')!r}"
+        for entry in entries
+        if str(entry.get("package-ecosystem")) == UV_ECOSYSTEM
+        and entry.get("versioning-strategy") != UV_VERSIONING_STRATEGY
+    ]
+    assert not strategies, (
+        f"{path.name} does not pin the {UV_ECOSYSTEM!r} ecosystem to "
+        f"versioning-strategy: {UV_VERSIONING_STRATEGY!r}:\n"
+        + "\n".join(strategies)
+        + "\nThis repository declares lower bounds (`>=X.Y.Z`) in pyproject.toml. "
+        "Under the default strategy Dependabot only touches uv.lock when the new "
+        "version still satisfies the existing bound, so the lockfile drifts ahead "
+        "of the declared minimum and the manifest keeps advertising a floor the "
+        "repository is not tested against. `increase` raises the bound alongside "
+        "the lockfile"
+    )
+
+    grouped = {
+        str(entry.get("package-ecosystem"))
+        for entry in entries
+        if _group_update_types(entry)
+    }
+    assert grouped, (
+        f"no ecosystem in {path.name} declares a group with an explicit "
+        "`update-types:` list, so the roll-up assertion below is inspecting "
+        "nothing. Without that list Dependabot reports whatever update-type its "
+        "own default picks for the whole group, and a single minor release "
+        "anywhere in a catch-all group reclassifies every patch alongside it"
+    )
+
+    group_problems = _group_problems(entries)
+    assert not group_problems, (
+        f"{path.name} group definitions that break the auto-merge gate:\n"
+        + "\n".join(group_problems)
+        + f"\nDependabot reports one roll-up `update-type` per pull request, equal "
+        f"to the highest severity in the group, and the gate matches on exactly "
+        f"{ELIGIBLE_UPDATE_TYPE!r}. A group that mixes {PATCH_UPDATE_TYPE!r} with "
+        f"{MINOR_UPDATE_TYPE!r} or {MAJOR_UPDATE_TYPE!r} therefore reports the "
+        "whole group as the higher severity, and an all-patch roll-up is rejected"
+    )
+
+
+def test_auto_merge_workflow_declares_deny_all_permissions(
+    repo_root: Path,
+) -> None:
+    """Assert the auto-merge workflow denies by default and re-grants narrowly.
+
+    ``permissions: {}`` at the workflow level denies every scope; the job then
+    re-grants only what it needs. The empty mapping is the whole point, and it
+    is asserted as an empty mapping rather than as "a permissions key exists",
+    because a key with a body re-grants whatever it names.
+
+    Two properties follow from the deny-all default, and both are invisible
+    without it. A later scope addition is a visible diff: it appears on the
+    ``permissions:`` line of the job rather than arriving as a side effect of
+    somebody loosening a default elsewhere. And a job added later does not
+    silently inherit write access -- it starts with nothing, so the reviewer of
+    that job has to see the grant being made, in that job, with that job's
+    behaviour in mind. Under ``write-all`` both properties are gone, and the
+    blast radius of a compromise in this file becomes the default branch rather
+    than one job.
+
+    The job-level block is the other half, and it is where the workflow is
+    actually allowed to do anything. Asserted as a subset of what the job
+    demonstrably needs -- ``contents: write`` for the ref update the queued
+    merge performs, ``pull-requests: write`` for the approval and for enrolling
+    the auto-merge queue -- rather than as equality, because the job also
+    legitimately grants ``issues: write``: labels are served by the issues API,
+    not the pull-requests one, so a Dependabot pull request is not labelled
+    without it. Deny-all plus a missing scope has no symptom at all: the run
+    goes green, the label is never applied, and nothing fails.
+
+    Args:
+        repo_root: The repository root, used to locate the workflow.
+    """
+    path, data = _auto_merge_workflow(repo_root)
+
+    declared = _as_mapping(
+        data.get("permissions"), f"workflow-level `permissions:` in {path.name}"
+    )
+    assert declared == REQUIRED_DENY_ALL_PERMISSIONS, (
+        f"{path.name} declares workflow-level `permissions: {dict(declared)!r}` "
+        f"rather than the deny-all `{REQUIRED_DENY_ALL_PERMISSIONS}`. "
+        f"`{WRITE_ALL_PERMISSIONS}` in particular grants every scope to every job "
+        "in the file, so a job added later inherits write access to the repository "
+        "without anyone reviewing the grant, and a later scope addition is a side "
+        "effect of a default elsewhere rather than a visible diff here"
+    )
+
+    job = _require_job(data, path, AUTO_MERGE_JOB_ID)
+    granted = _as_mapping(
+        job.get("permissions"),
+        f"`permissions:` of the {AUTO_MERGE_JOB_ID!r} job in {path.name}",
+    )
+    missing = {
+        scope: value
+        for scope, value in REQUIRED_AUTO_MERGE_JOB_PERMISSIONS.items()
+        if granted.get(scope) != value
+    }
+    assert not missing, (
+        f"the {AUTO_MERGE_JOB_ID!r} job in {path.name} does not declare {missing} "
+        f"(it declares {dict(granted)!r}). With the deny-all default above, the "
+        "job-level block is the only thing granting these scopes, so without "
+        "them the approval and the queued merge are rejected by the API. The job "
+        f"does not fail, so the only symptom is that auto-merge quietly never "
+        "happens and nothing reports it"
     )

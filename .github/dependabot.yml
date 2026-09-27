@@ -1,0 +1,99 @@
+# Keeps dependency pins current across every ecosystem this repository has.
+#
+# Every action referenced from .github/workflows/ is pinned to a full-length
+# commit SHA. Dependabot updates the SHA and the trailing `# vX.Y.Z` comment
+# together, so an immutable pin stays reviewable. A mutable tag would let
+# whoever controls the tag change the code CI runs without any diff here.
+# See https://docs.github.com/en/code-security/dependabot/working-with-dependabot/keeping-your-actions-up-to-date-with-dependabot
+#
+# The `uv` ecosystem entry keeps uv.lock current. `cooldown.default-days: 7`
+# delays version-update pull requests until a release is a week old, which
+# reduces the chance of ingesting a release that was freshly compromised and
+# then yanked. Security updates are never delayed by a cooldown, so a real CVE
+# is not held back by this policy.
+#
+# The `pre-commit` entry keeps the `rev:` pins in .pre-commit-config.yaml fresh
+# (ruff-pre-commit, pre-commit-hooks, actionlint, zizmor-pre-commit,
+# osv-scanner). Dependabot parses that file and skips `repo: local` entries, so
+# the three local hooks are not covered. See the "known gaps" section in
+# .github/workflows/dependabot-auto-merge.yml for what that means for merging.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Same 7-day stance as `uv` below. The platform already applies a 3-day
+    # default; stating 7 explicitly documents the intent rather than relying on
+    # a platform default that could change.
+    cooldown:
+      default-days: 7
+    # Groups are split by update-type, and the reason is subtle: Dependabot
+    # reports a single roll-up `update-type` per pull request, and that value is
+    # the *highest* severity change in the group. One minor in a catch-all
+    # group would therefore report the whole group as semver-minor and block
+    # auto-merge for what is mostly patches. Patch-only groups roll up to
+    # `version-update:semver-patch`, which can match the auto-merge gate;
+    # minor/major groups fail closed and get a human.
+    groups:
+      github-actions-patch:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+      github-actions-minor-major:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - major
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    # Direct dependencies in pyproject.toml use lower bounds (`>=X.Y.Z`).
+    # Dependabot's default strategy only touches uv.lock when the new version
+    # still satisfies the existing bound, which lets the lockfile drift ahead of
+    # the declared minimum: the manifest keeps advertising a version the
+    # repository is not actually tested against. `increase` raises the bound in
+    # pyproject.toml alongside the lockfile on every update, so the two can
+    # never disagree.
+    versioning-strategy: increase
+    cooldown:
+      default-days: 7
+    groups:
+      uv-patch:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+      uv-minor-major:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - major
+
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    # Same update-type split as above, for the same roll-up reason. Note this
+    # ecosystem is excluded from auto-merge entirely regardless of update-type;
+    # see the merge-policy header in dependabot-auto-merge.yml. These groups
+    # only control how pull requests are packaged for human review.
+    groups:
+      pre-commit-patch:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+      pre-commit-minor-major:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - major

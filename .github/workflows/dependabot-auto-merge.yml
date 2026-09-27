@@ -1,0 +1,209 @@
+name: Dependabot auto-merge
+
+# A four-gate policy for merging Dependabot pull requests unattended.
+#
+# WHY THIS IS CAREFUL
+# This workflow holds `contents: write` and `pull-requests: write`, and it runs
+# on `pull_request_target`, which executes with a write token in the context of
+# the base repository while having access to the pull request's contents. That
+# combination is the single highest-value attack surface in this repository: a
+# workflow that checks out and runs untrusted pull-request code with a write
+# token is remote code execution against the repository.
+#
+# Two design consequences, both deliberate:
+#   1. There is NO `actions/checkout` anywhere in this file. No untrusted code
+#      is ever fetched or executed. The only `uses:` is
+#      dependabot/fetch-metadata, which reads metadata over the API.
+#   2. Gate 1 checks the author is Dependabot AND the account type is Bot AND
+#      the repository matches. Checking the login alone is not enough.
+#
+# Known Dependabot compromise campaigns that motivate this: the July 2023
+# wave of pull requests impersonating Dependabot on compromised repositories,
+# and CVE-2025-30066 (tj-actions/changed-files), where a mutable action tag
+# was repointed at malicious code and every workflow referencing it ran the
+# payload with repository write access. The second is why every action in this
+# repository is SHA-pinned and why Gate 1 does not trust actor strings alone.
+#
+# GATES
+#   Gate 1  identity and repository scope (job-level `if:`)
+#   Gate 2  structured metadata from GitHub's supported validator
+#   Gate 3  an explicit allow-list policy, failing closed
+#   Gate 4  approve and queue the merge, never bypassing protection
+#
+# WHAT IS DELIBERATELY NOT AUTO-MERGED, AND WHY
+#   - Any `github-actions` update, at any version bump. Workflow changes are
+#     the highest-value target in this repository, and an action's behaviour can
+#     change without a version change. A human reads the diff.
+#   - Any `pre-commit` update. Required CI does not exercise the full hook set:
+#     the prek-action invocation in ci.yml skips the actionlint, zizmor,
+#     osv-scanner and pytest-testmon hooks, so a green CI run is not evidence
+#     that a bumped hook still works. Patches have the same hole as minors.
+#   - Any `docker` ecosystem update. There is no container build in this
+#     repository, so a docker PR would indicate an unexpected new dependency
+#     and deserves a look.
+#   - Every minor and major version bump. Only `version-update:semver-patch` is
+#     eligible, because a patch is the one class of change that is supposed to
+#     be behaviour-preserving by contract.
+#
+# A WAIT-FREE DESIGN NOTE
+# `gh pr merge --auto` enables GitHub's auto-merge queue rather than merging
+# immediately. The merge happens only once branch protection is satisfied, so
+# the required `CI Status` check still has to pass. That is why this workflow
+# never uses `--admin`.
+
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
+    branches: [main]
+
+# Deny-all default; every scope this workflow needs is granted on the job
+# below. Same convention as zizmor.yml.
+permissions: {}
+
+concurrency:
+  # Keyed on the pull request number, so a new push starts a fresh evaluation
+  # and cancels the stale one. The gate is then always re-evaluated against the
+  # current head rather than a superseded commit.
+  #
+  # `github.event.number` rather than `github.event.pull_request.number`: it is
+  # the same integer on a pull_request_target payload, and it is assigned by
+  # GitHub rather than being attacker-supplied text. The untrusted-input
+  # contract test rejects the `pull_request.*` prefix outside an `env:`
+  # mapping, and this satisfies it without weakening that test for the fields
+  # that genuinely are injectable (branch names, PR titles, author strings).
+  group: dependabot-auto-merge-${{ github.event.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    name: Auto-merge Dependabot PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Gate 1 — identity AND scope. Three conditions, not one.
+    #   - the login is the Dependabot bot
+    #   - the account TYPE is Bot, so a human account named `dependabot[bot]`
+    #     cannot satisfy this
+    #   - the repository matches, so this workflow cannot be repurposed by
+    #     running in a fork
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.user.type == 'Bot' &&
+      github.repository == 'iamwatchdogs/bigdata-mcp'
+
+    permissions:
+      contents: write      # ref updates for `gh pr merge --auto`
+      pull-requests: write # `gh pr review --approve` and enabling auto-merge
+      issues: write        # labels are served by the issues API
+      # These scopes must be granted explicitly. A pull_request_target run
+      # triggered by Dependabot otherwise receives a read-only token, and
+      # Dependabot's own runs are read-only by design.
+      # https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-on-actions
+
+    steps:
+      # Gate 2 — structured metadata from GitHub's supported validator.
+      # Preferred over parsing the pull request title or trusting the actor
+      # string, because fetch-metadata is a GitHub-maintained action reporting
+      # from the API rather than from text this repository could misread.
+      # Reports package-ecosystem, update-type, dependency names, and (with an
+      # alert-capable token) alert state, GHSA id and CVSS.
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Runs unconditionally within this job, deliberately independent of
+      # Gate 3. Gate 1 has already established that the author is Dependabot,
+      # and a pull request that fails the merge policy still deserves the
+      # label, so a human triaging the queue can filter on it.
+      - name: Add dependabot label
+        env:
+          # Untrusted input reaches the shell through env, never by
+          # interpolation into the run body. String interpolation of
+          # attacker-controlled values into a shell script is command
+          # injection; env passing is not.
+          # https://docs.github.com/en/actions/reference/security/security-hardening-for-github-actions#github_token_and-script-injection
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR_URL" --add-label "dependabot"
+
+      # Gate 3 — the policy. Written as shell rather than a nested expression so
+      # each branch can carry its own comment explaining why it exists, and
+      # exposed as a single boolean step output so Gate 4 reads as
+      # `if: steps.policy.outputs.eligible == 'true'` instead of re-encoding
+      # the whole policy.
+      - name: Evaluate merge policy
+        id: policy
+        env:
+          PACKAGE_ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+          NEW_VERSION: ${{ steps.metadata.outputs.new-version }}
+        run: |
+          set -euo pipefail
+
+          eligible=false
+          reason=""
+
+          if [ "$PACKAGE_ECOSYSTEM" = "github-actions" ]; then
+            # Workflow changes are the highest-value target here, and an
+            # action's behaviour can change without its version changing.
+            reason="github-actions ecosystem is never auto-merged"
+
+          elif [ "$PACKAGE_ECOSYSTEM" = "pre-commit" ]; then
+            # Required CI does not exercise the full hook set. The prek-action
+            # step in ci.yml skips actionlint, and the pre-push-only hooks
+            # (zizmor, osv-scanner, gitleaks) never run in CI at all, so a
+            # green pipeline is not evidence that a bumped hook still works.
+            # Excluded before the generic semver-patch branch, because patches
+            # have the same coverage hole as minors.
+            reason="pre-commit hooks are not fully exercised by required CI"
+
+          elif [ "$PACKAGE_ECOSYSTEM" = "docker" ]; then
+            # This repository ships no container build, so a docker pull
+            # request would signal an unexpected new dependency.
+            reason="docker ecosystem is not used by this repository"
+
+          elif [ "$UPDATE_TYPE" = "version-update:semver-patch" ]; then
+            # The only eligible class. A patch is the one change that is
+            # contractually behaviour-preserving, and it is gated further by
+            # the full CI suite before the merge is allowed to complete.
+            eligible=true
+            reason="semver-patch"
+
+          else
+            # Fail closed. Any unrecognised update-type lands here, including
+            # an empty value, which is also how digest and branch updates
+            # arrive.
+            reason="update-type '${UPDATE_TYPE:-<empty>}' not eligible for ${PACKAGE_ECOSYSTEM}"
+          fi
+
+          {
+            echo "eligible=$eligible"
+            # A heredoc delimiter, not a bare `echo "reason=$reason"`, so a
+            # reason containing `=` or a newline cannot corrupt the
+            # GITHUB_OUTPUT key=value parse. Reasons are currently
+            # script-controlled and single-line, so this is belt-and-braces.
+            echo "reason<<REASON_EOF"
+            echo "$reason"
+            echo "REASON_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Policy: eligible=$eligible ($reason)"
+
+      # Gate 4 — approve, then queue the merge.
+      - name: Approve and enable auto-merge
+        if: steps.policy.outputs.eligible == 'true'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh pr review --approve "$PR_URL"
+          # --auto queues the merge and completes only once branch protection
+          # is satisfied, so the required `CI Status` check still has to pass.
+          # --admin is never used: it bypasses exactly the protection this
+          # workflow is designed to respect.
+          #   https://cli.github.com/manual/gh_pr_merge
+          gh pr merge --auto --squash "$PR_URL"
