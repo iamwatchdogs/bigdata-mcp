@@ -94,14 +94,19 @@ repos:
     hooks:
       - id: pytest-testmon
         name: pytest-testmon on changed Python files
-        # `--no-cov` is deliberate and load-bearing. testmon runs a *subset* of
-        # the suite, so a coverage percentage over that subset is not a
-        # meaningful number -- and when testmon selects nothing at all, coverage
-        # is 0%, which made `[tool.coverage.report] fail_under` fail the commit
-        # hook for a reason that has nothing to do with the code under review.
-        # The coverage floor is enforced by the full suite instead: `make test`
-        # locally, and the pytest invocation in the CI matrix.
-        entry: uv run pytest --testmon --no-cov
+        # Routed through `make testmon` rather than inlining the command, so the
+        # hook and the Makefile can never drift — the same single-source rule
+        # the rest of this file and the Makefile are built around.
+        #
+        # The flags live in the Makefile target because `--no-cov` is
+        # load-bearing: testmon runs a *subset* of the suite, so a coverage
+        # percentage over that subset is not a meaningful number, and when
+        # testmon selects nothing at all coverage is 0%, which made
+        # `[tool.coverage.report] fail_under` fail the commit hook for a reason
+        # unrelated to the code under review. The floor is enforced by the full
+        # suite instead: `make test` locally, and the pytest invocation in the
+        # CI matrix.
+        entry: make testmon
         language: system
         files: ^(tests|src)/.*\.py$
         types: [python]

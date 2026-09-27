@@ -33,6 +33,26 @@ the files asserted here removes a real safety property with no visible symptom:
 - the ``detect-changes`` path filters dropping a path they claim to guard: the
   ``CI Status`` gate is fail-closed, so an under-specified filter skips exactly
   the jobs that should have run.
+- a scheduled security workflow losing its own ``concurrency`` group:
+  ``cancel-in-progress`` is evaluated on the *arriving* run, so a scheduled scan
+  sharing a group with ordinary pushes is killed by the next push, and a security
+  scan that silently never completes is worse than one that fails, because
+  nothing reports it.
+- a SARIF upload becoming reachable from a pull-request run: Scorecard's
+  ``pull_request`` runs are ``supply-chain/local`` and omit the
+  ``branch-protection`` and ``online-scm`` categories, so uploading them
+  overwrites the default-branch baseline and emits a "configurations not found"
+  warning on every PR, which trains reviewers to ignore code-scanning warnings.
+- ``zizmor.yml``'s deny-all ``permissions: {}`` being widened to
+  ``permissions: write-all``, which hands every job in the file full write
+  access, including a job added later that nobody reviewed.
+- a checkout appearing in a ``pull_request_target`` / ``workflow_run`` workflow:
+  those triggers run with a write token against attacker-influenceable code, so
+  a checkout plus a build or test step is a remote-code-execution path.
+- CodeQL's matrix losing the ``actions`` language, or its ``init`` step falling
+  back to the default query suite: the workflow files are the highest-value
+  attack surface in this repository, and ``security-and-quality`` is the
+  default suite and does *not* satisfy this.
 
 Every assertion below is derived from file contents or from a real ``git``
 subprocess run, so each one can be observed to fail under a targeted mutation.
@@ -53,18 +73,38 @@ import pytest
 import yaml
 
 ALWAYS_CONDITION = "always()"
+CHECKOUT_ACTION = "actions/checkout"
 CODEOWNERS_WILDCARD = "* @iamwatchdogs"
+CODEQL_ANALYZE_ACTION = "github/codeql-action/analyze"
+CODEQL_INIT_ACTION = "github/codeql-action/init"
+CODEQL_UPLOAD_SARIF_ACTION = "github/codeql-action/upload-sarif"
 COMMIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
+CODEQL_WORKFLOW_FILE = "codeql.yml"
 COUNCIL_ARTIFACT = Path(".agents/council/extraction-candidates.jsonl")
+# Exactly the two events zizmor's `dangerous-triggers` audit flags, and exactly
+# the two that run with a write token against code an attacker can influence.
+# `workflow_dispatch` is deliberately absent: zizmor v1.30.1 does not flag it,
+# and it is only runnable by a principal who already holds write access, so it
+# is not a path from untrusted code. Requiring the ignore comment there would
+# demand a comment silencing an audit that never fires.
+DANGEROUS_TRIGGERS = frozenset({"pull_request_target", "workflow_run"})
+DEFAULT_ASSIGNEE_WORKFLOW_FILE = "default-assignee.yml"
 ENV_KEY = "env"
+EVENT_NAME_REFERENCE = "github.event_name"
 EXPECTED_PATH_FILTERS = frozenset({"json", "python", "workflows"})
 GIT_ATTRIBUTES_RULE = "* text=auto eol=lf"
 LOCAL_ACTION_PREFIXES = ("./", ".\\", "docker://")
 MIN_DESCRIPTION_LENGTH = 20
+NEGATION = "!"
 PATHS_FILTER_ACTION = "dorny/paths-filter"
+PULL_REQUEST_TRIGGER = "pull_request"
 PYPROJECT_MANIFEST = Path("pyproject.toml")
 PYTHON_VERSION_PIN = Path(".python-version")
 QUOTED_TRIGGER_KEY = "on"
+REQUIRED_CODEQL_LANGUAGES = frozenset({"actions", "python"})
+# `security-and-quality` is CodeQL's default suite and does not satisfy this;
+# `security-extended` is the only value that widens it.
+REQUIRED_CODEQL_QUERY_SUITE = "security-extended"
 REQUIRED_PYTHON_FILTER_PATHS = ("pyproject.toml", "uv.lock")
 REQUIRED_REQUIRES_PYTHON = ">=3.14"
 REQUIRED_STATUS_CHECK_NAME = "CI Status"
@@ -72,13 +112,24 @@ REQUIRED_WORKFLOWS_FILTER_PATH = ".github/workflows/*.yml"
 RUN_KEY = "run"
 RUN_SUFFIX = f".{RUN_KEY}"
 SCAFFOLD_PLACEHOLDER_DESCRIPTION = "Add your description here"
+# One literal, two uses: the `schedule:` trigger key, and the substring the
+# `concurrency` group must carry so a scheduled run lands in its own group.
+SCHEDULE_LITERAL = "schedule"
+# The two weekly security scans. Named explicitly so that dropping either
+# `schedule:` trigger is a failure rather than a silent narrowing of coverage.
+SCHEDULED_SECURITY_WORKFLOW_FILES = frozenset({"codeql.yml", "scorecard.yml"})
 TRIGGER_KEY = True  # PyYAML (YAML 1.1) resolves the bare key `on` to `True`.
 UNTRUSTED_INPUT_RE = re.compile(
     r"\$\{\{\s*github\.event\.(?:pull_request|issue)\b[^{}]*\}\}"
 )
 VERSION_COMMENT_RE = re.compile(r"v\d[\w.+-]*")
+WITH_KEY = "with"
 WORKFLOW_EXPRESSION_RE = re.compile(r"\$\{\{[^{}]*\}\}")
 WORKFLOWS_DIR = Path(".github/workflows")
+WRITE_ALL_PERMISSIONS = "write-all"
+ZIZMOR_DANGEROUS_TRIGGERS_COMMENT = "zizmor: ignore[dangerous-triggers]"
+ZIZMOR_JOB_ID = "zizmor"
+ZIZMOR_WORKFLOW_FILE = "zizmor.yml"
 
 # Matched against the raw line so the trailing comment requirement is actually
 # observable. Parsing alone would discard the comment entirely, and a bare
@@ -86,6 +137,29 @@ WORKFLOWS_DIR = Path(".github/workflows")
 USES_LINE_RE = re.compile(
     r"^\s*(?:-\s+)?uses:\s*(?P<reference>\S+)(?:\s+#\s*(?P<comment>\S+))?\s*$"
 )
+
+# The same reasoning as `USES_LINE_RE`, for the same reason: the trailing
+# `# zizmor: ignore[dangerous-triggers]` has to be asserted against raw text,
+# because parsing discards it and the requirement would become untestable. `#`
+# is not a legal capture for `name`, so neither a commented-out trigger line nor
+# a comment that merely names a trigger can match.
+TRIGGER_KEY_LINE_RE = re.compile(
+    r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_-]*)\s*:(?P<rest>.*)$"
+)
+
+# The deny-all workflow-level block must survive as an *empty* mapping. `{}` is
+# the only spelling of "deny everything, grant per job"; a `permissions:` key
+# with a body silently re-grants whatever it names.
+REQUIRED_DENY_ALL_PERMISSIONS: dict[str, str] = {}
+
+# What the `zizmor` job must re-grant to replace that deny-all default:
+# `security-events: write` to upload findings, `contents: read` to check out the
+# workflow files it is analysing. Asserted as a subset so a job may legitimately
+# grant more (this one also reads workflow metadata via `actions: read`).
+REQUIRED_ZIZMOR_JOB_PERMISSIONS: dict[str, str] = {
+    "security-events": "write",
+    "contents": "read",
+}
 
 
 @pytest.fixture(scope="session")
@@ -398,6 +472,234 @@ def _paths_filter_blocks(repo_root: Path) -> list[tuple[str, object]]:
                 )
                 blocks.append((site, yaml.safe_load(filters)))
     return blocks
+
+
+def _step_sites(
+    data: dict[object, object], path: Path
+) -> list[tuple[str, dict[object, object]]]:
+    """Return every step of every job in one workflow, paired with its site.
+
+    Args:
+        data: A parsed workflow mapping.
+        path: The workflow the mapping came from, used to build site labels.
+
+    Returns:
+        One ``(site, step)`` pair per declared step, where ``site`` reads
+        ``<file name>::<job id>::step[<index>]`` so a failure names the exact
+        step. The bare file name is enough to disambiguate, and it keeps a
+        failure message readable instead of burying the step under an
+        absolute path.
+    """
+    sites: list[tuple[str, dict[object, object]]] = []
+    for job_id, job in _workflow_jobs(data, path).items():
+        sites.extend(
+            (f"{path.name}::{job_id}::step[{index}]", step)
+            for index, step in enumerate(_job_steps(job))
+        )
+    return sites
+
+
+def _step_uses(step: dict[object, object]) -> str:
+    """Return a step's ``uses:`` reference, or an empty string when it has none.
+
+    Args:
+        step: A parsed step mapping.
+
+    Returns:
+        The right-hand side of ``uses:``, which may be empty for a ``run:`` step.
+    """
+    value = step.get("uses")
+    return value if isinstance(value, str) else ""
+
+
+def _references_action(reference: str, action: str) -> bool:
+    """Report whether a ``uses:`` value names a particular action.
+
+    The reference is compared against the bare action path, so a SHA-pinned
+    ``owner/repo@<40-hex>`` and a tag-pinned ``owner/repo@v1`` both match, and
+    a different action that merely shares a prefix (``.../upload-sarif`` versus
+    ``.../upload-sarif-something``) does not.
+
+    Args:
+        reference: The right-hand side of a ``uses:`` line.
+        action: The action repository path, without any ``@ref`` suffix.
+
+    Returns:
+        True when the reference names exactly that action.
+    """
+    return reference == action or reference.startswith(f"{action}@")
+
+
+def _trigger_keys(data: dict[object, object]) -> set[str]:
+    """Return the set of event names a workflow declares under ``on:``.
+
+    Args:
+        data: A parsed workflow mapping.
+
+    Returns:
+        Every declared event name, empty when the workflow has no trigger or
+        declares it as a bare sequence rather than a mapping.
+    """
+    triggers = _trigger_value(data)
+    if not isinstance(triggers, dict):
+        return set()
+    return {str(key) for key in triggers}
+
+
+def _has_bare_trigger(data: dict[object, object], event: str) -> bool:
+    """Report whether a workflow triggers on ``event`` with no filter at all.
+
+    A bare ``pull_request:`` fires on every pull request. A qualified one such
+    as ``pull_request: {branches: [main]}`` is filtered, which is the
+    distinction the SARIF contract below depends on.
+
+    Args:
+        data: A parsed workflow mapping.
+        event: The event name to look for.
+
+    Returns:
+        True when ``event`` is present and maps to nothing meaningful.
+    """
+    triggers = _trigger_value(data)
+    if not isinstance(triggers, dict):
+        return False
+    mapping = _as_mapping(triggers, f"the `on:` block, looking for {event!r}")
+    if event not in mapping:
+        return False
+    value = mapping[event]
+    return value is None or (isinstance(value, (dict, list)) and not value)
+
+
+def _publishes_sarif(step: dict[object, object]) -> bool:
+    """Report whether a step uploads SARIF to GitHub code scanning.
+
+    Both ``upload-sarif`` and ``analyze`` write findings to the code-scanning
+    API; ``analyze`` does so implicitly as its final act, so a workflow using
+    only ``analyze`` still overwrites the SARIF baseline of its category.
+
+    Args:
+        step: A parsed step mapping.
+
+    Returns:
+        True when the step pushes findings into the code-scanning service.
+    """
+    reference = _step_uses(step)
+    return _references_action(reference, CODEQL_UPLOAD_SARIF_ACTION) or (
+        _references_action(reference, CODEQL_ANALYZE_ACTION)
+    )
+
+
+def _excludes_pull_request(condition: str) -> bool:
+    """Report whether an ``if:`` expression blocks pull-request runs.
+
+    Both halves are required. The event name must appear, so a condition such
+    as ``github.event_name == 'schedule'`` cannot be mistaken for a guard, and a
+    negation must appear, so a condition that merely *mentions* the event
+    positively (``github.event_name == 'pull_request'``) is rejected.
+
+    Args:
+        condition: A normalised ``if:`` expression body.
+
+    Returns:
+        True when the expression names ``pull_request`` and negates it.
+    """
+    return PULL_REQUEST_TRIGGER in condition and NEGATION in condition
+
+
+def _checkout_sites(data: dict[object, object], path: Path) -> list[str]:
+    """Return the sites of every ``actions/checkout`` step in one workflow.
+
+    Args:
+        data: A parsed workflow mapping.
+        path: The workflow the mapping came from, used in site labels.
+
+    Returns:
+        One site label per checkout step, empty when the workflow never checks
+        out a working tree.
+    """
+    return [
+        site
+        for site, step in _step_sites(data, path)
+        if _references_action(_step_uses(step), CHECKOUT_ACTION)
+    ]
+
+
+def _trigger_source_lines(path: Path, events: set[str]) -> dict[str, str]:
+    """Return the raw source line each named trigger is declared on.
+
+    Args:
+        path: The workflow file to scan.
+        events: Trigger names to look for.
+
+    Returns:
+        The first raw line per trigger name, which is where a trailing
+        ``# ...`` comment would live if one were present.
+    """
+    found: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = TRIGGER_KEY_LINE_RE.match(line)
+        if match is None:
+            continue
+        name = match.group("name")
+        if name in events:
+            found.setdefault(name, line)
+    return found
+
+
+def _matrix_languages(data: dict[object, object], path: Path) -> set[str]:
+    """Collect every ``language`` value declared in a workflow's matrix.
+
+    Args:
+        data: A parsed workflow mapping.
+        path: The workflow the mapping came from, used in failure messages.
+
+    Returns:
+        The distinct languages named by any job's ``strategy.matrix.include``
+        entries, empty when no job declares such a matrix.
+    """
+    languages: set[str] = set()
+    for job in _workflow_jobs(data, path).values():
+        strategy = job.get("strategy")
+        if not isinstance(strategy, dict):
+            continue
+        matrix = strategy.get("matrix")
+        if not isinstance(matrix, dict):
+            continue
+        include = matrix.get("include")
+        if not isinstance(include, list):
+            continue
+        for entry in include:
+            if not isinstance(entry, dict):
+                continue
+            mapping = _as_mapping(entry, f"a `strategy.matrix.include` entry in {path}")
+            if "language" in mapping:
+                languages.add(str(mapping["language"]))
+    return languages
+
+
+def _init_query_suites(data: dict[object, object], path: Path) -> list[object]:
+    """Collect the ``queries:`` value of every ``codeql-action/init`` step.
+
+    Args:
+        data: A parsed workflow mapping.
+        path: The workflow the mapping came from, used in failure messages.
+
+    Returns:
+        The raw ``queries`` values, empty when no ``init`` step sets one. An
+        unset value is a distinct outcome from a set one, because an unset
+        ``queries:`` means CodeQL falls back to its own default suite.
+    """
+    suites: list[object] = []
+    for _site, step in _step_sites(data, path):
+        if not _references_action(_step_uses(step), CODEQL_INIT_ACTION):
+            continue
+        with_block = step.get(WITH_KEY)
+        if not isinstance(with_block, dict):
+            continue
+        mapping = _as_mapping(with_block, f"a `with:` block in {path}")
+        if "queries" in mapping:
+            suites.append(mapping["queries"])
+    return suites
 
 
 def test_codeowners_gates_every_path_behind_one_owner(repo_root: Path) -> None:
@@ -879,4 +1181,385 @@ def test_no_untrusted_input_is_interpolated_into_run_blocks(repo_root: Path) -> 
         "`github.event.issue.*` are fully attacker-controlled, so they must "
         "reach a shell only through an `env:` mapping, never inline in a "
         "script, a step name, a condition, or a `with:` input"
+    )
+
+
+def test_scheduled_security_workflows_get_their_own_concurrency_group(
+    repo_root: Path,
+) -> None:
+    """Assert each scheduled security scan runs in a concurrency group of its own.
+
+    ``cancel-in-progress`` is evaluated on the *arriving* run, not the one
+    already queued. A scheduled CodeQL or Scorecard scan that shares a group
+    with ordinary pushes is therefore killed by the next push that lands while
+    it is still running -- and because the kill looks exactly like any other
+    cancellation, nothing reports it. A security scan that silently never
+    completes is worse than one that fails, because a failure at least appears
+    in the Security tab. Both scans exist to surface findings from newly
+    released rules against a codebase nobody is currently changing, which is
+    precisely the situation where no push arrives to cancel them by accident and
+    precisely the situation where a missed run goes unnoticed for a week.
+
+    So the group must carry a distinct suffix for scheduled runs, and
+    ``cancel-in-progress`` must be a *string expression* rather than the bare
+    boolean ``true``: a bare ``true`` cancels the scheduled scan too, because it
+    cancels whatever is in the group whenever anything new arrives.
+
+    Args:
+        repo_root: The repository root, used to locate ``.github/workflows``.
+    """
+    scheduled: dict[Path, dict[object, object]] = {}
+    dropped: list[str] = []
+    for path in _workflow_paths(repo_root):
+        relative = path.relative_to(repo_root)
+        data = _load_workflow(path)
+        if SCHEDULE_LITERAL in _trigger_keys(data):
+            scheduled[relative] = data
+        elif relative.name in SCHEDULED_SECURITY_WORKFLOW_FILES:
+            dropped.append(str(relative))
+
+    assert scheduled, (
+        f"no workflow under {WORKFLOWS_DIR} declares a `{SCHEDULE_LITERAL}:` "
+        "trigger, so this scan is inspecting nothing. A scheduled run is the "
+        "only way findings from newly released rules reach a codebase that is "
+        "not currently being changed"
+    )
+    assert not dropped, (
+        f"{dropped} no longer declares a `{SCHEDULE_LITERAL}:` trigger. Those are "
+        "the weekly security scans, and the trigger is the only thing that runs "
+        "them in a quiet week; without it their findings age out of the Security "
+        "tab unnoticed"
+    )
+
+    shared_group: list[str] = []
+    boolean_cancel: list[str] = []
+    for relative, data in scheduled.items():
+        concurrency = _as_mapping(
+            data.get("concurrency"), f"`concurrency:` in {relative}"
+        )
+        group = str(concurrency.get("group", ""))
+        if SCHEDULE_LITERAL not in group:
+            shared_group.append(f"{relative}: group is {group!r}")
+        cancel = concurrency.get("cancel-in-progress")
+        if not isinstance(cancel, str) or EVENT_NAME_REFERENCE not in cancel:
+            boolean_cancel.append(f"{relative}: cancel-in-progress is {cancel!r}")
+
+    assert not shared_group, (
+        "these scheduled workflows name no schedule-specific concurrency group:\n"
+        + "\n".join(shared_group)
+        + "\nAppend a conditional suffix keyed on "
+        f"`github.event_name == '{SCHEDULE_LITERAL}'`, so a scheduled run lands "
+        "in a group ordinary pushes never join"
+    )
+    assert not boolean_cancel, (
+        "these scheduled workflows set a non-conditional `cancel-in-progress`:\n"
+        + "\n".join(boolean_cancel)
+        + "\n`cancel-in-progress` must be a string expression referencing "
+        f"{EVENT_NAME_REFERENCE} so a scheduled run is never cancelled by a later "
+        f"push, e.g. `${{{{ {EVENT_NAME_REFERENCE} != '{SCHEDULE_LITERAL}' }}}}`"
+    )
+
+
+def test_sarif_is_never_uploaded_from_a_pull_request_run(repo_root: Path) -> None:
+    """Assert no SARIF upload can fire during a pull-request run.
+
+    Scorecard's ``pull_request`` support is experimental and runs local-only, as
+    ``supply-chain/local``. That result omits the ``branch-protection`` and
+    ``online-scm`` categories that the default-branch run produces, so uploading
+    it overwrites the default-branch baseline with a strictly weaker analysis and
+    emits a "configurations not found" code-scanning warning on every pull
+    request. A warning that appears on every PR trains reviewers to ignore
+    code-scanning warnings -- which is the exact failure mode Scorecard exists to
+    reduce.
+
+    ``scorecard.yml`` carries no ``pull_request`` trigger at all today, so the
+    per-step guard cannot fire yet. It is asserted anyway, together with the
+    workflow-level rule, so that re-adding a PR trigger later cannot silently
+    start overwriting the baseline: the trigger check fires immediately, and the
+    step guard is already in place when it does.
+
+    Args:
+        repo_root: The repository root, used to locate ``.github/workflows``.
+    """
+    uploads: list[tuple[str, str]] = []
+    for path in _workflow_paths(repo_root):
+        for site, step in _step_sites(_load_workflow(path), path):
+            if not _references_action(_step_uses(step), CODEQL_UPLOAD_SARIF_ACTION):
+                continue
+            condition = _normalise_expression(str(step.get("if", "")))
+            uploads.append((site, condition))
+
+    assert uploads, (
+        f"no step uses {CODEQL_UPLOAD_SARIF_ACTION} in any workflow under "
+        f"{WORKFLOWS_DIR}, so this scan is inspecting nothing. Uploading SARIF is "
+        "how findings reach the Security tab; if that stopped happening the "
+        "workflows are producing analysis nobody ever reads, and this test should "
+        "be deleted rather than left vacuous"
+    )
+
+    unguarded = [
+        f"{site} (if: {condition!r})"
+        for site, condition in uploads
+        if not _excludes_pull_request(condition)
+    ]
+    assert not unguarded, (
+        "these SARIF upload steps are reachable from a pull-request run:\n"
+        + "\n".join(unguarded)
+        + "\nGive each an `if:` that names and negates the event, e.g. "
+        f"`if: {EVENT_NAME_REFERENCE} != '{PULL_REQUEST_TRIGGER}'`. A "
+        "`supply-chain/local` result from a pull request lacks the "
+        "`branch-protection` and `online-scm` categories, so publishing it "
+        "replaces the default-branch baseline with a weaker one and raises a "
+        '"configurations not found" warning on every PR'
+    )
+
+    bare: list[str] = []
+    both: list[str] = []
+    for path in _workflow_paths(repo_root):
+        data = _load_workflow(path)
+        if not _has_bare_trigger(data, PULL_REQUEST_TRIGGER):
+            continue
+        relative = str(path.relative_to(repo_root))
+        bare.append(relative)
+        publishers = [
+            site for site, step in _step_sites(data, path) if _publishes_sarif(step)
+        ]
+        if publishers:
+            both.append(f"{relative}: {publishers}")
+
+    assert bare, (
+        f"no workflow under {WORKFLOWS_DIR} declares a bare `{PULL_REQUEST_TRIGGER}:` "
+        "trigger, so the workflow-level check below cannot fire. A bare trigger is "
+        "the risky shape -- it fires on pull requests from any branch, including "
+        "forks -- and it is what makes an unguarded SARIF upload reachable"
+    )
+    assert not both, (
+        "these workflows combine a bare pull-request trigger with a SARIF upload:\n"
+        + "\n".join(both)
+        + "\nQualify the trigger (for example with a `branches:` list) so fork "
+        "pull requests cannot reach the code-scanning API, or drop the trigger. "
+        "`github/codeql-action/analyze` counts as a SARIF upload because it "
+        "publishes findings as its final act"
+    )
+
+
+def test_deny_all_permissions_convention_is_not_weakened(repo_root: Path) -> None:
+    """Assert the deny-all default and its per-job replacement are both intact.
+
+    ``zizmor.yml`` sets workflow-level ``permissions: {}``, which denies every
+    scope and then re-grants only what each job declares. A workflow-level
+    ``permissions: write-all`` hands every job in the file full write access to
+    the repository -- including a job added six months from now that nobody
+    reviewed in the context of a workflow-level grant, because the grant was
+    already there. The blast radius of a compromise in that file would be the
+    default branch rather than one analysis job.
+
+    The per-job block is the other half. Deny-all plus no job-level permissions
+    means the ``zizmor`` job cannot upload its findings at all: the run goes
+    green, the Security tab goes stale, and nothing fails.
+
+    The repo-wide sweep is checked for reachability rather than for a non-empty
+    input, because a counter there would be dead code: the only way to empty it
+    is to drop ``permissions:`` from every file, and
+    ``test_every_workflow_declares_on_permissions_and_concurrency`` already
+    asserts each file declares one, while this test's own deny-all assertion
+    fires first for ``zizmor.yml``. Reachability is proved by setting
+    ``write-all`` on a workflow other than ``zizmor.yml``.
+
+    Args:
+        repo_root: The repository root, used to locate ``.github/workflows``.
+    """
+    zizmor_path = repo_root / WORKFLOWS_DIR / ZIZMOR_WORKFLOW_FILE
+    assert zizmor_path.is_file(), f"required gating file is missing: {zizmor_path}"
+
+    top_level = _load_workflow(zizmor_path).get("permissions")
+    assert isinstance(top_level, dict), (
+        f"{ZIZMOR_WORKFLOW_FILE} declares workflow-level `permissions: "
+        f"{top_level!r}` ({type(top_level).__name__}), which is not the deny-all "
+        f"`{{}}`. The empty mapping is the whole point of the convention: it denies "
+        "every scope so each job grants only what it needs, and it stops a job "
+        "added later from inheriting write access to the repository"
+    )
+    assert not top_level, (
+        f"{ZIZMOR_WORKFLOW_FILE} declares workflow-level `permissions: "
+        f"{top_level!r}` rather than the deny-all `{{}}`. Any scope named there is "
+        f"granted to every job in the file, and `{WRITE_ALL_PERMISSIONS}` in "
+        "particular hands full write access to the repository to a job added later "
+        "that nobody reviewed"
+    )
+
+    jobs = _workflow_jobs(_load_workflow(zizmor_path), zizmor_path)
+    assert ZIZMOR_JOB_ID in jobs, (
+        f"{ZIZMOR_WORKFLOW_FILE} declares no job named {ZIZMOR_JOB_ID!r} (it "
+        f"declares {sorted(jobs)}), so the per-job permissions that replace the "
+        "deny-all default cannot be checked"
+    )
+    granted = _as_mapping(
+        jobs[ZIZMOR_JOB_ID].get("permissions"),
+        f"`permissions:` of the {ZIZMOR_JOB_ID!r} job in {ZIZMOR_WORKFLOW_FILE}",
+    )
+    missing = {
+        scope: value
+        for scope, value in REQUIRED_ZIZMOR_JOB_PERMISSIONS.items()
+        if granted.get(scope) != value
+    }
+    assert not missing, (
+        f"the {ZIZMOR_JOB_ID!r} job in {ZIZMOR_WORKFLOW_FILE} does not declare "
+        f"{missing} (it declares {dict(granted)!r}). With deny-all at the workflow "
+        "level, the job-level block is the only thing granting these scopes, so "
+        "without them the SARIF upload is rejected, the run still goes green, and "
+        "the Security tab silently goes stale"
+    )
+
+    # This sweep is exhaustive over every workflow, so it cannot be vacuous:
+    # `_workflow_paths` already asserts the directory is non-empty, and
+    # `test_every_workflow_declares_on_permissions_and_concurrency` already
+    # asserts that *every* one of those files declares a `permissions` key. An
+    # anti-vacuity counter here would therefore be dead code -- the only way to
+    # empty it is to drop the key from every file, which trips that sibling
+    # test first.
+    write_all: list[str] = []
+    for path in _workflow_paths(repo_root):
+        data = _load_workflow(path)
+        if data.get("permissions") == WRITE_ALL_PERMISSIONS:
+            write_all.append(str(path.relative_to(repo_root)))
+    assert not write_all, (
+        f"{write_all} declare a workflow-level `permissions: "
+        f"{WRITE_ALL_PERMISSIONS}`. That grants every scope to every job in the "
+        "file, so a job added later inherits full write access to the repository "
+        "without anyone reviewing the grant. Use `permissions: {}` and declare "
+        "only the scopes each job needs"
+    )
+
+
+def test_privileged_triggers_never_check_out_code(repo_root: Path) -> None:
+    """Assert write-token triggers are paired with an explicit audit marker.
+
+    ``pull_request_target`` and ``workflow_run`` both run with a write token
+    against code an attacker can influence: the first against the contents of a
+    pull request, the second against whatever the named upstream workflow
+    produced. They are safe only while untrusted code is never executed, which
+    means never checked out, never built, and never tested. A single checkout
+    plus a build step in such a workflow is remote code execution with a push
+    token, and it produces no visible symptom until the push lands.
+
+    The `# zizmor: ignore[dangerous-triggers]` comment is the audit trail. It is
+    asserted against the raw line because parsing discards it, and because the
+    comment is what forces a reviewer to read this exact reasoning before adding
+    a step -- the finding zizmor raises is the thing the comment has to answer
+    for, so dropping the comment drops the record of having answered it.
+
+    This is defence in depth for the dependabot auto-merge workflow being added
+    next, which also contains no checkout.
+
+    Args:
+        repo_root: The repository root, used to locate ``.github/workflows``.
+    """
+    assignee = repo_root / WORKFLOWS_DIR / DEFAULT_ASSIGNEE_WORKFLOW_FILE
+    assert assignee.is_file(), f"required gating file is missing: {assignee}"
+    assert not _checkout_sites(_load_workflow(assignee), assignee), (
+        f"{DEFAULT_ASSIGNEE_WORKFLOW_FILE} contains an `{CHECKOUT_ACTION}` step at "
+        f"{_checkout_sites(_load_workflow(assignee), assignee)}. That file runs on "
+        "`pull_request_target` and `workflow_run`, both of which carry a write "
+        "token against attacker-influenceable code. Checking it out hands the "
+        "contents of a pull request to a job that can push, and any build or test "
+        "step after the checkout executes it"
+    )
+
+    seen: set[str] = set()
+    privileged_checkout: list[str] = []
+    uncommented: list[str] = []
+    for path in _workflow_paths(repo_root):
+        data = _load_workflow(path)
+        declared = _trigger_keys(data) & DANGEROUS_TRIGGERS
+        seen |= declared
+        if not declared:
+            continue
+        relative = str(path.relative_to(repo_root))
+        privileged_checkout.extend(
+            f"{site} ({relative})" for site in _checkout_sites(data, path)
+        )
+        source = _trigger_source_lines(path, declared)
+        uncommented.extend(
+            f"{relative}: {name!r} declared as {source.get(name, '<not found>')!r}"
+            for name in sorted(declared)
+            if ZIZMOR_DANGEROUS_TRIGGERS_COMMENT not in source.get(name, "")
+        )
+
+    assert seen, (
+        f"no workflow under {WORKFLOWS_DIR} declares any of "
+        f"{sorted(DANGEROUS_TRIGGERS)}, so this scan is inspecting nothing. Those "
+        "are the only two events that run with a write token against code an "
+        "attacker can influence, and the rules the no-checkout assertion and the "
+        "comment requirement enforce are exactly the ones that keep them safe"
+    )
+    assert not privileged_checkout, (
+        "workflows that combine a write-token trigger with a working-tree checkout:\n"
+        + "\n".join(privileged_checkout)
+        + "\nRemove the checkout. A checkout in a `pull_request_target` or "
+        "`workflow_run` workflow places attacker-influenceable code on a runner "
+        "holding a write token, and any later build or test step executes it"
+    )
+    assert not uncommented, (
+        "privileged trigger keys with no audit comment on the same line:\n"
+        + "\n".join(uncommented)
+        + f"\nEach must carry `# {ZIZMOR_DANGEROUS_TRIGGERS_COMMENT}` so the "
+        "deliberate, reviewed decision to run with a write token against "
+        "untrusted input stays legible in the diff. zizmor's `dangerous-triggers` "
+        "audit flags exactly these events, and the comment is the record of having "
+        "answered it"
+    )
+
+
+def test_codeql_covers_python_and_the_workflows(repo_root: Path) -> None:
+    """Assert CodeQL analyses both Python and the workflow files themselves.
+
+    Without the ``actions`` language the ``.github/workflows/*.yml`` files are
+    never scanned, and in this repository they are the highest-value attack
+    surface available: ``default-assignee.yml`` runs with a write token on a
+    privileged trigger, so an injected action ref or a shell injection in that
+    file is worth more than anything in ``src/``. The matrix is therefore
+    asserted as exactly ``{python, actions}`` -- a set comparison, so a fourth
+    language is as much a failure as a missing one, because an unasserted entry
+    is an unreviewed one.
+
+    ``queries: security-extended`` is the same argument one level down:
+    ``security-and-quality`` is CodeQL's *default* suite, so leaving ``queries:``
+    unset looks like a deliberate choice while silently running the weaker
+    configuration. Asserting the literal, rather than merely asserting the key
+    exists, is what makes the default an error.
+
+    Args:
+        repo_root: The repository root, used to locate ``.github/workflows``.
+    """
+    codeql_path = repo_root / WORKFLOWS_DIR / CODEQL_WORKFLOW_FILE
+    assert codeql_path.is_file(), f"required gating file is missing: {codeql_path}"
+
+    data = _load_workflow(codeql_path)
+    languages = _matrix_languages(data, codeql_path)
+    assert languages, (
+        f"{CODEQL_WORKFLOW_FILE} declares no `strategy.matrix.include` entry with a "
+        "`language:` key, so this scan is inspecting nothing and a matrix that "
+        "silently stopped analysing anything would pass"
+    )
+    assert languages == REQUIRED_CODEQL_LANGUAGES, (
+        f"{CODEQL_WORKFLOW_FILE} analyses {sorted(languages)}, expected exactly "
+        f"{sorted(REQUIRED_CODEQL_LANGUAGES)}. Without `actions` the workflow files "
+        "are unscanned, and here they are the highest-value target because a "
+        "privileged write-token workflow lives in that directory"
+    )
+
+    suites = _init_query_suites(data, codeql_path)
+    assert suites, (
+        f"no `{CODEQL_INIT_ACTION}` step in {CODEQL_WORKFLOW_FILE} sets `queries:` "
+        "in its `with:` block, so the analysis runs on CodeQL's default suite. "
+        f"The default is `security-and-quality`, which is weaker than "
+        f"`{REQUIRED_CODEQL_QUERY_SUITE}` and does not satisfy this contract"
+    )
+    wrong = [repr(suite) for suite in suites if suite != REQUIRED_CODEQL_QUERY_SUITE]
+    assert not wrong, (
+        f"{CODEQL_WORKFLOW_FILE} sets `queries: {wrong}` but the required suite is "
+        f"`{REQUIRED_CODEQL_QUERY_SUITE}`. `security-and-quality` is CodeQL's "
+        "default suite, so falling back to it looks like a deliberate narrower "
+        "choice while actually just being the unset default"
     )

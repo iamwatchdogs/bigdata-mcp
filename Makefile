@@ -86,7 +86,30 @@ test: ## Full pytest suite (coverage + xdist via pyproject addopts)
 	$(RUN) pytest
 
 testmon: ## pytest-testmon on changed files (mirrors pytest-testmon hook)
-	$(RUN) pytest --testmon --no-cov
+	@# `--no-cov`: testmon runs a subset, so a coverage percentage over it is
+	@# not a meaningful number, and selecting zero tests yields 0% which would
+	@# trip `fail_under`. The floor is enforced by `make test`.
+	@# `--dist=loadfile`: keeps every test from one file on one worker, so a
+	@# worker never has to aggregate another worker's data.
+	@#
+	@# with_testmon_lock.py is a correctness guard, not decoration. The
+	@# pytest-testmon DB layer (testmon/db.py) decides whether its datafile
+	@# exists BEFORE it may delete and recreate that file to reset a stale
+	@# schema version. Two processes starting cold therefore both believe they
+	@# are the first and both run init_tables() against the same sqlite file.
+	@# The loser dies with "table metadata already exists", or with "disk I/O
+	@# error" while the winner holds an exclusive WAL lock.
+	@#
+	@# That was not hypothetical: `prek run --all-files` dispatches this hook
+	@# concurrently (measured: two invocations ~4ms apart), and a cold start
+	@# failed 8/8 before the lock existed, while a single `uv run pytest
+	@# --testmon` never failed. `make clean` removes .testmondata, which
+	@# reproduces it on demand.
+	@#
+	@# The lock must be held for the WHOLE run and acquired before the first
+	@# sqlite connection. Locking only around the pytest call is not enough --
+	@# both processes had already opened the database by that point.
+	@$(RUN) python scripts/with_testmon_lock.py $(RUN) pytest --testmon --no-cov --dist=loadfile
 
 coverage: ## Print terminal coverage report from last test run
 	$(RUN) coverage report
@@ -138,6 +161,9 @@ binary: ## Build standalone binary with pyinstaller
 clean: ## Remove caches, coverage data and build artifacts
 	rm -rf build dist .pytest_cache .ruff_cache .mypy_cache \
 	       .complexipy_cache htmlcov .coverage .testmondata *.egg-info
+	# The -wal and -shm sidecars must go with .testmondata. Leaving them behind
+	# makes sqlite replay them into a fresh db on the next run.
+	rm -f .testmondata-wal .testmondata-shm
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
 
 clean-all: clean ## clean + delete .venv

@@ -117,6 +117,12 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["unused-import", "undocumented-public-package"]
 "tests/**/*.py" = ["assert", "D", "ANN", "ARG"]
+# Executable tooling, not a library: it is invoked by `make` and by the
+# pre-commit hook, so a __main__ guard and a `print`-based usage message are
+# correct here rather than violations. T20 (no print) and INP (no implicit
+# namespace package) do not apply to a script run directly by path.
+# S404/S603 are suppressed at the call site, where the argument list is fixed.
+"scripts/**/*.py" = ["T20", "INP"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

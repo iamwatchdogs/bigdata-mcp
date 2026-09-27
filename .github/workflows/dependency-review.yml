@@ -1,0 +1,49 @@
+# Fails a pull request that introduces a dependency with a known
+# vulnerability. This runs on every PR rather than on a schedule, because the
+# window where a bad dependency is merged is the moment it matters.
+#
+# Only blocks merging if this check is required in the branch ruleset. Without
+# the ruleset entry it is advisory only, which is still useful: findings appear
+# on the PR.
+name: "Dependency review"
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Required to read the pull request's dependency diff via the API.
+      pull-requests: read
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          # Moderate and above blocks. Low and critical are deliberately
+          # *not* the whole story here: a critical finding introduced by a
+          # direct dependency is worth a human decision even when a fix
+          # requires a breaking upgrade, so low-severity noise is filtered
+          # and the policy decision stays with review.
+          fail-on-severity: moderate
+          # The advisory database snapshots can lag the pull request event, so a
+          # snapshot warning is a race rather than a finding. Retrying is
+          # correct; failing the PR for it is not.
+          retry-on-snapshot-warnings: true
