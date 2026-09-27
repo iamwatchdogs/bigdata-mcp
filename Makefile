@@ -85,7 +85,7 @@ test: ## Full pytest suite (coverage + xdist via pyproject addopts)
 	$(RUN) pytest
 
 testmon: ## pytest-testmon on changed files (mirrors pytest-testmon hook)
-	$(RUN) pytest --testmon --cov=bigdata_mcp
+	$(RUN) pytest --testmon --no-cov
 
 coverage: ## Print terminal coverage report from last test run
 	$(RUN) coverage report

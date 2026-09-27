@@ -133,3 +133,23 @@ max-statements = 50
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "--cov=bigdata_mcp --cov-report=term-missing -v -n auto"
+
+# ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+# Branch coverage, not just line coverage. A function whose every line runs but
+# whose only `if` is never taken reports as fully covered while the untaken
+# path is entirely unverified.
+branch = true
+
+[tool.coverage.report]
+# Floor, not a target. Set once the entry point is genuinely covered so the
+# gate is live from day one rather than rubber-stamped at 0%.
+# Ratchet policy: raise toward 90 as the MCP server implementation lands, and
+# never lower this to make a failing run pass — fix the missing test instead.
+fail_under = 80
+show_missing = true
+# `src` is on sys.path via pytest's `pythonpath`, and the `__main__` guard is
+# exercised by runpy in tests/test_main.py, so nothing needs excluding to make
+# the numbers honest.

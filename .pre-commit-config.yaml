@@ -87,7 +87,14 @@ repos:
     hooks:
       - id: pytest-testmon
         name: pytest-testmon on changed Python files
-        entry: uv run pytest --testmon --cov=bigdata_mcp
+        # `--no-cov` is deliberate and load-bearing. testmon runs a *subset* of
+        # the suite, so a coverage percentage over that subset is not a
+        # meaningful number -- and when testmon selects nothing at all, coverage
+        # is 0%, which made `[tool.coverage.report] fail_under` fail the commit
+        # hook for a reason that has nothing to do with the code under review.
+        # The coverage floor is enforced by the full suite instead: `make test`
+        # locally, and the pytest invocation in the CI matrix.
+        entry: uv run pytest --testmon --no-cov
         language: system
         files: ^(tests|src)/.*\.py$
         types: [python]
