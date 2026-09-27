@@ -1,0 +1,123 @@
+default_language_version:
+  python: python3.14
+
+# Install shims for both stages: fast checks gate every commit, the security
+# gate (zizmor / osv-scanner / gitleaks) runs once per push.
+default_install_hook_types: [pre-commit, pre-push]
+
+# Hooks without an explicit `stages:` run at commit time only, so the security
+# hooks below never slow down routine commits.
+default_stages: [pre-commit]
+
+exclude: ^(build|dist|\.eggs|\.git|\.hg|\.tox|\.venv|_build|buck-out)$
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.9
+    hooks:
+      - id: ruff-check
+        name: "ruff lint"
+        args:
+          - --fix
+          - --exit-non-zero-on-fix
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: "ruff format"
+        types_or: [python, pyi]
+
+  - repo: local
+    hooks:
+      - id: ty
+        name: "ty type check"
+        entry: uv run ty check
+        language: system
+        pass_filenames: false
+        files: ^(src|tests)/
+
+      - id: complexipy
+        name: "complexipy complexity gate"
+        entry: uv run complexipy src --max-complexity-allowed 15
+        language: system
+        pass_filenames: false
+        files: ^src/.*\.py$
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        name: "hygiene trailing whitespace"
+      - id: end-of-file-fixer
+        name: "hygiene end of file newline"
+      - id: mixed-line-ending
+        name: "hygiene mixed line endings"
+        args: [--fix=lf]
+
+      - id: check-yaml
+        name: "hygiene validate YAML"
+      - id: check-toml
+        name: "hygiene validate TOML"
+      - id: check-json
+        name: "hygiene validate JSON"
+
+      - id: check-ast
+        name: "hygiene validate Python AST"
+      - id: debug-statements
+        name: "hygiene block debug statements"
+      - id: check-builtin-literals
+        name: "hygiene literal builtins"
+
+      - id: check-merge-conflict
+        name: "hygiene merge conflict markers"
+      - id: detect-private-key
+        name: "security block private keys (commit time)"
+      - id: check-added-large-files
+        name: "hygiene large file guard"
+        args: [--maxkb=500]
+      - id: no-commit-to-branch
+        name: "hygiene protect main branch"
+        args: [--branch, main]
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+        name: "lint github actions workflows"
+
+  - repo: local
+    hooks:
+      - id: pytest-testmon
+        name: pytest-testmon on changed Python files
+        entry: uv run pytest --testmon --cov=bigdata_mcp
+        language: system
+        files: ^(tests|src)/.*\.py$
+        types: [python]
+
+  # ---------------------------------------------------------------------------
+  # Security gate — pre-push stage. Local replicas of the CI security
+  # workflows so insecure code never leaves the machine
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.30.1
+    hooks:
+      - id: zizmor
+        name: "security zizmor (actions SAST)"
+        args: [--min-severity=medium]  # block on actionable findings; CI upload stays advisory
+        stages: [pre-push]
+
+  - repo: https://github.com/google/osv-scanner
+    rev: v2.6.0
+    hooks:
+      - id: osv-scanner
+        name: "security osv-scanner (dependency review)"
+        stages: [pre-push]
+
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: "security gitleaks (secrets in history)"
+        entry: gitleaks git --redact --verbose
+        language: golang
+        additional_dependencies: [github.com/zricethezav/gitleaks/v8@v8.30.1]
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

@@ -1,0 +1,131 @@
+[project]
+name = "bigdata-mcp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "iamwatchdogs", email = "shamith301102@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+bigdata-mcp = "bigdata_mcp:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "complexipy>=8.0.1",
+    "pyinstaller>=6.22.3",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "pytest-testmon>=2.2.0",
+    "pytest-xdist>=3.8.0",
+    "ruff>=0.16.9",
+    "ty>=0.0.84",
+]
+
+# ---------------------------------------------------------------------------
+# ty — strict type checking
+# ---------------------------------------------------------------------------
+[tool.ty]
+rules = { all = "error" }
+
+[tool.ty.analysis]
+strict-equality-semantics = true
+strict-generic-narrowing = true
+
+[tool.ty.environment]
+python-version = "3.14"
+
+[tool.ty.terminal]
+error-on-warning = true
+
+# ---------------------------------------------------------------------------
+# ruff — strict linting + Google docstrings
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 88
+target-version = "py314"
+preview = true
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "A",      # flake8-builtins
+    "ANN",    # flake8-annotations
+    "S",      # flake8-bandit (security)
+    "BLE",    # flake8-blind-except
+    "FBT",    # flake8-boolean-trap
+    "C4",     # flake8-comprehensions
+    "C90",    # mccabe
+    "DTZ",    # flake8-datetimez
+    "T10",    # flake8-debugger
+    "EM",     # flake8-errmsg
+    "FA",     # flake8-future-annotations
+    "ICN",    # flake8-import-conventions
+    "INP",    # flake8-no-pep420
+    "LOG",    # flake8-logging
+    "G",      # flake8-logging-format
+    "PIE",    # flake8-pie
+    "T20",    # flake8-print
+    "PT",     # flake8-pytest-style
+    "PYI",    # flake8-pyi
+    "Q",      # flake8-quotes
+    "RSE",    # flake8-raise
+    "RET",    # flake8-return
+    "SLF",    # flake8-self
+    "SIM",    # flake8-simplify
+    "SLOT",   # flake8-slots
+    "TID",    # flake8-tidy-imports
+    "TC",     # flake8-type-checking
+    "ARG",    # flake8-unused-arguments
+    "PTH",    # flake8-use-pathlib
+    "TD",     # flake8-todos
+    "TRY",    # tryceratops
+    "PERF",   # perflint
+    "FURB",   # refurb
+    "RUF",    # ruff-specific rules
+    "D",      # pydocstyle
+    "DOC",    # pydoclint (args/returns match signatures)
+]
+ignore = [
+    "missing-trailing-comma",
+    "single-line-implicit-string-concatenation",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["unused-import", "undocumented-public-package"]
+"tests/**/*.py" = ["assert", "D", "ANN", "ARG"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+force-single-line = true
+known-first-party = ["bigdata_mcp"]
+
+[tool.ruff.lint.pylint]
+max-args = 5
+max-branches = 12
+max-returns = 6
+max-statements = 50
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--cov=bigdata_mcp --cov-report=term-missing -v -n auto"
