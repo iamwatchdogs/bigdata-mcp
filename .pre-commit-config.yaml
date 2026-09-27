@@ -82,6 +82,13 @@ repos:
     hooks:
       - id: actionlint
         name: "lint github actions workflows"
+        # Broadened from the hook's default (.github/workflows/**) to every YAML
+        # file that GitHub itself parses. The upstream default covers the
+        # workflow directory but not dependabot.yml, and dependabot.yml is
+        # configuration GitHub executes: a syntax error in it silently stops
+        # dependency updates. `files` is a regex over pathnames, not a glob set,
+        # so this stays cheap.
+        files: \.github/(workflows/.*|dependabot\.yml|CODEOWNERS)$
 
   - repo: local
     hooks:

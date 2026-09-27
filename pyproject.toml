@@ -23,6 +23,11 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "complexipy>=8.0.1",
+    # Dev-only, used by tests/test_repo_contracts.py to parse
+    # .github/workflows/*.yml. The contract tests only *read* workflow YAML to
+    # assert invariants (SHA pinning, required status checks, trigger shape);
+    # nothing renders it, so this never becomes a runtime dependency.
+    "pyyaml>=6.0.3",
     "pyinstaller>=6.22.3",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",

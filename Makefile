@@ -5,11 +5,12 @@
 
 .DEFAULT_GOAL := help
 
-UV   := uv
-RUN  := $(UV) run
-PREK := prek
-RUFF := $(RUN) ruff
-PY   := src tests
+UV     := uv
+RUN    := $(UV) run
+PYTHON := $(RUN) python
+PREK   := prek
+RUFF   := $(RUN) ruff
+PY     := src tests
 
 # Commit-time hygiene hooks from .pre-commit-config.yaml (pre-commit-hooks).
 # no-commit-to-branch is excluded: it guards `git commit`, not code quality.
@@ -20,8 +21,8 @@ HYGIENE := trailing-whitespace end-of-file-fixer mixed-line-ending \
 
 .PHONY: help install update lock hooks uninstall hooks-update hooks-list \
         hooks-validate lint lint-check format format-check fmt fix typecheck \
-        complexity actionlint test testmon coverage coverage-html hygiene \
-        checks security zizmor osv gitleaks verify ci run build binary \
+        complexity actionlint workflows test testmon coverage coverage-html \
+        hygiene checks security zizmor osv gitleaks verify ci run build binary \
         clean clean-all
 
 ##@ Setup
@@ -104,8 +105,12 @@ checks: ## Full pre-commit stage on all files (skips branch guard)
 security: ## Full pre-push security gate: zizmor + osv-scanner + gitleaks
 	$(PREK) run --all-files --stage pre-push
 
-zizmor: ## GitHub Actions SAST, medium+ severity (pre-push hook)
+  zizmor: ## GitHub Actions SAST, medium+ severity (pre-push hook)
 	$(PREK) run zizmor --all-files --stage pre-push
+
+  workflows: ## Parse + validate every workflow: YAML syntax and actionlint
+	$(PYTHON) -c "import sys,pathlib,yaml; [yaml.safe_load(p.read_text()) for p in sorted(pathlib.Path('.github/workflows').rglob('*.y*ml'))]; print('all workflows parse')"
+	$(PREK) run actionlint --all-files
 
 osv: ## Dependency vulnerability scan (pre-push hook)
 	$(PREK) run osv-scanner --all-files --stage pre-push
