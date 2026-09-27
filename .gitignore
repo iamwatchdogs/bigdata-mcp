@@ -234,3 +234,20 @@ __marimo__/
 
 # Agent skills
 .agents/skills/
+
+# Council run artifacts (generated, not source).
+#
+# .agents/council/*.md are the human-readable judge reports and stay tracked.
+# The extraction-candidates.jsonl scratch file is regenerated on every council
+# run and stores SHA-256 content hashes in a field named `dedup_key`. gitleaks'
+# generic-api-key rule matches on the substring "key" in the field name and a
+# 64-char hex value clears its entropy threshold, so every line is a false
+# positive. The pre-push gitleaks hook scans the FULL git history rather than
+# the working tree, so committing this file once leaves `make verify` red until
+# history is rewritten. Keep it untracked.
+#
+# Caveat: this protection covers `gitleaks git` only. A working-tree scan
+# (`gitleaks dir`) does not honour .gitignore, so adopting one later would need
+# a scoped .gitleaks.toml instead. See docs/specs/ and the failure ledger in
+# AGENTS.md.
+.agents/council/*.jsonl
