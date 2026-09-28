@@ -34,19 +34,42 @@
 # the real gate is the required status check plus the auto-merge policy's own
 # allow-list.
 #
-# CODE QUALITY AND COVERAGE RULES — TWO PREREQUISITES
-# `code_quality` blocks on unresolved findings from GitHub Code Quality. It is
-# inert unless that product is enabled for the repository; the API reports
-# "Code quality is not available for this repository" until it is. Unlike the
-# `code_scanning` rule, which keys on CodeQL alerts, this rule also covers
-# findings uploaded by any other code-quality tool, including zizmor -- so the
-# severity chosen here decides whether a zizmor warning blocks a merge.
+# WHY THERE IS NO `code_quality` OR `code_coverage` RULE
 #
-# `code_coverage` evaluates GitHub's BUILT-IN coverage data, not Codecov. It
-# requires `actions/upload-code-coverage` to publish a Cobertura report; without
-# that upload the rule has no data to evaluate. The thresholds below are line
-# coverage, matching `[tool.coverage.report] fail_under` in pyproject.toml, so
-# one number is enforced locally and one by the ruleset.
+# Both were removed deliberately, and the reason is that this repository cannot
+# evaluate either one. Measured against the live API, not inferred:
+#
+#   GET /repos/OWNER/REPO/code-coverage                                -> 404
+#   GET /repos/OWNER/REPO/code-quality/scanning/code_quality_defaults  -> 404
+#   actions/upload-code-coverage on a pull_request                      -> HTTP 404
+#
+# The commit-scoped route is not merely empty, it is not matched: the API folds
+# "/code-coverage" into the ref and reports `No commit found for SHA:
+# main/code-coverage`. The commit itself resolves, so this is the feature and
+# not the ref. Both products are unavailable on this repository, so both rules
+# were configuration that LOOKED enforced and enforced nothing -- the precise
+# failure mode a ruleset is supposed to prevent, and the reason
+# `test_ruleset_declares_no_unevaluable_gate` now exists.
+#
+# Nothing is lost by removing them, because both intents are already enforced by
+# mechanisms that demonstrably work on this repository:
+#
+#   coverage  `[tool.coverage.report] fail_under = 80` in pyproject.toml. A
+#             run below the floor exits 1, which fails the ubuntu matrix cell,
+#             which fails the `CI Status` check this ruleset REQUIRES. Verified:
+#             a subset run covering 0% exits 1; the full suite exits 0. So the
+#             floor bites before merge, on every pull request, without any
+#             GitHub-side coverage product.
+#
+#   security  the `code_scanning` rule above, keyed on CodeQL alerts, which runs
+#             on this repository and publishes real alerts.
+#
+# If GitHub later makes the code-coverage product available for this repository,
+# re-adding a `code_coverage` rule is a small change: verify the API answers 200
+# first, confirm `actions/upload-code-coverage` succeeds on a pull request, then
+# add the rule and delete the corresponding exemption in the contract test. Do
+# not add either rule back on the strength of this file alone -- the file records
+# why they are absent, not that they are harmless to restore.
 #
 # Run `make ruleset` to print, or `make ruleset-apply` to apply. Applying needs
 # `gh` authenticated with admin scope on the repository.
@@ -146,19 +169,6 @@ PAYLOAD_BODY() {
             "security_alerts_threshold": "high_or_higher"
           }
         ]
-      }
-    },
-    {
-      "type": "code_quality",
-      "parameters": {
-        "severity": "errors"
-      }
-    },
-    {
-      "type": "code_coverage",
-      "parameters": {
-        "minimum_coverage": 80.0,
-        "max_coverage_drop": 5.0
       }
     }
   ]

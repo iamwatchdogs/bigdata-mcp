@@ -3972,6 +3972,87 @@ PR_TEMPLATE_AUTO_APPLIED_PATHS = (
 )
 
 
+# Rules that key on a GitHub code-quality or code-coverage product. Both APIs
+# answer 404 for this repository, so a ruleset rule of either type is
+# configuration that looks enforced and enforces nothing.
+UNEVALUABLE_RULESET_RULE_TYPES = frozenset({"code_coverage", "code_quality"})
+
+
+def test_ruleset_declares_no_unevaluable_gate(
+    repo_root: Path,
+) -> None:
+    """Assert the ruleset declares no gate this repository cannot evaluate.
+
+    ``code_quality`` and ``code_coverage`` were both declared here, and both
+    enforced nothing: ``GET /repos/OWNER/REPO/code-coverage`` answers 404, as
+    does the code-quality defaults endpoint, and ``actions/upload-code-coverage``
+    fails with HTTP 404 on a pull request. The commit-scoped route is not
+    matched at all -- the API folds ``/code-coverage`` into the ref and reports
+    ``No commit found for SHA: main/code-coverage`` -- while the commit itself
+    resolves, so this is the feature and not the ref.
+
+    A rule that cannot evaluate is worse than an absent one, because the
+    repository reports a gated default branch while nothing is gated. That is
+    the same defect class as a required status check no workflow ever
+    publishes, which is already asserted elsewhere in this module.
+
+    The exemption list below is the escape hatch: if GitHub makes the product
+    available, verify the API answers 200 and that the upload succeeds on a
+    pull request BEFORE removing the type from
+    ``UNEVALUABLE_RULESET_RULE_TYPES``, so the exemption records the evidence
+    rather than erasing the finding.
+    """
+    payload = _ruleset_payload(repo_root)
+    rules = payload.get("rules")
+    assert isinstance(rules, list), f"the ruleset declares `rules: {rules!r}`"
+
+    unevaluable = sorted(
+        str(rule.get("type"))
+        for rule in rules
+        if isinstance(rule, dict) and rule.get("type") in UNEVALUABLE_RULESET_RULE_TYPES
+    )
+    assert not unevaluable, (
+        f"{RULESET_SCRIPT} declares {unevaluable}, which this repository "
+        "cannot evaluate: both the code-coverage and code-quality APIs answer "
+        "404 here, so the ruleset would report a gated default branch while "
+        "gating nothing. Their intents are already enforced by mechanisms that "
+        "do work -- coverage by `fail_under` failing the ubuntu cell and "
+        "therefore the required `CI Status` check, security alerts by the "
+        "`code_scanning` rule. If GitHub has since made the product available, "
+        "verify the API returns 200 and that `actions/upload-code-coverage` "
+        "succeeds on a pull request, then drop the type from "
+        "UNEVALUABLE_RULESET_RULE_TYPES with that evidence in the commit"
+    )
+
+    # The substitute gates must be present, or removing the dead rules would
+    # have left coverage enforced by nothing at all.
+    declared = {str(rule.get("type")) for rule in rules if isinstance(rule, dict)}
+    assert "code_scanning" in declared, (
+        "the ruleset no longer declares `code_scanning`, so unresolved CodeQL "
+        "alerts would not block a merge. That rule does work on this "
+        "repository and is the real substitute for the removed `code_quality`"
+    )
+    contexts = _ruleset_required_status_checks(payload)
+    assert REQUIRED_STATUS_CHECK_NAME in contexts, (
+        f"the ruleset requires status check(s) {contexts} but not "
+        f"{REQUIRED_STATUS_CHECK_NAME!r}. Coverage is enforced only indirectly: "
+        "`fail_under` fails the ubuntu matrix cell, and that cell is covered by "
+        "`CI Status`. Without the required check the coverage floor would fail "
+        "a job nobody is obliged to pass"
+    )
+
+    manifest_path = repo_root / PYPROJECT_MANIFEST
+    assert manifest_path.is_file(), f"required file is missing: {manifest_path}"
+    manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+    report = manifest.get("tool", {}).get("coverage", {}).get("report", {})
+    assert report.get("fail_under") == 80, (
+        f"pyproject.toml declares `fail_under: "
+        f"{report.get('fail_under')!r}`. This is the coverage gate that replaced "
+        "the `code_coverage` ruleset rule, so removing the floor would leave "
+        "coverage enforced by nothing at all"
+    )
+
+
 def test_default_pull_request_template_is_auto_applied(
     repo_root: Path,
 ) -> None:

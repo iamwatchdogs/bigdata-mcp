@@ -71,15 +71,33 @@ Two decisions this changed, recorded because they are not obvious from the files
   arguments, so those assertions would be vacuous. `tests/test_main.py` exercises
   the `__main__` guard, which is what gives the exit-0 assertion meaning. The
   smoke test should grow a `--version` flag once the CLI does.
-- **Coverage is generated on one matrix cell, and published on two systems.** The
-  floor is `fail_under = 80` in `pyproject.toml`, so every cell enforces it.
-  Only the canonical cell (linux + 3.14) generates a report, so three numbers
-  never race one Codecov project. Publication differs by consumer: Codecov
-  receives it for history and trends, while GitHub's built-in coverage receives
-  it for the `code_coverage` ruleset rule, which needs the **pull-request
-  branch** as well as the default branch to compare. Restricting the native
-  upload to pushes to `main` — the first attempt — left that rule permanently
-  inert while looking configured.
+- **Coverage is generated on one matrix cell, and enforced by pytest, not by a
+  ruleset rule.** The floor is `fail_under = 80` in `pyproject.toml`. A run below
+  it exits 1, failing the ubuntu cell, which fails `CI Status`, which the ruleset
+  requires — measured, not assumed: a subset run at 0% coverage exits 1, the
+  full suite exits 0. Only the canonical cell (linux + 3.14) generates a report,
+  so three numbers never race one Codecov project.
+
+  Two earlier attempts to gate this from the GitHub side are worth recording,
+  because both looked right:
+
+  1. The native upload was restricted to pushes to `main`, so no pull request
+     ever published a report. The `code_coverage` ruleset rule compares the
+     pull-request branch against the default branch, so with only the default
+     branch reporting it had nothing to compare. Widening the upload to
+     same-repository pull requests fixed that half.
+  2. Then the upload itself failed with HTTP 404, because GitHub's code-coverage
+     product is not available on this repository: `/code-coverage` and
+     `/code-quality/scanning/code_quality_defaults` both answer 404, and the
+     commit-scoped route is not even matched. The `code_coverage` and
+     `code_quality` rules were therefore removed rather than left in place
+     enforcing nothing, and `test_ruleset_declares_no_unevaluable_gate` now
+     keeps them out. Codecov remains the historical record; the merge gate is
+     the pytest floor.
+
+  The lesson is the one this ledger keeps hitting: a rule that cannot evaluate
+  is worse than an absent one, because the repository reports a gated default
+  branch while gating nothing.
 
 **Not a research decision:** the tooling, hook, and workflow conventions live in
 `AGENTS.md` and the commit history, not here. This ledger tracks decisions about
