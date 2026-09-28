@@ -101,11 +101,11 @@ claim rather than re-deriving it.
 - **The entry point has no CLI surface yet.** `main()` takes no arguments, so a
   `--help` / `--version` smoke test would be vacuous. The release smoke test
   asserts exit code 0 only, and `tests/test_main.py` is what gives that meaning.
-- **The ruleset must not require a check context the repo never emits.** CodeQL's
+- **The ruleset must not require a check context the repo never emits.** (Escape hatch: state the exception and its compensating check in the commit body.) CodeQL's
   contexts are its matrix-expanded job names `Analyze (python)` and
   `Analyze (actions)`, not `CodeQL`. A context named `CodeQL` goes unsatisfied
   and wedges every merge. `iamwatchdogs/learning-hog` carries
-  exactly that defect. CodeQL is gated by the `code_scanning` rule instead. (Escape hatch: state the exception and its compensating check in the commit body.)
+  exactly that defect. CodeQL is gated by the `code_scanning` rule instead.
 - **`.github/dependabot.yml` is not an Actions workflow.** actionlint rejects its
   top-level `updates:` key. It is covered by `check-yaml` and the contract tests.
 
