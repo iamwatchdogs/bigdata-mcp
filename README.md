@@ -53,11 +53,19 @@ does nothing.
 
 The pre-push stage is a deliberate local replica of the CI security workflows, so
 insecure code never leaves the machine. `gitleaks` is the one gate with no CI
-equivalent, because it scans history rather than a diff.
+equivalent, because it scans history rather than a diff — which also means it is
+**local-only**: nothing enforces it on the server, and a secret that reaches
+`main` through a path you did not push from is only caught if you ran it yourself.
 
 ```bash
-make verify     # the commit stage plus the security gate; this is what CI gates on
+make verify     # commit stage + security gate locally; CI runs its own subset
 ```
+
+CI does not gate on everything `make verify` does. It runs the Python matrix,
+`actionlint`, `zizmor`, `osv-scanner`, the dependency review, Scorecard, CodeQL,
+and the coverage upload; it has no full-history `gitleaks` step. The practical
+consequence is that `make verify` passing is necessary but not sufficient for a
+green PR, and a green PR is not proof that history is clean.
 
 `make actionlint` lints `.github/workflows/`. It is a real gate, not decoration:
 `actionlint` shells out to `shellcheck` on every `run:` block.
