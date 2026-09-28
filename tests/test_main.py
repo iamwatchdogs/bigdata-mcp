@@ -153,12 +153,13 @@ def test_entry_point_is_callable_and_returns_none() -> None:
     ``sys.exit(main())`` turns the return value into the process exit status, so
     a non-``None`` return would silently turn a healthy run into a failing one.
     """
-    # The Bandit suppression marker below is deliberately ID-less. Codacy reports
-    # this line for "assigning the result of a function that has no return", but
-    # that check does not exist in the Bandit this repository runs (1.9.4 has no
-    # such plugin), and naming an ID Bandit does not know prints a warning on
-    # every single run. An ID-less marker is version-independent, and the line
-    # does exactly one thing, so blanket suppression on it carries little risk.
+    # The Bandit suppression marker below is deliberately ID-less. A third-party
+    # analyser reports this line for "assigning the result of a function that has
+    # no return", but that check does not exist in the Bandit this repository
+    # runs (1.9.4 has no such plugin), and naming an ID Bandit does not know
+    # prints a warning on every single run. An ID-less marker is
+    # version-independent, and the line does exactly one thing, so blanket
+    # suppression on it carries little risk.
     #
     # The check is a false positive regardless: it reads main()'s `-> None`
     # annotation as a guarantee, and an annotation is not enforced at runtime.

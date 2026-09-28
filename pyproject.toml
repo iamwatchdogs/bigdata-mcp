@@ -168,10 +168,10 @@ show_missing = true
 # the numbers honest.
 
 [tool.bandit]
-# Bandit is the Python security analyser. Codacy runs it on every pull request,
-# which made it advisory rather than enforced: nothing in this repository failed
-# on a Bandit finding. This gate makes the same class of finding a local,
-# fail-closed check.
+# Bandit is the Python security analyser. Codacy reported it on every pull
+# request as an advisory finding that nothing failed on, and its configuration
+# has since been removed from this repository, so the signal is third-party
+# again. This gate makes the same class of finding local and fail-closed.
 #
 # Each skip is here because it fires on correct code in THIS repository, and
 # each is asserted by `test_bandit_skip_list_is_exactly_the_reviewed_set`, so

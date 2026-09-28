@@ -323,23 +323,26 @@ name on the same finding. The suppression markers are back at both call sites,
 the reasoning is at each one, and `B602` — the check that catches a real
 `shell=True` injection — is enabled and unskipped everywhere.
 
-**How it was finally cleared, and why four earlier attempts missed.** Codacy's
-own documentation says two things that were not known when the attempts were made:
+**How it was cleared, and why four earlier attempts missed.** Codacy's own
+documentation says two things that were not known when the attempts were made:
 the per-tool key is `engines:`, not `tools:`, and the tool name is the lowercase
 id `bandit`; and **Codacy Cloud reads the configuration file from the default
 branch**, not from a feature branch. So the earlier `.codacy.yml` on this branch
 was the right mechanism in the wrong place, and appeared to do nothing for a
-reason that had nothing to do with the schema. The working file is
-`.codacy.yaml` at the repository root with `engines.bandit.exclude_paths`, and
-it takes effect when this branch merges.
+reason that had nothing to do with the schema. A `.codacy.yaml` at the
+repository root with `engines.bandit.exclude_paths` was then verified as the
+working form.
 
-That lever is path-based, so it is blunt: an excluded file stops being analysed
-entirely, not just for the one check. It is therefore pinned to exactly two files
-by `test_codacy_config_excludes_exactly_the_two_process_spawners`, and what it
-gives up is compensated by the local `make bandit` gate, which still analyses
-both files on every commit and push with `B602` enabled. Removing a file from
-that list would make Codacy quieter, not the repository safer, and the test says
-so.
+**That file has since been removed, deliberately.** It was found to be
+path-based and therefore blunt: an excluded file stops being analysed entirely
+by that engine, not just for the one check, so two files stopped being Bandit
+analysed to silence two findings. The alternative — a dashboard setting, which
+is per-finding rather than per-file — is available and costs nothing to keep
+open. Removing the file also removes the need to pin its exclusion list, and the
+test that did that pinning is gone with it. The local `make bandit` gate still
+analyses both files on every commit and push with `B602` — the check that
+catches a real `shell=True` injection — enabled and unskipped, so the
+compensating control was never the Codacy config to begin with.
 
 A note on verification, because it nearly produced a false pass: bandit is no
 longer a project dependency, so `uv run bandit` fails to spawn, and two earlier

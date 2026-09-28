@@ -240,7 +240,6 @@ COUNCIL_ARTIFACT = Path(".agents/council/extraction-candidates.jsonl")
 # demand a comment silencing an audit that never fires.
 DANGEROUS_TRIGGERS = frozenset({"pull_request_target", "workflow_run"})
 DEFAULT_ASSIGNEE_WORKFLOW_FILE = "default-assignee.yml"
-CODACY_CONFIG = Path(".codacy.yaml")
 DEFAULT_PR_TEMPLATE = Path(".github/pull_request_template.md")
 DEPENDABOT_CONFIG = Path(".github/dependabot.yml")
 ELIGIBLE_FALSE_ASSIGNMENT = "eligible=false"
@@ -4061,61 +4060,6 @@ EXPECTED_RULESET_RULE_TYPES = frozenset({
     "code_scanning",
     "copilot_code_review",
 })
-
-
-# The only paths excluded from Bandit on Codacy Cloud, and why each is there.
-# Pinned so the exclusion cannot widen: every file added here stops being
-# analysed by Codacy's Bandit, silently.
-EXPECTED_CODACY_BANDIT_EXCLUSIONS = frozenset({
-    # Runs the caller's command under a lock: the argv IS the argument.
-    "scripts/with_testmon_lock.py",
-    # Runs a console-script probe with the repository root as its cwd.
-    "tests/test_main.py",
-})
-
-
-def test_codacy_config_excludes_exactly_the_two_process_spawners(
-    repo_root: Path,
-) -> None:
-    """Assert the Codacy Bandit exclusion list is exactly two named files.
-
-    Bandit's ``B603`` fires on any ``subprocess`` call whose argv is not a
-    compile-time constant, so it fires on the safe form, and Codacy Cloud honours
-    neither this repository's ``[tool.bandit]`` skip list nor an inline ``# nosec``
-    marker. The only documented lever left is a per-engine ``exclude_paths``,
-    which is path-based and therefore blunt: everything in an excluded file stops
-    being analysed, not just the one check.
-
-    That is why the list is pinned to exactly two files, each with a documented
-    reason. Compensating for the loss: the local ``make bandit`` gate still
-    analyses both files on every commit and push, with ``B602`` — the check that
-    catches a real ``shell=True`` injection — enabled and unskipped, so removing
-    a file from this list would make Codacy quieter, not the repository safer.
-
-    A failure here is a review signal: a third excluded file means three files
-    are no longer being checked by Codacy, and nothing else would say so.
-    """
-    config_path = repo_root / CODACY_CONFIG
-    assert config_path.is_file(), (
-        f"required file is missing: {config_path}. Without it Codacy reports the "
-        "two process-spawning call sites on every pull request"
-    )
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    engines = config.get("engines", {}) if isinstance(config, dict) else {}
-    assert "bandit" in engines, (
-        f"{CODACY_CONFIG} has no `engines.bandit` section, so Bandit is analysed "
-        "with no exclusions. The key is `engines`, not `tools`, and the tool name "
-        "is lowercase `bandit`; an earlier revision used `tools.bandit."
-        "skip-checks` and was silently ignored"
-    )
-    declared = frozenset(engines["bandit"].get("exclude_paths", []))
-    assert declared == EXPECTED_CODACY_BANDIT_EXCLUSIONS, (
-        f"{CODACY_CONFIG} excludes {sorted(declared)} from Bandit, expected "
-        f"exactly {sorted(EXPECTED_CODACY_BANDIT_EXCLUSIONS)}. Each excluded "
-        "file stops being analysed by Codacy entirely, not just for the one "
-        "check that fires on it, so widening this list is a change to what the "
-        "project is checked by and not a formatting one"
-    )
 
 
 def test_apply_script_refuses_to_silently_drop_a_live_rule(

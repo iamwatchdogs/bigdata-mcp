@@ -111,9 +111,10 @@ repos:
 
       - id: bandit
         name: "security bandit (python security analysis)"
-        # Codacy runs Bandit on every pull request, which made its findings
-        # advisory: nothing in this repository failed on one. This makes the
-        # same class of finding fail closed locally and in the pre-push stage.
+        # Codacy reported Bandit on every pull request as an advisory finding
+        # that nothing failed on, and its config has since been removed from
+        # this repository. This makes the same class of finding fail closed
+        # locally and in the pre-push stage.
         #
         # The skip list lives in `[tool.bandit]` in pyproject.toml, where each
         # entry carries its own justification, and
@@ -125,11 +126,11 @@ repos:
         # as a project dev-dependency. That is not a packaging preference: as a
         # dev-dependency it lands in uv.lock, and uv writes each sdist and wheel
         # record as a single line, so a package with a long name or URL pushes
-        # those lines past any line-length limit and Codacy reports E501 on a
-        # file that must never be hand-edited to satisfy a linter. The gate is
-        # worth having and the lock file is worth not churning, so the tool goes
-        # where the tool belongs. Pinned to an exact version for the same reason
-        # every other hook revision in this file is.
+        # those lines past the line-length limit that the third-party analysers
+        # enforce on a file that must never be hand-edited to satisfy a linter.
+        # The gate is worth having and the lock file is worth not churning, so
+        # the tool goes where the tool belongs. Pinned to an exact version for
+        # the same reason every other hook revision in this file is.
         entry: bandit -q -r src scripts tests -c pyproject.toml
         language: python
         additional_dependencies: ["bandit==1.9.4"]
@@ -145,9 +146,8 @@ repos:
         # linted by nothing: an unquoted-expansion or quoting bug in it passed
         # `make verify` green. Verified by mutation, not assumed.
         #
-        # Codacy also runs ShellCheck on this repository, so this is not new
-        # scrutiny -- it is the same check, made enforceable locally and in CI
-        # rather than advisory in a third-party dashboard.
+        # This is the same check, made enforceable locally and in CI rather than
+        # advisory in a third-party dashboard.
         entry: shellcheck
         language: system
         types: [shell]
