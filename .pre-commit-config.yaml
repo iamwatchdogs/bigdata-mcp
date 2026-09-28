@@ -167,3 +167,30 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+
+      - id: codacy
+        name: "security codacy (SAST + complexity)"
+        # `codacy-cli analyze` exits 0 in every case that matters -- clean tree,
+        # a confirmed finding, a missing config, a malformed one -- so its exit
+        # status cannot be the gate. scripts/codacy_gate.py reads the finding
+        # count out of SARIF instead, and treats an unreadable report as a
+        # failure rather than as zero findings.
+        #
+        # It is a wrapper rather than a bare `codacy-cli analyze` for two
+        # measured reasons. The analyser walks the current directory with no
+        # exclusion mechanism -- `exclude_paths` in .codacy/codacy.yaml is
+        # ignored -- so it spent 9m11s producing 860 findings that were all
+        # inside .venv, against 1m12s and 0 findings for the same config over
+        # the source trees alone. And it skips a directory named `tests`
+        # silently, which is half the first-party Python here. The gate stages
+        # the trees into a temporary directory, renaming `tests` as it goes.
+        # Its reasoning, and the measurements behind it, are in the script.
+        #
+        # Every finding fails. There is no suppression list: a baseline is what
+        # makes a security gate report the same green line while the thing it
+        # guards has changed.
+        entry: uv run python scripts/codacy_gate.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

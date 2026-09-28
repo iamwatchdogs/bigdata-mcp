@@ -22,7 +22,8 @@ HYGIENE := trailing-whitespace end-of-file-fixer mixed-line-ending \
 .PHONY: help install update lock hooks uninstall hooks-update hooks-list \
         hooks-validate lint lint-check format format-check fmt fix typecheck \
         complexity actionlint workflows test testmon coverage coverage-html \
-        hygiene checks security zizmor osv gitleaks bandit verify ci run build binary \
+        hygiene checks security zizmor osv gitleaks bandit codacy codacy-install \
+        verify ci run build binary \
         remote clean clean-all
 
 ##@ Setup
@@ -125,7 +126,7 @@ hygiene: ## Run commit-time hygiene hooks on all files
 checks: ## Full pre-commit stage on all files (skips branch guard)
 	$(PREK) run --all-files --skip no-commit-to-branch
 
-security: ## Full pre-push security gate: zizmor + osv-scanner + gitleaks
+security: ## Full pre-push security gate: zizmor + osv-scanner + gitleaks + codacy
 	$(PREK) run --all-files --stage pre-push
 
   bandit: ## Python security analysis (pre-push hook)
@@ -156,6 +157,25 @@ osv: ## Dependency vulnerability scan (pre-push hook)
 
 gitleaks: ## Secret scan over full git history (pre-push hook)
 	$(PREK) run gitleaks --stage pre-push
+
+  codacy-install: ## Fetch the Codacy analysis tools named in .codacy/codacy.yaml
+	@command -v codacy-cli >/dev/null 2>&1 || { \
+		echo "error: codacy-cli not found on PATH"; \
+		echo "       install it (macOS: brew install codacy-cli), then re-run this target"; \
+		exit 1; \
+	}
+	codacy-cli install
+
+  codacy: ## Codacy SAST + complexity, staged off .venv (pre-push hook)
+	@# Assert the tool is present rather than letting the gate report it. Same
+	@# reasoning as the shellcheck assertion in `workflows`: a gate that cannot
+	@# run must not be able to report success.
+	@command -v codacy-cli >/dev/null 2>&1 || { \
+		echo "error: codacy-cli not found on PATH; 'make codacy' would fail, and the pre-push hook with it"; \
+		echo "       install it (macOS: brew install codacy-cli) and run 'make codacy-install'"; \
+		exit 1; \
+	}
+	$(PREK) run codacy --stage pre-push
 
 verify: checks security ## Everything CI gates on: commit stage + security gate
 

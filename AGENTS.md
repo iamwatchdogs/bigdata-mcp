@@ -57,6 +57,8 @@ the full list.
 | Tests | `make test` (coverage floor 80 applies) |
 | Tests on changed files only | `make testmon` |
 | Workflow validation | `make workflows` (parse + actionlint) |
+| Codacy SAST (pre-push) | `make codacy` |
+| Fetch Codacy's analysis tools (once) | `make codacy-install` |
 | Everything CI gates on | `make verify` |
 | Build a binary | `make binary` |
 | Clean | `make clean` |
@@ -120,6 +122,26 @@ claim rather than re-deriving it.
   the general form: a check whose subject list is empty succeeds, so deleting the
   subject converts a real check into a green line. Before keeping any
   "every X is Y" test, confirm X is non-empty.
+- **`codacy-cli analyze` exits 0 no matter what.** Measured four ways: a clean
+  tree, a tree with a confirmed `subprocess(..., shell=True)`, a missing config,
+  and a malformed one all returned 0. A hook whose entry is that command is
+  therefore a permanent green line. `scripts/codacy_gate.py` reads the finding
+  count out of SARIF and treats an unreadable report as a failure. Two further
+  traps in the same tool: `exclude_paths` in `.codacy/codacy.yaml` is **silently
+  ignored** (860 findings, all inside `.venv`, from a config that declares the
+  exclusion), and a directory named `tests` is **skipped without any notice** —
+  renaming it to `teststuff` makes the same file appear again. The gate stages
+  `src`/`tests`/`scripts` into a temp directory and renames `tests` to `_tests`
+  for exactly these two reasons. Running the analysis took 9m11s over the
+  working tree versus 1m12s staged; a 9-minute pre-push gate does not get run.
+- **prek analyses the staged snapshot, not the working tree.** It stashes
+  unstaged edits for the duration of the run, so a hook reads the file as it
+  will be committed. This produced a genuine-looking `[unused-import]` on
+  `tests/test_codacy_gate.py` for two imports that were already deleted from
+  the working copy. It was not a false positive and not a caching artifact —
+  the staged copy still had them. `git add` before `prek run` when iterating on
+  a hook, and read `Unstaged changes detected` as the explanation when a
+  finding will not go away.
 
 ## Testing instructions
 
