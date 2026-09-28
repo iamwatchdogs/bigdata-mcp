@@ -73,6 +73,12 @@ jobs:
               - '.github/workflows/*.yaml'
               - '.github/dependabot.yml'
               - '.github/CODEOWNERS'
+              # actionlint's own config. Without this, a pull request that
+              # changes only the suppression list would skip the workflow
+              # linter, and `CI Status` would read that skip as a pass. A
+              # stale or over-broad entry here is how a linter silently stops
+              # checking anything.
+              - '.github/actionlint.yaml'
             json:
               - '**/*.json'
               - '**/*.jsonl'
