@@ -204,10 +204,34 @@ Every annotation was checked against the code rather than dismissed by category:
   judgement about this project's standards, not a defect, and the rules it
   targets are the ones that make the repository fail closed.
 
-**Conclusion: none of the 34 is a defect in this repository.** Two of them name
-a real weakness that is worth fixing on its own terms, though — see the
-ShellCheck entry below, which is exactly what Codacy's Bandit-adjacent
-inspection was pointing at.
+**Conclusion: none of the 34 is a defect in this repository.** The response was
+therefore not to change code, but to make both analyzers enforceable locally so
+their next *real* finding fails closed:
+
+- **Bandit is now a pre-push gate** (`make bandit`), configured from
+  `[tool.bandit]` in `pyproject.toml`. The skip list is exactly `B101`, `B404`,
+  `B603`, `B608`, each justified beside it, and
+  `test_bandit_skip_list_is_exactly_the_reviewed_set` pins the list so it cannot
+  grow unnoticed — that test also asserts `B602` (`shell=True`) is NOT skipped,
+  since `B602` is the check standing in for the `B603` skips. The gate is not
+  vacuous: injecting `shell=True`, `hashlib.md5`, or `eval` into `src/` each
+  fail it. One finding Codacy never showed us surfaced only once Bandit ran
+  locally — `B608` on the word "update" inside the assertion message
+  "create-versus-update", a false positive, and the reason that check is skipped
+  here.
+- **The ten Agentlinter findings** each asked for an escape hatch on an absolute
+  rule. The rules are unchanged in force; what was added is the missing
+  documented path — one clause in the Testing instructions and one in Boundaries,
+  saying the rule is absolute in the ordinary course of work, and that a genuine
+  exception must be made explicitly with the reason and the compensating check
+  named in the commit body. Softening ten rules individually would have weakened
+  the standards that make this repository fail closed; a single stated path is
+  what the findings were actually asking for.
+
+A root `.codacy.yml` was tried and **removed unverified**: it reduced nothing
+locally, because `codacy-cli` reads only `.codacy/codacy.yaml`. Suppressing
+these on the Codacy side, rather than in this repository, is the remaining lever
+and is a dashboard setting, not a file.
 
 **One finding the local run did surface, and it was real.** Codacy runs
 ShellCheck, which `codacy-cli` cannot. Checking whether the repository covered

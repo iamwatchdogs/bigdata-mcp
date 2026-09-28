@@ -129,6 +129,21 @@ claim rather than re-deriving it.
 - A guard that only fires when a scan finds nothing needs a paired
   anti-vacuity assertion, or it passes vacuously forever.
 
+**Escape hatch for the rules above.** They are absolute on purpose, because each
+one exists because this repository was bitten by violating it. That does not
+mean "never under any circumstance" — it means the exception has to be visible.
+If a rule in this section genuinely cannot hold:
+
+1. Do the thing anyway, rather than silently working around the rule.
+2. Say in the commit body which rule, why it could not hold, and what
+   compensating check replaces it.
+3. Prefer fixing the rule over honouring it, if the rule was the problem.
+
+Two cases are already settled and are not exceptions: a test that genuinely
+cannot be written is not a reason to write a test that asserts nothing, and a
+suite that must be red is reported red, not adjusted. An escape hatch is for the
+situation the rule did not anticipate, not for the situation it describes.
+
 ## Boundaries
 
 - Never commit secrets. Never commit directly to `main`.
@@ -146,6 +161,15 @@ claim rather than re-deriving it.
 - Untrusted input reaches a shell through `env:`, never interpolated into a `run:`
   body. `github.event.*` fields other than `github.event.number` are
   attacker-controlled text.
+
+The same escape hatch applies here. These boundaries are not negotiable in the
+ordinary course of work — `main` is not committed to, secrets are not committed,
+`uv.lock` is not hand-edited, action pins are not loosened, a
+`pull_request_target` workflow does not gain a checkout, and untrusted input does
+not reach a `run:` body. If one of them genuinely has to bend, do it explicitly
+and say so in the commit body: name the boundary, give the reason, and state what
+compensates for it. A boundary broken quietly is worse than one broken loudly,
+because a quiet break is indistinguishable from one that never happened.
 - No abstractions for a single implementation. That is a review rule, not a tool
   gate.
 
