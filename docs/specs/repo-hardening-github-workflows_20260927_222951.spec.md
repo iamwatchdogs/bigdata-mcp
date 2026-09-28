@@ -433,18 +433,37 @@ because poisoned cache entries must never influence a release artifact.
   evidence of impact; acceptance criteria written so "a coding agent or a new
   contributor could verify"
 - `.github/ISSUE_TEMPLATE/3-documentation-issue.yml`
-- `.github/pull_request_template.md` — default path (moved from
-  `PULL_REQUEST_TEMPLATE/` after review: GitHub only auto-applies the
-  root-level path, so the original placement meant no ordinary PR ever got a
-  template)
-  verification checklist referencing `make` targets
-- `.github/PULL_REQUEST_TEMPLATE/agent-assisted-pull-request.md` — a
-  **pasted-output block** that is empty by design, mandatory AI disclosure, a
-  human-understanding attestation worded as an action ("ask questions in the PR
-  instead of merging"), and the explicit **taxidermy-test** and **symptom-patch**
-  prohibitions
-- **Tests:** contract invariant 1 (template YAML is not workflow YAML, so this
-  module's coverage is the file-presence + required-heading assertions added here)
+- `.github/pull_request_template.md` — the auto-applied default. GitHub
+  recognises a default pull request template in exactly three places: the
+  repository root (`pull_request_template.md`), `docs/`
+  (`docs/pull_request_template.md`), and the hidden `.github` directory
+  (`.github/pull_request_template.md`). Any of the three is auto-applied to the
+  pull request body.
+  Verification checklist referencing `make` targets.
+  The default was **moved out of `PULL_REQUEST_TEMPLATE/`** after review, and
+  the original placement was a live defect rather than a style choice: a
+  `PULL_REQUEST_TEMPLATE/` subdirectory is the multi-template mechanism, and
+  GitHub only offers a template from one when the author picks it, either from
+  the template picker or by supplying the `template` query parameter. Nothing
+  auto-applies it, so while the default template lived there, no ordinary pull
+  request was ever pre-populated — a contributor had to choose a template in
+  order to get a template. `.github/` was chosen over the repository root
+  because a root-level `pull_request_template.md` is visible in the file tree,
+  where it reads as project documentation rather than as GitHub plumbing.
+- `.github/PULL_REQUEST_TEMPLATE/agent-assisted-pull-request.md` — deliberately
+  NOT auto-applied, reachable only via the template picker or
+  `?template=agent-assisted-pull-request.md`, which is how the default template
+  links to it. It carries a **pasted-output block** that is empty by design,
+  mandatory AI disclosure, a human-understanding attestation worded as an action
+  ("ask questions in the PR instead of merging"), and the explicit
+  **taxidermy-test** and **symptom-patch** prohibitions
+- **Tests:** `test_default_pull_request_template_is_auto_applied` and
+  `test_multi_template_directory_is_reachable_only_by_explicit_choice`. Template
+  markdown is not workflow YAML, so the workflow contracts do not reach it; these
+  assert the auto-applied path is one GitHub actually recognises, that the
+  multi-template directory is not in an auto-applied position, and that the
+  required headings survive edits. This bullet previously claimed the coverage
+  existed while no test referenced either template
 
 ### C9 — Agent contract
 

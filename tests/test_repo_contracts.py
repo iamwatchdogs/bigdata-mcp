@@ -240,6 +240,7 @@ COUNCIL_ARTIFACT = Path(".agents/council/extraction-candidates.jsonl")
 # demand a comment silencing an audit that never fires.
 DANGEROUS_TRIGGERS = frozenset({"pull_request_target", "workflow_run"})
 DEFAULT_ASSIGNEE_WORKFLOW_FILE = "default-assignee.yml"
+DEFAULT_PR_TEMPLATE = Path(".github/pull_request_template.md")
 DEPENDABOT_CONFIG = Path(".github/dependabot.yml")
 ELIGIBLE_FALSE_ASSIGNMENT = "eligible=false"
 # Anchored per line so the `echo "eligible=$eligible"` that writes the value to
@@ -337,6 +338,7 @@ REQUIRED_STATUS_CHECK_NAME = "CI Status"
 # repository that lifts the workflow fails the assertion instead of quietly
 # re-pointing Gate 1 at itself.
 REPOSITORY_SLUG = "iamwatchdogs/bigdata-mcp"
+MULTI_TEMPLATE_DIR = Path(".github/PULL_REQUEST_TEMPLATE")
 REQUIRED_WORKFLOWS_FILTER_PATH = ".github/workflows/*.yml"
 RUN_KEY = "run"
 RUN_SUFFIX = f".{RUN_KEY}"
@@ -3955,6 +3957,105 @@ def test_no_recipe_forces_sh_on_a_script_that_needs_another_shell(
         "`sh` is dash on Debian/Ubuntu and bash on macOS, so a recipe that "
         "works on a maintainer's laptop can fail on CI and on Linux with no "
         "change to the script at all"
+    )
+
+
+# The three paths GitHub auto-applies to a new pull request body, and nothing
+# else. From GitHub's "About issue and pull request templates": a template may
+# live in the repository's visible root directory, the `docs` folder, or the
+# hidden `.github` directory. A `PULL_REQUEST_TEMPLATE` subdirectory is the
+# separate multi-template mechanism and is never auto-applied.
+PR_TEMPLATE_AUTO_APPLIED_PATHS = (
+    Path("pull_request_template.md"),
+    Path("docs/pull_request_template.md"),
+    DEFAULT_PR_TEMPLATE,
+)
+
+
+def test_default_pull_request_template_is_auto_applied(
+    repo_root: Path,
+) -> None:
+    """Assert the default template sits where GitHub actually auto-applies it.
+
+    A pull request template that is not auto-applied is not a default, it is an
+    option. This repository shipped the default inside
+    ``.github/PULL_REQUEST_TEMPLATE/`` during review, which is the multi-template
+    directory: GitHub only offers a template from there when the author picks
+    it. Nothing about that file looked wrong -- it parsed, it was linked, and it
+    was correct -- while no ordinary pull request was ever pre-populated.
+
+    The set of valid paths is not guessable, so it is enumerated. It is also not
+    infinite, so the assertion can fail: move the default into the repository
+    root, into ``docs/``, or anywhere else outside this tuple and the template
+    silently stops being the default.
+    """
+    template = repo_root / DEFAULT_PR_TEMPLATE
+    assert template.is_file(), (
+        f"the default pull request template is missing: {template}. Without it "
+        "no ordinary pull request is pre-populated"
+    )
+    relative = template.relative_to(repo_root)
+    assert relative in PR_TEMPLATE_AUTO_APPLIED_PATHS, (
+        f"{relative} is not one of GitHub's auto-applied template paths "
+        f"{[str(p) for p in PR_TEMPLATE_AUTO_APPLIED_PATHS]}. A template outside "
+        "those paths is never pre-populated, so it is an option rather than a "
+        "default no matter how it is named"
+    )
+
+    text = template.read_text(encoding="utf-8")
+    missing = [h for h in ("# Summary", "## Verification") if h not in text]
+    assert not missing, (
+        f"{template} is missing the required heading(s) {missing}. The template "
+        "is the only prompt a contributor gets before writing a pull request, "
+        "so a heading dropped in an edit is a silently weaker review gate"
+    )
+    assert "make verify" in text, (
+        f"{template} no longer references `make verify`. The verification "
+        "checklist is what makes the local gate discoverable from the pull "
+        "request itself, which is the only place a contributor will look"
+    )
+
+
+def test_multi_template_directory_is_reachable_only_by_explicit_choice(
+    repo_root: Path,
+) -> None:
+    """Assert no auto-applied path collides with the multi-template directory.
+
+    This is the mirror of the test above and it guards the distinction from the
+    other side. ``.github/PULL_REQUEST_TEMPLATE/<name>.md`` is legitimately used
+    for the agent-assisted template, and it is reachable through the template
+    picker or a ``template`` query parameter. What must never happen is an
+    auto-applied default being placed *inside* that directory, because the two
+    mechanisms are mutually exclusive and the file gives no sign of which one is
+    in force.
+    """
+    multi = repo_root / MULTI_TEMPLATE_DIR
+    if not multi.is_dir():
+        return
+    offenders = [
+        str(path.relative_to(repo_root))
+        for path in multi.rglob("*")
+        if path.is_file() and path in PR_TEMPLATE_AUTO_APPLIED_PATHS
+    ]
+    assert not offenders, (
+        f"these files sit in the multi-template directory {MULTI_TEMPLATE_DIR} "
+        f"while also matching an auto-applied path: {offenders}. A file in that "
+        "directory is only offered when the author picks it, so it is not the "
+        "default regardless of its name"
+    )
+
+    reachable = sorted(p.name for p in multi.rglob("*.md"))
+    default_text = (repo_root / DEFAULT_PR_TEMPLATE).read_text(encoding="utf-8")
+    unreferenced = [
+        name
+        for name in reachable
+        if name not in default_text and name != "pull_request_template.md"
+    ]
+    assert not unreferenced, (
+        f"these templates in {MULTI_TEMPLATE_DIR} are unreachable from the "
+        f"default template: {unreferenced}. Nothing auto-applies them, so a "
+        "contributor who never opens the template picker cannot discover that "
+        "they exist"
     )
 
 
