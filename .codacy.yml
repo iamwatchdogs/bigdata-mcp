@@ -2,18 +2,31 @@
 # Codacy analysis configuration.
 #
 # `codacy-cli` does not read this file -- it reads `.codacy/codacy.yaml` for
-# runtimes and tools only -- so this was verified against the platform rather
-# than locally, which is the only way it can be verified at all.
+# runtimes and tools only -- so it is verified against the platform, which is
+# the only place it has any effect.
+#
+# `exclude-patterns` is the documented mechanism for suppressing a specific
+# issue by its message. The previous revision of this file used
+# `tools.bandit.skip-checks`, which is not a key Codacy recognises: the file was
+# accepted silently and the two findings survived unchanged, which is the worst
+# possible outcome for a config -- it looks like it is doing something.
 #
 # B603 (`subprocess_without_shell_equals_true`) fires on every `subprocess` call
-# that does not pass `shell=True`, which means it fires on the SAFE form.
-# Passing `shell=False` explicitly does not silence it, and an inline
-# `# nosec B603` marker plus a `[tool.bandit]` skip entry were both verified not
-# to silence it on the platform. The dangerous neighbour, B602
-# (`shell=True`), is left enabled and unenumerated here.
+# that does not pass `shell=True`, so it fires on the SAFE form. Passing
+# `shell=False` explicitly does not silence it, and neither does an inline
+# suppression marker or a `[tool.bandit]` skip entry -- all three were tried and
+# verified against the platform. It cannot tell a reviewed argv from an
+# unreviewed one, and each of the two call sites carries a comment saying why
+# its argv is safe.
 #
-# Both findings are on calls that are reviewed and justified at the call site.
-tools:
-  bandit:
-    skip-checks:
-      - B603
+# B602, which catches a real `shell=True` injection, is NOT matched here and
+# stays enforced.
+exclude-patterns:
+  - 'Detected subprocess function'
+
+# `uv.lock` is generated. Its single-line `sdist`/`wheel` records exceed 88
+# characters whenever a package name or URL is long enough, and the file must not
+# be hand-edited to satisfy a linter, so it is excluded from line-length checks
+# rather than reformatted.
+exclude-paths:
+  - 'uv.lock'
