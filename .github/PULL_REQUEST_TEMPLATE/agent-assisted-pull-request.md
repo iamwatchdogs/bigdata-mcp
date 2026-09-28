@@ -91,7 +91,7 @@ being fixed).
 
 ## Checklist
 
-- [ ] I have read and followed the [contributing guidelines](CONTRIBUTING.md)
-- [ ] This pull request follows the [Code of Conduct](CODE_OF_CONDUCT.md)
+- [ ] I have read and followed the [contributing guidelines](../../CONTRIBUTING.md)
+- [ ] This pull request follows the [Code of Conduct](../../CODE_OF_CONDUCT.md)
 - [ ] `make verify` passes
 - [ ] Documentation and/or tests were updated where applicable

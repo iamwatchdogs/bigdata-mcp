@@ -53,8 +53,8 @@ extent. Review and understand everything you submit.
 
 ## Checklist
 
-- [ ] I have read and followed the [contributing guidelines](CONTRIBUTING.md)
-- [ ] This pull request follows the [Code of Conduct](CODE_OF_CONDUCT.md)
+- [ ] I have read and followed the [contributing guidelines](../CONTRIBUTING.md)
+- [ ] This pull request follows the [Code of Conduct](../CODE_OF_CONDUCT.md)
 - [ ] `make verify` passes
 - [ ] One logical change; no unrelated refactors
 - [ ] Tests assert specific expected values, not just that code runs
@@ -65,4 +65,4 @@ extent. Review and understand everything you submit.
 Working with an agent on this? Use the
 [agent-assisted template](?template=agent-assisted-pull-request.md) instead: it
 requires pasted verification output, AI disclosure, and a human-understanding
-attestation. The policy is in [CONTRIBUTING.md](CONTRIBUTING.md).
+attestation. The policy is in [CONTRIBUTING.md](../CONTRIBUTING.md).

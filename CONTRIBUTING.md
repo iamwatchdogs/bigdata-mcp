@@ -156,4 +156,4 @@ that survive review without anyone noticing:
 ## License
 
 By contributing you agree that your contributions are licensed under the
-[MIT License](LICENSE.md) covering this project.
+[MIT License](LICENSE) covering this project.
