@@ -299,33 +299,39 @@ not that a file works, and not that it does not. Both of the wrong conclusions i
 this entry came from treating that tool as a proxy for the one that emits the
 findings.
 
-**The `B603` pair was then fixed, by changing the call rather than the
-configuration.** Both sites were rewritten to spawn through `os.posix_spawn`
-instead of `subprocess`. The cost is real, which is why this is a boundary bend
-and not a decision: the lock script needs a hand-rolled `shutil.which` because
-`posix_spawn` does not search PATH, and the console-script probe needs a
-temporary-file redirect in place of `capture_output` plus an `os.chdir`, because
-`posix_spawn` takes no working directory. What compensates for it: the argv is
-still a vector and never a command string, so there is no shell to inject into,
-and `B602` — the check that catches a real `shell=True` injection — cannot fire
-at either site.
+**The `B603` pair was then "fixed" by changing the call, and the fix was
+reverted.** Both sites were rewritten to spawn through `os.posix_spawn`, which
+removes `B603` and `B404` outright and was verified: the lock script's
+pass-through, exit-status propagation, missing-program path and `make testmon`
+end to end, and the console-script probe still failing when the package re-export
+is removed. Codacy then reported the same two call sites under a **different**
+rule — "Found dynamic content when spawning a process" — which is the same
+complaint from a different analyser.
 
-Both rewrites were verified rather than assumed. The lock script: pass-through,
-exit-status propagation, a missing program, and `make testmon` end to end. The
-console-script probe: the test still fails when the package re-export is removed,
-which is the exact bug it was written for. Injecting `shell=True` into `src/`
-still fails `make bandit`.
+That settles it. The finding is not about `subprocess`; it is about spawning a
+process with an argv that is not a compile-time constant, and both call sites do
+that by design: one exists to run the caller's command, the other runs a probe
+whose path is the repository root. No API avoids it and no configuration in this
+repository silences it — the platform honours `[tool.bandit]` and nothing else
+tried here, and six approaches were verified against the platform before the
+rewrite was attempted.
 
-A note on the verification, because it nearly produced a false pass. Bandit is no
-longer a project dependency, so `uv run bandit` fails to spawn, and two "clean"
-results in this work were that spawn failure being read as a pass. The gate is
-only exercised through the hook's own interpreter, and the confirmation numbers
-come from there. The third is the "assigning the result of a function with no
-return" finding at `test_main.py:156`, and its marker is deliberately **ID-less**:
-that check does not exist in Bandit 1.9.4, so no valid ID can be named, and
-naming an unknown one makes Bandit print a warning on every run. Prose next to
-such a marker must not spell the marker out either, because Bandit then parses
-the rest of the sentence as a list of check names.
+So the rewrite was reverted. It cost a hand-rolled `shutil.which` because
+`posix_spawn` does not search PATH, a temporary-file redirect in place of
+`capture_output`, and an `os.chdir` around the spawn, and it bought a different
+name on the same finding. The suppression markers are back at both call sites,
+the reasoning is at each one, and `B602` — the check that catches a real
+`shell=True` injection — is enabled and unskipped everywhere.
+
+**This one needs Codacy dashboard settings, and no change to this repository will
+clear it.** The setting is to ignore this check for these two files, or to
+disable the check; the two call sites are reviewed, and the argv of each is
+documented where it is used.
+
+A note on verification, because it nearly produced a false pass: bandit is no
+longer a project dependency, so `uv run bandit` fails to spawn, and two earlier
+"clean" results in this work were that spawn failure read as a pass. Every
+confirmation number comes from the hook's own interpreter.
 
 A root `.codacy.yml` was tried and **removed unverified**: it reduced nothing
 locally, because `codacy-cli` reads only `.codacy/codacy.yaml`. Suppressing

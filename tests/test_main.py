@@ -38,13 +38,12 @@ from __future__ import annotations
 
 import importlib
 import inspect
-import os
 import runpy
 
 # This module has to launch a real interpreter, so `subprocess` is unavoidable.
 # Every call below uses a fixed argv, `shell=False`, and no interpolated input.
+import subprocess  # ruff: ignore[suspicious-subprocess-import]
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 from typing import get_type_hints
@@ -301,74 +300,6 @@ def test_entry_point_module_executes_as_a_script(
     )
 
 
-def _run_probe(repo_root: Path) -> tuple[int, str, str]:
-    """Run the console-script probe in a fresh interpreter and capture its output.
-
-    ``os.posix_spawn`` rather than ``subprocess.run``, for the same reason as
-    ``scripts/with_testmon_lock.py``: Bandit's ``B603`` fires on every
-    ``subprocess`` call that does not pass ``shell=True``, so it fires on the safe
-    form, and neither an inline suppression nor a ``[tool.bandit]`` skip entry
-    silenced it on Codacy's platform. ``posix_spawn`` is the same operation
-    without a shell, so ``B602`` -- the check that catches a real ``shell=True``
-    injection -- cannot fire at all.
-
-    It does not search PATH and takes no ``cwd``, and it has no
-    ``capture_output``. So the program is ``sys.executable``, an absolute path
-    already, the working directory is changed in the parent for the duration of
-    the spawn, and both streams are redirected to temporary files that stand in
-    for the pipes. More machinery than ``subprocess.run`` for the same result;
-    that is the cost of the boundary bend, and it is recorded here rather than
-    left to be rediscovered.
-
-    Args:
-        repo_root: The working directory for the probe, so its import resolves
-            against the same editable install the test session is using.
-
-    Returns:
-        The probe's exit status, its stdout, and its stderr, all decoded as UTF-8
-        with undecodable bytes replaced rather than raising.
-    """
-    with tempfile.TemporaryDirectory() as scratch:
-        out_path = Path(scratch) / "stdout"
-        err_path = Path(scratch) / "stderr"
-        actions = [
-            (
-                os.POSIX_SPAWN_OPEN,
-                1,
-                str(out_path),
-                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-                0o600,
-            ),
-            (
-                os.POSIX_SPAWN_OPEN,
-                2,
-                str(err_path),
-                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-                0o600,
-            ),
-        ]
-        # posix_spawn has no cwd argument, so the parent's working directory is
-        # changed around the spawn. This is the only process-wide mutation in
-        # the suite; it is restored in a finally so a failure cannot leak it.
-        previous = Path.cwd()
-        os.chdir(repo_root)
-        try:
-            pid = os.posix_spawn(
-                sys.executable,
-                [sys.executable, "-c", CONSOLE_SCRIPT_PROBE],
-                os.environ,
-                file_actions=actions,
-            )
-            _, status = os.waitpid(pid, 0)
-        finally:
-            os.chdir(previous)
-        return (
-            os.waitstatus_to_exitcode(status),
-            out_path.read_text(encoding="utf-8", errors="replace"),
-            err_path.read_text(encoding="utf-8", errors="replace"),
-        )
-
-
 def test_installed_console_script_survives_a_subprocess(
     repo_root: Path,
 ) -> None:
@@ -388,17 +319,28 @@ def test_installed_console_script_survives_a_subprocess(
             directory so the import resolves against the same editable
             install the test session is using.
     """
-    returncode, stdout, stderr = _run_probe(repo_root)
+    # The argv is three fixed elements: the interpreter, a literal "-c", and a
+    # module-level constant holding the probe. `cwd` is a repository-root path
+    # the test resolves itself; it is the working directory rather than part of
+    # the command, and it never reaches a shell because `shell` is not used.
+    completed = subprocess.run(  # nosec B603  # ruff: ignore[subprocess-without-shell-equals-true]
+        [sys.executable, "-c", CONSOLE_SCRIPT_PROBE],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
-    assert returncode == 0, (
+    assert completed.returncode == 0, (
         f"the console script body {CONSOLE_SCRIPT_PROBE!r} exited "
-        f"{returncode} in a fresh interpreter instead of 0. "
-        f"stdout={stdout!r} stderr={stderr!r}"
+        f"{completed.returncode} in a fresh interpreter instead of 0. "
+        f"stdout={completed.stdout!r} stderr={completed.stderr!r}"
     )
 
     for marker in BROKEN_ENTRY_POINT_MARKERS:
-        assert marker not in stderr, (
+        assert marker not in completed.stderr, (
             f"stderr of the console script body contains {marker!r}, which is "
             "the signature of a 'bigdata_mcp:main' target that resolved to the "
-            f"module object rather than the function. Full stderr: {stderr!r}"
+            f"module object rather than the function. Full stderr: "
+            f"{completed.stderr!r}"
         )
