@@ -309,6 +309,7 @@ PULL_REQUEST_TRIGGER = "pull_request"
 # The freezer. Finding it in a `run:` body is what proves a binary is actually
 # built rather than merely uploaded from a stale `dist/`.
 PYINSTALLER_COMMAND = "pyinstaller"
+MAKEFILE = Path("Makefile")
 PYPROJECT_MANIFEST = Path("pyproject.toml")
 PYTHON_VERSION_PIN = Path(".python-version")
 QUOTED_TRIGGER_KEY = "on"
@@ -3864,6 +3865,99 @@ def test_a_scheduled_workflow_never_uses_a_bare_cancel_in_progress(
     )
 
 
+def _bash() -> str:
+    """Locate a bash interpreter able to run ``scripts/apply_ruleset.sh``.
+
+    The script declares ``#!/usr/bin/env bash`` and requires it: it sets
+    ``-o pipefail``, which dash rejects, so invoking it through ``/bin/sh``
+    fails on Debian/Ubuntu with "set: Illegal option -o pipefail" and exit 2.
+    Hardcoding an interpreter here would reintroduce that on whichever platform
+    the guess was wrong for, so the interpreter is resolved instead -- from
+    PATH first, then from the Git-for-Windows location, since the Windows
+    matrix cell has no system bash.
+
+    Returns:
+        A path to a bash executable.
+
+    Raises:
+        AssertionError: If no bash can be found, with the paths that were tried.
+    """
+    candidates = [
+        shutil.which("bash"),
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return candidate
+    tried = [c for c in candidates if c]
+    message = (
+        "no bash interpreter found, so the ruleset script cannot be exercised. "
+        f"Tried: {tried}. Install bash, or point the Windows matrix cell at "
+        "Git for Windows"
+    )
+    raise AssertionError(message)
+
+
+def test_no_recipe_forces_sh_on_a_script_that_needs_another_shell(
+    repo_root: Path,
+) -> None:
+    """Assert no Makefile recipe runs a bash-only script through ``sh``.
+
+    ``scripts/apply_ruleset.sh`` declares ``#!/usr/bin/env bash`` and sets
+    ``-o pipefail``. ``sh`` is bash on macOS and dash on Debian/Ubuntu, and
+    dash has no ``pipefail``, so a recipe written as ``sh
+    scripts/apply_ruleset.sh`` fails on every Linux developer machine with
+    ``set: Illegal option -o pipefail`` and exit 2 -- while passing on macOS.
+
+    That asymmetry is what makes it worth a gate. It surfaced only because a
+    test invoked the script through ``/bin/sh`` on the CI matrix, where
+    ``/bin/sh`` is dash; nothing about the script changed when the failure
+    appeared. The fix is to execute the file so its shebang is honoured, and
+    this assertion is what keeps the forcing form from coming back.
+    """
+    makefile = repo_root / MAKEFILE
+    assert makefile.is_file(), f"required gating file is missing: {makefile}"
+    bash_scripts = {
+        path.relative_to(repo_root)
+        for path in (repo_root / "scripts").rglob("*")
+        if path.is_file() and path.read_text(encoding="utf-8").startswith("#!")
+    }
+    assert bash_scripts, (
+        "expected at least one shebanged script under scripts/, so this "
+        "assertion has something to check. If the last one was removed, this "
+        "test is vacuous and should be deleted rather than left passing"
+    )
+
+    offenders: list[str] = []
+    for number, line in enumerate(
+        makefile.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        # A make recipe line may carry the silent `@`, `+` or `-` prefix, and
+        # a variable-expanded command may not start with a literal at all.
+        # Matching only a bare `sh ` prefix would make this assertion vacuous
+        # against the exact form it exists to catch, which is what happened the
+        # first time it was written.
+        stripped = line.strip().lstrip("@+-").strip()
+        if not stripped.startswith(("sh ", "/bin/sh ", "./sh ")):
+            continue
+        offenders.extend(
+            f"Makefile:{number}: {stripped}  (shebang of {script} is "
+            f"{script.read_text(encoding='utf-8').splitlines()[0]})"
+            for script in sorted(bash_scripts)
+            if script.name in stripped
+        )
+    assert not offenders, (
+        "these recipes force `sh` on a script that declares a different "
+        "interpreter:\n"
+        + "\n".join(offenders)
+        + "\nExecute the script directly instead, so its shebang applies. "
+        "`sh` is dash on Debian/Ubuntu and bash on macOS, so a recipe that "
+        "works on a maintainer's laptop can fail on CI and on Linux with no "
+        "change to the script at all"
+    )
+
+
 def test_ruleset_payload_name_is_derived_from_the_lookup_variable(
     repo_root: Path,
 ) -> None:
@@ -3890,10 +3984,14 @@ def test_ruleset_payload_name_is_derived_from_the_lookup_variable(
         "unicode ✅ 名前",
     ):
         result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
-            ["/bin/sh", str(script), "--print"],
+            [_bash(), str(script), "--print"],
             capture_output=True,
             text=True,
-            env={**os.environ, "RULESET_NAME": name},
+            # GITHUB_REPOSITORY is set so resolve_repo does not depend on the
+            # checkout having an `origin` remote: a source tarball or a vendor
+            # copy has none, and this assertion is about the payload name, not
+            # about how the repository is discovered.
+            env={**os.environ, "RULESET_NAME": name, "GITHUB_REPOSITORY": "o/r"},
             check=True,
         )
         lines = result.stdout.splitlines()
