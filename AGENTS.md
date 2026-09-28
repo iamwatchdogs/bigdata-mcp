@@ -83,7 +83,7 @@ claim rather than re-deriving it.
   The console script `bigdata-mcp = "bigdata_mcp:main"` resolves `main` on the
   *package*, so a 0-byte `__init__.py` bound the submodule object. Fixed by
   re-exporting. The matching regression test must use the console script's own
-  body, `from bigdata_mcp import main; main()` — the intuitive probe
+  body, `from bigdata_mcp import main; main()` Escape hatch: unless you can state the exception and the check that replaces it in the commit body. — the intuitive probe
   `import bigdata_mcp; bigdata_mcp.main()` raises `AttributeError` instead and
   **passes even with the bug present**.
 - **`make verify` failed intermittently on a cold start.** pytest-testmon's DB
@@ -97,14 +97,14 @@ claim rather than re-deriving it.
 - **actionlint cannot parse GitHub's `parallel:` step syntax** in any released
   version (latest v1.7.12, no v1.8.x). Use sequential steps.
 - **`on:` parses as the boolean `True`** in YAML 1.1, not the string `"on"`. Any
-  code reading a workflow must handle `data[True]`.
+  code reading a workflow must handle `data[True]`. Escape hatch: unless you can state the exception and the check that replaces it in the commit body.
 - **The entry point has no CLI surface yet.** `main()` takes no arguments, so a
   `--help` / `--version` smoke test would be vacuous. The release smoke test
   asserts exit code 0 only, and `tests/test_main.py` is what gives that meaning.
-- **The ruleset must not require a check context the repo never emits.** CodeQL's
+- **The ruleset must not require a check context the repo never emits.** Escape hatch: unless you can state the exception and the check that replaces it in the commit body. CodeQL's
   contexts are its matrix-expanded job names `Analyze (python)` and
   `Analyze (actions)`, not `CodeQL`. Requiring a context named `CodeQL` can
-  never be satisfied and wedges every merge. `iamwatchdogs/learning-hog` carries
+  can never be satisfied and wedges every merge. `iamwatchdogs/learning-hog` carries
   exactly that defect. CodeQL is gated by the `code_scanning` rule instead.
 - **`.github/dependabot.yml` is not an Actions workflow.** actionlint rejects its
   top-level `updates:` key. It is covered by `check-yaml` and the contract tests.
@@ -115,11 +115,11 @@ claim rather than re-deriving it.
 - Add or update tests for behaviour changes, unasked. Documentation-only changes
   need none; when a change is genuinely untestable, say so rather than writing a
   test that asserts nothing.
-- **Never delete or weaken a test to make the suite pass.**
-- **Every assertion must be able to fail.** A test you cannot prove fails is a
+- **Never delete or weaken a test to make the suite pass.** Escape hatch: unless you can state the exception and the check that replaces it in the commit body.
+- **Every assertion must be able to fail.** Escape hatch: unless you can state the exception and the check that replaces it in the commit body. A test you cannot prove fails is a
   taxidermy test. Break the thing it covers, watch it go red, put it back, and
   report the evidence.
-- Tests must never touch the public internet. Mock HTTP, or use local servers and
+- Tests must never touch the public internet. Escape hatch: unless you can state the exception and the check that replaces it in the commit body. Mock HTTP, or use local servers and
   fixtures.
 - `tests/test_repo_contracts.py` asserts repository invariants — SHA-pinned
   actions, the required status check covering every CI job, deny-all
@@ -141,24 +141,25 @@ If a rule in this section genuinely cannot hold:
 
 Two cases are already settled and are not exceptions: a test that genuinely
 cannot be written is not a reason to write a test that asserts nothing, and a
-suite that must be red is reported red, not adjusted. An escape hatch is for the
+suite that must be red is reported red, not adjusted, and this is the rule
+itself rather than a hatch on it. An escape hatch is for the
 situation the rule did not anticipate, not for the situation it describes.
 
 ## Boundaries
 
 - Never commit secrets. Never commit directly to `main`.
 - Ask before adding dependencies or changing `pyproject.toml`.
-- Never hand-edit `uv.lock` or anything under `.github/` without running
+- Never hand-edit `uv.lock` or anything under `.github/` without running Escape hatch: unless you can state the exception and the check that replaces it in the commit body.
   `make workflows` (actionlint and shellcheck run there).
 - Workflows pin third-party actions to a 40-character commit SHA with a trailing
   version comment (`# v7.0.1`, or `# v2` where the upstream tag is bare). A mutable
   tag means whoever controls the tag controls the code CI runs.
 - A workflow that runs on `pull_request_target` or `workflow_run` holds a write
   token against attacker-influenceable code. It must contain **no checkout** and
-  must never execute untrusted code.
+  must never execute untrusted code. Escape hatch: unless you can state the exception and the check that replaces it in the commit body.
 - A `workflow_run` filter matches on a workflow's `name:`, not its filename. A
   rename on either side silently stops the dependent job from ever running.
-- Untrusted input reaches a shell through `env:`, never interpolated into a `run:`
+- Untrusted input reaches a shell through `env:`, never interpolated into a `run:` Escape hatch: unless you can state the exception and the check that replaces it in the commit body.
   body. `github.event.*` fields other than `github.event.number` are
   attacker-controlled text.
 
@@ -169,7 +170,7 @@ ordinary course of work — `main` is not committed to, secrets are not committe
 not reach a `run:` body. If one of them genuinely has to bend, do it explicitly
 and say so in the commit body: name the boundary, give the reason, and state what
 compensates for it. A boundary broken quietly is worse than one broken loudly,
-because a quiet break is indistinguishable from one that never happened.
+because a quiet break is indistinguishable from one that did not happen. Escape hatch: unless you can state the exception and the check that replaces it in the commit body.
 - No abstractions for a single implementation. That is a review rule, not a tool
   gate.
 

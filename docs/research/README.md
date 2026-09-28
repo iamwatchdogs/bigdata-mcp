@@ -219,14 +219,33 @@ their next *real* finding fails closed:
   locally — `B608` on the word "update" inside the assertion message
   "create-versus-update", a false positive, and the reason that check is skipped
   here.
-- **The ten Agentlinter findings** each asked for an escape hatch on an absolute
-  rule. The rules are unchanged in force; what was added is the missing
-  documented path — one clause in the Testing instructions and one in Boundaries,
-  saying the rule is absolute in the ordinary course of work, and that a genuine
-  exception must be made explicitly with the reason and the compensating check
-  named in the commit body. Softening ten rules individually would have weakened
-  the standards that make this repository fail closed; a single stated path is
-  what the findings were actually asking for.
+- **The Agentlinter findings** each asked for an escape hatch on an absolute
+  rule. A section-level clause was tried first and did **not** clear them:
+  Agentlinter evaluates the rule line, not the section it sits in, and the
+  finding count went from 10 to 12 because the clause's own prose introduced two
+  new absolute constructions. What cleared it was an escape-hatch clause
+  appended to each flagged rule itself, with the rules otherwise unchanged in
+  force. Two lines were reworded rather than hedged: the failure-ledger
+  sentence that read "never be satisfied" and the Boundaries prose, both of
+  which are now stated without an absolute construction where the original was
+  rhetorical rather than normative.
+
+  The lesson matches the ShellCheck entry: the gap was that nothing here
+  enforced the standard, so a third party's opinion was the only enforcement.
+
+Three Bandit findings resisted the config route and are suppressed at the call
+site instead. Codacy reports `B603` (subprocess without a static string) at
+`with_testmon_lock.py:104` and `test_main.py:306` even though `B603` is in this
+repository's skip list, so the platform's Bandit is not reading
+`[tool.bandit]` the way the pinned local version does — the skip list removed the
+17 `B101` findings, but not these. A site-level suppression is honoured wherever
+the configuration is read, so each of the three carries one with its reason
+directly above it. The third is the "assigning the result of a function with no
+return" finding at `test_main.py:156`, and its marker is deliberately **ID-less**:
+that check does not exist in Bandit 1.9.4, so no valid ID can be named, and
+naming an unknown one makes Bandit print a warning on every run. Prose next to
+such a marker must not spell the marker out either, because Bandit then parses
+the rest of the sentence as a list of check names.
 
 A root `.codacy.yml` was tried and **removed unverified**: it reduced nothing
 locally, because `codacy-cli` reads only `.codacy/codacy.yaml`. Suppressing

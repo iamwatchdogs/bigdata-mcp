@@ -101,7 +101,13 @@ def main(argv: list[str]) -> int:
             # should not see a spurious error.
             print("testmon: another run holds the lock; waiting for it")
             fcntl.flock(handle, fcntl.LOCK_EX)
-        return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+        # `command` is this script's own argument vector. Running the caller's
+        # command under a lock is the entire purpose of the file; there is no
+        # static string to assert against, and `check=False` with a returned
+        # status means the wrapper does not decide what runs. The injection risk
+        # that matters is B602, which this repository does not use and does not
+        # suppress: `shell=True` appears nowhere.
+        return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]  # nosec B603
             command, check=False
         ).returncode
     finally:

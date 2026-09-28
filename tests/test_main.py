@@ -153,7 +153,23 @@ def test_entry_point_is_callable_and_returns_none() -> None:
     ``sys.exit(main())`` turns the return value into the process exit status, so
     a non-``None`` return would silently turn a healthy run into a failing one.
     """
-    result = bigdata_mcp.main()
+    # The Bandit suppression marker below is deliberately ID-less. Codacy reports
+    # this line for "assigning the result of a function that has no return", but
+    # that check does not exist in the Bandit this repository runs (1.9.4 has no
+    # such plugin), and naming an ID Bandit does not know prints a warning on
+    # every single run. An ID-less marker is version-independent, and the line
+    # does exactly one thing, so blanket suppression on it carries little risk.
+    #
+    # The check is a false positive regardless: it reads main()'s `-> None`
+    # annotation as a guarantee, and an annotation is not enforced at runtime.
+    # This is the only check that catches main() starting to return a value while
+    # the console script still wraps it in sys.exit(). Proved it can fail:
+    # injecting `return 7` into main() fails this test.
+    #
+    # Prose in a comment above a marker must not spell the marker out, or Bandit
+    # parses the rest of the sentence as a list of check names and warns about
+    # every word in it.
+    result = bigdata_mcp.main()  # nosec
 
     assert result is None, (
         f"bigdata_mcp.main() returned {result!r} "
@@ -303,7 +319,11 @@ def test_installed_console_script_survives_a_subprocess(
             directory so the import resolves against the same editable
             install the test session is using.
     """
-    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+    # The argv is three fixed elements: the interpreter, a literal "-c", and a
+    # module-level constant holding the probe. `cwd` is a repository-root path
+    # the test resolves itself; it is the working directory rather than part of
+    # the command, and it never reaches a shell because `shell` is not used.
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]  # nosec B603
         [sys.executable, "-c", CONSOLE_SCRIPT_PROBE],
         cwd=repo_root,
         check=False,
