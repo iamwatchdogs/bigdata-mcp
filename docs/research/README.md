@@ -120,6 +120,59 @@ Two decisions this changed, recorded because they are not obvious from the files
   branch while gating nothing. The same holds for a step that cannot succeed —
   `fail-on-error: false` converts a broken gate into a green one.
 
+### D5 — Codacy's PR findings are the dependency tree, not this code — 2026-09-28
+
+`codacy-production[bot]` commented 36 new issues on PR #1 (2 critical, 19 high,
+13 medium, 2 minor), categorised as Security, ErrorProne, and BestPractice. The
+comment body carries counts only; the individual findings sit behind Codacy's
+authenticated dashboard, the check-run output is a single summary line, and the
+bot posted no inline comments. The API returns 404 without a token.
+
+Reproduced locally with `codacy-cli`, which fetched the same tool set from the
+Codacy API (opengrep 1.30.0, pylint 4.0.8, trivy 0.74.0, lizard 1.24.0):
+
+| Run | Findings | In files this repository owns |
+|---|---|---|
+| with `.venv/` present | 620 | **0** |
+| with `.venv/` moved out of the tree | 0 | 0 |
+
+All 620 sit in `.venv/lib/python3.14t/site-packages/`, spread across 17
+third-party packages (pytest, coverage, PyYAML, PyInstaller, packaging,
+pygments, setuptools, xdist, …). They are pylint diagnostics: 531 warnings,
+75 errors, 14 conventions — `W0611` unused-import, `W0622` redefined-builtin,
+`E1120` no-value-for-parameter, `W0122` exec-used, and so on. Codacy appears to
+file the `error`-severity pylint diagnostics under its Security category, which
+is where the "2 critical / 18 high" almost certainly come from. None of it is
+this project's code.
+
+The complex lizard output *does* read this repository: the highest cyclomatic
+complexity in `tests/test_repo_contracts.py` is 13, under the `complexipy` gate
+of 15 in `pyproject.toml`, so the reported "Complexity 22" is Codacy's own
+aggregate on a different scale and not a regression against our gate.
+
+Two things were checked so the conclusion is not a guess:
+
+- Renaming `.venv` to `.venv-hidden` changed nothing — opengrep scans
+  dot-directories regardless of the name. Only moving the directory outside the
+  tree dropped the count to zero.
+- A root `.codacy.yml` with `exclude-paths: ['.venv/**']` does **not** work
+  locally: the count stayed at 620, because `codacy-cli` reads only
+  `.codacy/codacy.yaml` for runtimes and tools. The file was removed rather than
+  committed unverified.
+
+**Unverified:** the server-side 36 were never visible, so this entry cannot
+claim they are all dependency findings — only that the same tool configuration
+produces nothing in this repository's own files. Confirming that needs the
+dashboard.
+
+Codacy is not a merge gate here. The ruleset requires exactly one check,
+`CI Status`; there is no classic branch protection. Five independent gates cover
+the same surface and are green on every commit: zizmor (Actions SAST), actionlint,
+osv-scanner, gitleaks, and CodeQL, plus dependency-review and Scorecard.
+**Decision: not adopted as a gate, and no code changed in response to it.** If
+Codacy is to become useful, the exclusion has to be configured in Codacy's own
+analysis settings, not in this repository.
+
 **Not a research decision:** the tooling, hook, and workflow conventions live in
 `AGENTS.md` and the commit history, not here. This ledger tracks decisions about
 the *product*.
