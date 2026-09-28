@@ -107,13 +107,17 @@ concerns a vulnerability, use the private channel in `SECURITY.md` instead.
 Two templates exist. GitHub auto-applies the default one; the agent-assisted one
 must be selected explicitly.
 
-- **Default** — applied automatically when you open a pull request: summary,
-  linked issue, type of change, and the checks you ran.
-- **Agent-assisted** — required when AI tooling did substantial work. It adds
-  mandatory AI disclosure, a human-understanding attestation, and evidence of a
-  closed verification loop. Select it from the pull request page's template
-  picker, or by appending `?template=agent-assisted-pull-request.md` to the
-  compare URL.
+- **Default** (`.github/pull_request_template.md`) — applied automatically when
+  you open a pull request: summary, linked issue, type of change, and the checks
+  you ran.
+- **Agent-assisted** (`.github/PULL_REQUEST_TEMPLATE/agent-assisted-pull-request.md`)
+  — required when AI tooling did substantial work. It adds mandatory AI
+  disclosure, a human-understanding attestation, and evidence of a closed
+  verification loop. GitHub only offers a template from the
+  `PULL_REQUEST_TEMPLATE/` directory when you pick it, so choose it from the
+  pull request page's template picker or append
+  `?template=agent-assisted-pull-request.md` to the compare URL. The default
+  template links to it, so you can also just follow that link.
 
 ## AI-assisted contributions
 

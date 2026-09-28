@@ -427,7 +427,10 @@ because poisoned cache entries must never influence a release artifact.
   evidence of impact; acceptance criteria written so "a coding agent or a new
   contributor could verify"
 - `.github/ISSUE_TEMPLATE/3-documentation-issue.yml`
-- `.github/PULL_REQUEST_TEMPLATE/pull_request_template.md` — default path;
+- `.github/pull_request_template.md` — default path (moved from
+  `PULL_REQUEST_TEMPLATE/` after review: GitHub only auto-applies the
+  root-level path, so the original placement meant no ordinary PR ever got a
+  template)
   verification checklist referencing `make` targets
 - `.github/PULL_REQUEST_TEMPLATE/agent-assisted-pull-request.md` — a
   **pasted-output block** that is empty by design, mandatory AI disclosure, a
