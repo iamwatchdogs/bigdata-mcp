@@ -94,10 +94,19 @@ Two decisions this changed, recorded because they are not obvious from the files
      enforcing nothing, and `test_ruleset_declares_no_unevaluable_gate` now
      keeps them out. Codecov remains the historical record; the merge gate is
      the pytest floor.
+  3. Having removed the rules, the upload step had nothing left to serve, so it
+     went too — along with the `code-quality: write` permission that only it
+     needed, the `.github/actionlint.yaml` file that existed solely to suppress
+     actionlint's warning about that permission, and the path-filter entry for
+     it. A step that fails 404 on every run behind `fail-on-error: false` is
+     silent dead weight: the `##[error]` line is in the log and nowhere else.
+     This also restores the spec's own design, which is that this repository
+     ships **no** actionlint suppression file.
 
   The lesson is the one this ledger keeps hitting: a rule that cannot evaluate
   is worse than an absent one, because the repository reports a gated default
-  branch while gating nothing.
+  branch while gating nothing. The same holds for a step that cannot succeed —
+  `fail-on-error: false` converts a broken gate into a green one.
 
 **Not a research decision:** the tooling, hook, and workflow conventions live in
 `AGENTS.md` and the commit history, not here. This ledger tracks decisions about

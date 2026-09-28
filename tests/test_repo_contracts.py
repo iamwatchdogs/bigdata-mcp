@@ -305,6 +305,7 @@ NEGATION = "!"
 NAME_KEY = "name"
 PATCH_UPDATE_TYPE = "patch"
 PERMISSION_WRITE = "write"
+ACTIONLINT_CONFIG = Path(".github/actionlint.yaml")
 PATHS_FILTER_ACTION = "dorny/paths-filter"
 PULL_REQUEST_TRIGGER = "pull_request"
 # The freezer. Finding it in a `run:` body is what proves a binary is actually
@@ -2259,6 +2260,55 @@ def test_detect_changes_path_filters_cover_the_guarded_directories(
             f"`workflows` filter (declared: {sorted(workflows_paths)}), so a "
             "workflow edit would not trigger the actionlint job that guards it"
         )
+
+
+def test_actionlint_config_would_trigger_the_linter_that_uses_it(
+    repo_root: Path,
+) -> None:
+    """Assert the `workflows` filter covers actionlint's config, if any exists.
+
+    `.github/actionlint.yaml` held the only actionlint suppression this
+    repository used: `permissions: code-quality: write`, which actionlint
+    v1.7.12 predates. It was removed once the native coverage upload went, and
+    actionlint passes without it.
+
+    The filter entry went with the file, deliberately: a path filter naming a
+    file that does not exist is dead configuration. That leaves a latent trap,
+    because the file this review once held in the filter is exactly the kind of
+    edit that must not escape linting -- actionlint's config decides which
+    findings are suppressed, so a change to it is a change to whether the
+    linter checks anything, and nothing about such a commit looks like a
+    workflow change.
+
+    This assertion is conditional on the file existing, so it neither asserts a
+    path that is not there nor rots. If the file is ever reintroduced, the
+    existing test above still covers `*.yml` and this one immediately starts
+    covering the config, with no edit to the assertion itself.
+    """
+    if not (repo_root / ACTIONLINT_CONFIG).is_file():
+        pytest.skip(
+            f"{ACTIONLINT_CONFIG} does not exist, so there is no config whose "
+            "edit could escape the workflow linter"
+        )
+
+    blocks = _paths_filter_blocks(repo_root)
+    assert blocks, (
+        f"no workflow under {WORKFLOWS_DIR} runs the {PATHS_FILTER_ACTION} step, "
+        "so there is no `workflows` filter for the config to be listed in"
+    )
+
+    unlisted = [
+        str(site)
+        for site, parsed in blocks
+        if str(ACTIONLINT_CONFIG) not in _filter_paths(parsed, "workflows")
+    ]
+    assert not unlisted, (
+        f"{ACTIONLINT_CONFIG} exists but these workflows do not list it under "
+        f"the `workflows` filter: {unlisted}. actionlint's config decides which "
+        "findings are suppressed, so a pull request changing only that file "
+        "would leave the filter false, skip the workflow linter, and have "
+        "`CI Status` read that skip as a pass"
+    )
 
 
 def _unsafe_run_expressions(
