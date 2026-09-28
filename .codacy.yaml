@@ -1,0 +1,34 @@
+---
+# Codacy Cloud analysis configuration.
+#
+# IMPORTANT: Codacy Cloud reads this file from the DEFAULT BRANCH, not from a
+# feature branch, so it has no effect on this pull request and takes effect once
+# this branch is merged. That is why an earlier `.codacy.yml` on this branch
+# appeared to do nothing: the mechanism was correct, the location was not.
+#
+# Schema notes, because two earlier attempts failed on them:
+#   - the per-tool key is `engines:`, not `tools:`
+#   - the tool name is the lowercase tool id, `bandit`
+#   - the per-tool lever is `exclude_paths`; there is no skip-by-check-id key
+#     here, which is why `tools.bandit.skip-checks` did nothing
+#
+# Why these two files are excluded from Bandit on Codacy Cloud:
+# `B603` (subprocess_without_shell_equals_true) fires on every `subprocess` call
+# whose argv is not a compile-time constant, so it fires on the SAFE form — the
+# caller is flagged, not the command — and Codacy does not honour the
+# `[tool.bandit]` skip list, an inline `# nosec` marker, or a top-level
+# `exclude-patterns` entry, all three verified against the platform. Both call
+# sites exist to spawn a process with a computed argv: one runs the caller's
+# command under a lock, the other runs a probe whose working directory is the
+# repository root.
+#
+# What this does NOT give up: the local `make bandit` gate still analyses both
+# files on every commit and on every push, and `B602` — the check that catches a
+# real `shell=True` injection — is enabled and unskipped there. The list below
+# is pinned by `test_codacy_config_excludes_exactly_the_two_process_spawners`, so
+# it cannot grow silently.
+engines:
+  bandit:
+    exclude_paths:
+      - "scripts/with_testmon_lock.py"
+      - "tests/test_main.py"
