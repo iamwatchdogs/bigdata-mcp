@@ -107,7 +107,7 @@ def main(argv: list[str]) -> int:
         # status means the wrapper does not decide what runs. The injection risk
         # that matters is B602, which this repository does not use and does not
         # suppress: `shell=True` appears nowhere.
-        return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]  # nosec B603
+        return subprocess.run(  # nosec B603  # ruff: ignore[subprocess-without-shell-equals-true]
             command, check=False
         ).returncode
     finally:

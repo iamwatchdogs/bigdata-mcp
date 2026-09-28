@@ -323,7 +323,7 @@ def test_installed_console_script_survives_a_subprocess(
     # module-level constant holding the probe. `cwd` is a repository-root path
     # the test resolves itself; it is the working directory rather than part of
     # the command, and it never reaches a shell because `shell` is not used.
-    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]  # nosec B603
+    completed = subprocess.run(  # nosec B603  # ruff: ignore[subprocess-without-shell-equals-true]
         [sys.executable, "-c", CONSOLE_SCRIPT_PROBE],
         cwd=repo_root,
         check=False,
