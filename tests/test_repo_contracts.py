@@ -132,6 +132,7 @@ subprocess run, so each one can be observed to fail under a targeted mutation.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import shutil
@@ -3861,6 +3862,52 @@ def test_a_scheduled_workflow_never_uses_a_bare_cancel_in_progress(
         "joins the group. Use a string expression that excludes the schedule "
         f"event, e.g. `${{{{ {EVENT_NAME_REFERENCE} != '{SCHEDULE_LITERAL}' }}}}`"
     )
+
+
+def test_ruleset_payload_name_is_derived_from_the_lookup_variable(
+    repo_root: Path,
+) -> None:
+    """Assert the POSTed name and the looked-up name are one value.
+
+    ``RULESET_NAME`` drives the lookup that decides create-versus-update, and
+    the payload carries the name the API will store. When those were two
+    separate sources -- a variable and a hardcoded literal -- a mistyped
+    variable made the lookup miss, selected the create path, and POSTed the
+    literal. The result is not a visible error: the repository ends up with a
+    second ruleset carrying the canonical name, and the one the author thought
+    they were updating is stale. ``make ruleset`` reports success either way.
+
+    This runs the script rather than reading it, because the defect lives in
+    the wiring between two places in the file, and a source-level assertion
+    would still pass if ``payload()`` stopped consulting the variable.
+    """
+    script = repo_root / RULESET_SCRIPT
+    for name in (
+        "Default Branch Ruleset",
+        "typo-ruleset",
+        'quoted " name',
+        "back\\slash name",
+        "unicode ✅ 名前",
+    ):
+        result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+            ["/bin/sh", str(script), "--print"],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "RULESET_NAME": name},
+            check=True,
+        )
+        lines = result.stdout.splitlines()
+        body = "\n".join(line for line in lines if not line.startswith("#"))
+        payload = _as_mapping(
+            json.loads(body), f"the ruleset payload for RULESET_NAME={name!r}"
+        )
+        assert payload.get(NAME_KEY) == name, (
+            f"with RULESET_NAME={name!r} the payload names "
+            f"{payload.get(NAME_KEY)!r}. The lookup selects create-versus-update "
+            "with this variable while the payload supplies the stored name; if "
+            "they disagree, a mistyped value silently creates a duplicate "
+            "ruleset instead of failing. Both must read the same variable"
+        )
 
 
 def test_every_required_ruleset_context_is_a_context_this_repo_emits(

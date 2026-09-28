@@ -86,14 +86,26 @@ RULESET_NAME="${RULESET_NAME:-Default Branch Ruleset}"
 # from string concatenation, and so the `~DEFAULT_BRANCH` token reaches GitHub
 # literally (in JSON it must not be expanded by the shell).
 #
-# RULESET_NAME is intentionally not parameterised into the payload: the payload
-# names the ruleset, and interpolating an env var into it would let a stray
-# value silently rename an existing ruleset. The lookup below uses the variable,
-# the payload uses the literal, and they are kept in sync by name.
-payload() {
+# The payload's "name" is derived from $RULESET_NAME, the same value the lookup
+# uses, so the two cannot disagree.
+#
+# This was not always true and the earlier arrangement was the inverse of safe.
+# The payload hardcoded the literal "Default Branch Ruleset" while the lookup
+# honoured $RULESET_NAME, justified as protecting against a stray value silently
+# renaming an existing ruleset. In practice RULESET_NAME=typo made the lookup
+# miss, select the create path, and POST a payload naming the canonical
+# ruleset -- so the typo produced a SECOND ruleset with the same name instead
+# of an error. Confirmed against the live API: with a bogus RULESET_NAME the
+# lookup returns empty and the script would POST.
+#
+# jq both substitutes and JSON-encodes the value, so a name containing a quote
+# or backslash yields valid JSON instead of a 422. The rest of the payload stays
+# a literal heredoc so it remains reviewable in place, and ~DEFAULT_BRANCH still
+# reaches GitHub unexpanded.
+PAYLOAD_BODY() {
   cat <<'JSON'
 {
-  "name": "Default Branch Ruleset",
+  "name": "__RULESET_NAME__",
   "target": "branch",
   "enforcement": "active",
   "conditions": {
@@ -154,6 +166,13 @@ payload() {
 JSON
 }
 
+# Substitute the name into the literal body and validate in one step. If
+# substitution produced malformed JSON, jq fails here and nothing is sent, so a
+# bad RULESET_NAME cannot half-apply.
+payload() {
+  PAYLOAD_BODY | jq --arg name "$RULESET_NAME" '.name = $name'
+}
+
 if [ "${1:-}" = "--print" ]; then
   echo "# repository: $REPO"
   echo "# name: $RULESET_NAME"
@@ -162,6 +181,7 @@ if [ "${1:-}" = "--print" ]; then
 fi
 
 command -v gh >/dev/null || { echo "error: gh is required to apply a ruleset" >&2; exit 1; }
+command -v jq  >/dev/null || { echo "error: jq is required to apply a ruleset" >&2; exit 1; }
 
 # GitHub documents two separate endpoints: POST /repos/{owner}/{repo}/rulesets
 # creates, PUT /repos/{owner}/{repo}/rulesets/{id} updates an existing one.
