@@ -45,6 +45,7 @@ import runpy
 import subprocess  # ruff: ignore[suspicious-subprocess-import]
 import sys
 from pathlib import Path
+from typing import Any
 from typing import get_type_hints
 
 import pytest
@@ -227,7 +228,41 @@ def test_entry_point_module_executes_as_a_script(
     script = repo_root / ENTRY_POINT_SCRIPT
     assert script.is_file(), f"entry-point script is missing: {script}"
 
-    namespace = runpy.run_path(str(script), run_name="__main__")
+    calls: list[tuple[str, int]] = []
+    previous_tracer = sys.gettrace()
+
+    # Parameter and return types are `Any` deliberately: typeshed models
+    # TraceFunction as a recursive alias, which a narrower annotation here
+    # cannot satisfy without casts that would obscure what the tracer does.
+    def tracer(frame: Any, event: Any, arg: Any) -> Any:
+        if event == "call" and frame.f_code.co_name == "main":
+            calls.append((frame.f_code.co_filename, frame.f_code.co_firstlineno))
+        if previous_tracer is not None:
+            return previous_tracer(frame, event, arg)
+        return None
+
+    sys.settrace(tracer)
+    try:
+        namespace = runpy.run_path(str(script), run_name="__main__")
+    finally:
+        sys.settrace(previous_tracer)
+
+    observed = [where for where in calls if where[0] == str(script)]
+    assert observed, (
+        f"executing {script} under __name__ == "
+        f"{namespace.get('__name__')!r} never called a function named `main` "
+        f'defined in that file. The guard `if __name__ == "__main__": '
+        "main()` is missing, or does not invoke the entry point, so the module "
+        "and the frozen binary would define a function and exit without ever "
+        "running it -- the console script would exit 0 having done nothing. "
+        "This asserts the CALL rather than the returned namespace: runpy "
+        "returns __name__ and a callable main whether or not the guard exists, "
+        f"so a namespace-only check passes with the guard deleted ({calls!r})"
+    )
+    assert len(observed) == 1, (
+        f"the guard called main() {len(observed)} times ({observed!r}); a "
+        "script entry point must call it exactly once"
+    )
 
     assert namespace["__name__"] == "__main__", (
         f"the entry point executed with __name__ "
