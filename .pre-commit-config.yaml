@@ -109,6 +109,22 @@ repos:
         files: ^(tests|src)/.*\.py$
         types: [python]
 
+      - id: shellcheck
+        name: "lint shell scripts (shellcheck)"
+        # actionlint runs shellcheck over the `run:` blocks INSIDE workflows, so
+        # it covers workflow shell but not a standalone script. Before this hook
+        # the repository's only shell script, `scripts/apply_ruleset.sh`, was
+        # linted by nothing: an unquoted-expansion or quoting bug in it passed
+        # `make verify` green. Verified by mutation, not assumed.
+        #
+        # Codacy also runs ShellCheck on this repository, so this is not new
+        # scrutiny -- it is the same check, made enforceable locally and in CI
+        # rather than advisory in a third-party dashboard.
+        entry: shellcheck
+        language: system
+        types: [shell]
+        files: \.sh$
+
   # ---------------------------------------------------------------------------
   # Security gate — pre-push stage. Local replicas of the CI security
   # workflows so insecure code never leaves the machine

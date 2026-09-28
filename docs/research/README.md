@@ -160,10 +160,33 @@ Two things were checked so the conclusion is not a guess:
   `.codacy/codacy.yaml` for runtimes and tools. The file was removed rather than
   committed unverified.
 
-**Unverified:** the server-side 36 were never visible, so this entry cannot
-claim they are all dependency findings — only that the same tool configuration
-produces nothing in this repository's own files. Confirming that needs the
-dashboard.
+**Correction, added after Codacy re-reported 34 issues on a later commit.** The
+local run is NOT a reproduction of Codacy's analysis, and this entry originally
+implied it was. `codacy-cli` fetched four tools (opengrep, pylint, trivy, lizard)
+and `codacy-cli init` warned that five more configured on the Codacy side are
+unsupported: **markdownlint, Prospector, Bandit, Agentlinter, ShellCheck**. The
+34 issues the platform reports can therefore come from any of those, and none of
+them ran here. markdownlint alone reports **2,730** findings on this repository
+with default rules, against Codacy's 10 BestPractice issues, so its configured
+rule set is far narrower and cannot be inferred from the CLI either.
+
+So the accurate statement is narrower than the one above: the four CLI-supported
+tools find nothing in this repository's own code. What the other five find is
+unknown without the dashboard.
+
+**One finding the local run did surface, and it was real.** Codacy runs
+ShellCheck, which `codacy-cli` cannot. Checking whether the repository covered
+that ground independently turned up a genuine gap: actionlint's shellcheck
+integration only covers `run:` blocks *inside workflows*, so the repository's
+only standalone shell script, `scripts/apply_ruleset.sh`, was linted by no gate
+at all. Confirmed by mutation — `make verify` exited **0** with an injected
+`SC2086` unquoted expansion and an `SC2070` `-n` against an unquoted argument.
+A shellcheck hook and a contract test now cover it, and `make verify` exits 2 on
+the same injection. This is the shape of finding Codacy is for, and it was
+missing from a repository that otherwise fails closed.
+
+**Unverified:** the server-side 34 were never visible, so this entry still
+cannot claim what they are. Confirming that needs the dashboard.
 
 Codacy is not a merge gate here. The ruleset requires exactly one check,
 `CI Status`; there is no classic branch protection. Five independent gates cover

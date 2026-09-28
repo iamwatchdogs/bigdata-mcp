@@ -354,6 +354,7 @@ REQUIRED_STATUS_CHECK_NAME = "CI Status"
 # repository that lifts the workflow fails the assertion instead of quietly
 # re-pointing Gate 1 at itself.
 REPOSITORY_SLUG = "iamwatchdogs/bigdata-mcp"
+PRE_COMMIT_CONFIG = Path(".pre-commit-config.yaml")
 MULTI_TEMPLATE_DIR = Path(".github/PULL_REQUEST_TEMPLATE")
 REQUIRED_WORKFLOWS_FILTER_PATH = ".github/workflows/*.yml"
 RUN_KEY = "run"
@@ -4041,6 +4042,65 @@ PR_TEMPLATE_AUTO_APPLIED_PATHS = (
 # answer 404 for this repository, so a ruleset rule of either type is
 # configuration that looks enforced and enforces nothing.
 UNEVALUABLE_RULESET_RULE_TYPES = frozenset({"code_coverage", "code_quality"})
+
+
+def test_every_shell_script_is_linted_by_shellcheck(
+    repo_root: Path,
+) -> None:
+    """Assert a shellcheck hook covers every ``.sh`` file in the repository.
+
+    actionlint runs shellcheck over the ``run:`` blocks inside workflows, so it
+    covers shell *embedded in YAML* and nothing else. A standalone script was
+    therefore linted by no gate at all: `scripts/apply_ruleset.sh` passed
+    `make verify` green with an unquoted expansion and a `-n` against an unquoted
+    argument, both of which shellcheck rejects. That was confirmed by mutation
+    rather than assumed -- see the hook's comment in `.pre-commit-config.yaml`.
+
+    The hook is asserted here rather than trusted, because a hook that is
+    quietly deleted leaves the repository looking guarded and linting nothing,
+    which is the same defect this repository keeps having to undo elsewhere.
+    """
+    scripts = sorted(
+        path.relative_to(repo_root)
+        for path in repo_root.rglob("*.sh")
+        if ".git" not in path.parts and ".venv" not in path.parts
+    )
+    assert scripts, (
+        "expected at least one shell script under the repository, so this "
+        "assertion has something to cover. If the last one was removed, delete "
+        "this test rather than leave it passing"
+    )
+
+    config_path = repo_root / PRE_COMMIT_CONFIG
+    assert config_path.is_file(), f"required file is missing: {config_path}"
+    hooks = [
+        hook
+        for repo in yaml.safe_load(config_path.read_text(encoding="utf-8"))["repos"]
+        for hook in repo.get("hooks", [])
+    ]
+
+    covered: set[Path] = set()
+    for hook in hooks:
+        entry = str(hook.get("entry", ""))
+        if "shellcheck" not in entry:
+            continue
+        # `types` is the filter that decides this. prek applies `types` and
+        # `files` conjunctively, so a hook with `files: \.sh$` but some other
+        # type matches nothing at all -- a `.sh` file is not of that type. An
+        # earlier version of this assertion accepted either filter alone and
+        # therefore passed a hook that would never have fired; mutation testing
+        # is what surfaced that, since `types: [python]` with a `.sh` pattern
+        # looks correct at a glance.
+        if "shell" in (hook.get("types") or []):
+            covered.update(scripts)
+
+    uncovered = [str(path) for path in scripts if path not in covered]
+    assert not uncovered, (
+        f"these shell scripts are not linted by any shellcheck hook: "
+        f"{uncovered}. actionlint only checks `run:` blocks inside workflows, "
+        "so without a shellcheck hook a standalone script is unchecked by every "
+        "gate in this repository"
+    )
 
 
 def test_ruleset_declares_no_unevaluable_gate(
