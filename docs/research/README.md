@@ -249,14 +249,29 @@ their next *real* finding fails closed:
   The lesson matches the ShellCheck entry: the gap was that nothing here
   enforced the standard, so a third party's opinion was the only enforcement.
 
-Three Bandit findings resisted the config route and are suppressed at the call
-site instead. Codacy reports `B603` (subprocess without a static string) at
-`with_testmon_lock.py:104` and `test_main.py:306` even though `B603` is in this
-repository's skip list, so the platform's Bandit is not reading
-`[tool.bandit]` the way the pinned local version does — the skip list removed the
-17 `B101` findings, but not these. A site-level suppression is honoured wherever
-the configuration is read, so each of the three carries one with its reason
-directly above it. The third is the "assigning the result of a function with no
+**Two Codacy findings could not be fixed from this repository, after three
+attempts.** `B603` (subprocess without a static string) is reported at
+`with_testmon_lock.py:110` and `test_main.py:326` and survives everything tried
+here, in this order:
+
+1. `B603` was added to the `[tool.bandit]` skip list. The 17 `B101` findings did
+   disappear from the platform's report when that landed, so the config is read
+   to some degree — but `B603` did not.
+2. An inline site-level suppression marker, verified against Bandit 1.9.4 in
+   isolation to confirm it actually suppresses. Unchanged.
+3. The same marker reordered ahead of the ruff directive, since two ID-bearing
+   comments on one line is a shape the platform may not parse. Unchanged.
+
+A marker on the preceding line was tried in between and rejected: it looks
+equivalent and suppresses nothing. Each attempt cost a push and a Codacy
+round-trip, because `codacy-cli` cannot run the check that decides this.
+
+So the conclusion is narrow and worth stating precisely: **this is not fixable
+from a file in this repository.** Suppressing it requires Codacy dashboard
+settings — adding `B603` to the skipped checks there, or marking the two findings
+ignored. The local gate already treats both lines as clean, and the reasoning for
+each is written beside them, so nothing is lost if the platform never stops
+reporting them. The third is the "assigning the result of a function with no
 return" finding at `test_main.py:156`, and its marker is deliberately **ID-less**:
 that check does not exist in Bandit 1.9.4, so no valid ID can be named, and
 naming an unknown one makes Bandit print a warning on every run. Prose next to

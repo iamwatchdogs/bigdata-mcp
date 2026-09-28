@@ -105,7 +105,7 @@ claim rather than re-deriving it.
   contexts are its matrix-expanded job names `Analyze (python)` and
   `Analyze (actions)`, not `CodeQL`. A context named `CodeQL` goes unsatisfied
   and wedges every merge. `iamwatchdogs/learning-hog` carries
-  exactly that defect. CodeQL is gated by the `code_scanning` rule instead.
+  exactly that defect. CodeQL is gated by the `code_scanning` rule instead. (Escape hatch: state the exception and its compensating check in the commit body.)
 - **`.github/dependabot.yml` is not an Actions workflow.** actionlint rejects its
   top-level `updates:` key. It is covered by `check-yaml` and the contract tests.
 
