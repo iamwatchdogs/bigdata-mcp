@@ -26,10 +26,11 @@ body:
       label: Reproducibility
       description: >
         Ticking this confirms you checked the bug yourself, which saves a
-        round-trip of questions.
+        round-trip of questions. If you are reporting against a released
+        binary rather than the source, tick the second option instead.
       options:
         - label: I can reproduce this on the latest `main`
-          required: true
+        - label: I am reporting against a released binary, so this does not apply
 
   - type: textarea
     id: steps-to-reproduce
@@ -85,10 +86,13 @@ body:
     id: python-version
     attributes:
       label: Python version
-      description: The output of `python --version`. Only 3.14+ is supported.
+      description: >
+        The output of `python --version`. Only 3.14+ is supported. Leave blank if
+        you are reporting against a released binary, since the interpreter is
+        baked in and there is no Python on your machine.
       placeholder: "Python 3.14.7"
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: logs
