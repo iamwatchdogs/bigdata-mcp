@@ -37,6 +37,7 @@ dev = [
     "pytest-xdist>=3.8.0",
     "ruff>=0.16.9",
     "ty>=0.0.84",
+    "bandit>=1.9.4",
 ]
 
 # ---------------------------------------------------------------------------
@@ -166,3 +167,35 @@ show_missing = true
 # `src` is on sys.path via pytest's `pythonpath`, and the `__main__` guard is
 # exercised by runpy in tests/test_main.py, so nothing needs excluding to make
 # the numbers honest.
+
+[tool.bandit]
+# Bandit is the Python security analyser. Codacy runs it on every pull request,
+# which made it advisory rather than enforced: nothing in this repository failed
+# on a Bandit finding. This gate makes the same class of finding a local,
+# fail-closed check.
+#
+# Each skip is here because it fires on correct code in THIS repository, and
+# each is asserted by `test_bandit_skip_list_is_exactly_the_reviewed_set`, so
+# widening this list is a deliberate edit rather than a quiet one.
+#
+# B101 assert_used — a pytest suite is built from `assert`. The ruff equivalent
+#   (S101) is already suppressed for `tests/**` in this file for the same
+#   reason. Suppressing B101 does not weaken the suite: `make test` runs pytest,
+#   which is what evaluates those asserts.
+#
+# B404 import_subprocess — an advisory notice that fires on ANY import of
+#   `subprocess`. `scripts/with_testmon_lock.py` exists to run a command while
+#   holding a lock, and two test modules spawn interpreters, so it can never be
+#   clean here.
+#
+# B603 subprocess_without_shell_equals_true — fires on a non-literal argv, which
+#   is the SAFE form: it is the caller that is flagged, not the command. The
+#   dangerous neighbour B602 (shell=True) is NOT skipped, so command injection
+#   through a shell is still a hard failure. What is given up is the ability to
+#   tell a good argv from a bad one by inspection, which is not a distinction a
+#   linter can make anyway.
+#
+# B608 hardcoded_sql_expressions — this repository has no database and no SQL.
+#   The single hit is a false positive on the word "update" inside an assertion
+#   message that reads "create-versus-update".
+skips = ["B101", "B404", "B603", "B608"]

@@ -109,6 +109,23 @@ repos:
         files: ^(tests|src)/.*\.py$
         types: [python]
 
+      - id: bandit
+        name: "security bandit (python security analysis)"
+        # Codacy runs Bandit on every pull request, which made its findings
+        # advisory: nothing in this repository failed on one. This makes the
+        # same class of finding fail closed locally and in the pre-push stage.
+        #
+        # The skip list lives in `[tool.bandit]` in pyproject.toml, where each
+        # entry carries its own justification, and
+        # `test_bandit_skip_list_is_exactly_the_reviewed_set` asserts the list
+        # has not grown. Scoped to the first-party trees: `.venv` is excluded
+        # because `-r` is given explicit roots rather than a bare directory.
+        entry: make bandit
+        language: system
+        files: ^(src|tests|scripts)/.*\.py$|^pyproject\.toml$
+        types: [python]
+        pass_filenames: false
+
       - id: shellcheck
         name: "lint shell scripts (shellcheck)"
         # actionlint runs shellcheck over the `run:` blocks INSIDE workflows, so

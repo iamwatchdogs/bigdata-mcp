@@ -4106,6 +4106,52 @@ def test_ruleset_payload_declares_exactly_the_intended_rules(
     assert not duplicated, f"the payload declares duplicate rule types: {duplicated}"
 
 
+# Bandit's skip list, with the reason each entry is here. The reasons live
+# beside the list in pyproject.toml; this constant is the assertion that they
+# have not grown. Widening the list is a deliberate edit to both files.
+EXPECTED_BANDIT_SKIPS = frozenset({"B101", "B404", "B603", "B608"})
+
+
+def test_bandit_skip_list_is_exactly_the_reviewed_set(
+    repo_root: Path,
+) -> None:
+    """Assert Bandit's skip list is the reviewed set, no larger.
+
+    Every entry suppresses a check that fires on correct code in this
+    repository: B101 on pytest asserts, B404 on importing subprocess, B603 on a
+    non-literal argv, and B608 on the word "update" in an assertion message. The
+    justifications are in `[tool.bandit]`.
+
+    The risk of a skip list is that it grows. A later `skips = [...]` edit that
+    adds B602, for instance, would turn a command-injection finding into a green
+    run with nothing else in the repository noticing — and Bandit is the only
+    tool here that would have caught it. So the list is pinned, and removing an
+    entry from this set is what it takes to suppress a check.
+    """
+    manifest_path = repo_root / PYPROJECT_MANIFEST
+    manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+    declared = manifest.get("tool", {}).get("bandit", {}).get("skips", [])
+    assert sorted(declared) == sorted(EXPECTED_BANDIT_SKIPS), (
+        f"pyproject.toml declares bandit skips {sorted(declared)}, expected "
+        f"exactly {sorted(EXPECTED_BANDIT_SKIPS)}. Each skip is justified in "
+        "the `[tool.bandit]` comment beside it, and each is here because it "
+        "fires on correct code in this repository. If a new skip is genuinely "
+        "warranted, add it to this set and to the comment in the same commit so "
+        "it is reviewed as a change to what the security gate can see"
+    )
+
+    # B602 is the check that matters for the skips above: B603 fires on the
+    # safe non-literal-argv form, while B602 (shell=True) is the injection risk
+    # and must stay enabled. Assert it is not skipped, so adding B602 to the
+    # list cannot pass unnoticed.
+    assert "B602" not in declared, (
+        "B602 (subprocess with shell=True) is in the bandit skip list. That is "
+        "the check this repository relies on instead of B603, which fires on "
+        "the safe form. Suppressing it turns a command-injection finding into a "
+        "green run"
+    )
+
+
 def test_every_shell_script_is_linted_by_shellcheck(
     repo_root: Path,
 ) -> None:

@@ -22,7 +22,7 @@ HYGIENE := trailing-whitespace end-of-file-fixer mixed-line-ending \
 .PHONY: help install update lock hooks uninstall hooks-update hooks-list \
         hooks-validate lint lint-check format format-check fmt fix typecheck \
         complexity actionlint workflows test testmon coverage coverage-html \
-        hygiene checks security zizmor osv gitleaks verify ci run build binary \
+        hygiene checks security zizmor osv gitleaks bandit verify ci run build binary \
         remote ruleset ruleset-apply clean clean-all
 
 ##@ Setup
@@ -127,6 +127,9 @@ checks: ## Full pre-commit stage on all files (skips branch guard)
 
 security: ## Full pre-push security gate: zizmor + osv-scanner + gitleaks
 	$(PREK) run --all-files --stage pre-push
+
+  bandit: ## Python security analysis (pre-push hook)
+	$(RUN) bandit -q -r src scripts tests -c pyproject.toml
 
   zizmor: ## GitHub Actions SAST, medium+ severity (pre-push hook)
 	$(PREK) run zizmor --all-files --stage pre-push
