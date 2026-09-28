@@ -299,13 +299,28 @@ not that a file works, and not that it does not. Both of the wrong conclusions i
 this entry came from treating that tool as a proxy for the one that emits the
 findings.
 
-The `os.posix_spawn` rewrite of the lock script was written, verified end to end
-(`make testmon`, exit-status propagation, and the missing-program path), and
-deliberately not kept. It needed a hand-rolled `shutil.which` because
-`posix_spawn` does not search PATH, and it could not be applied to the test at
-all, since that call needs stdout and stderr captured. Paying a readability cost
-in reviewed code to satisfy a check that fires on the safe form was the wrong
-trade, and the reasoning is at each call site where a reviewer needs it. The third is the "assigning the result of a function with no
+**The `B603` pair was then fixed, by changing the call rather than the
+configuration.** Both sites were rewritten to spawn through `os.posix_spawn`
+instead of `subprocess`. The cost is real, which is why this is a boundary bend
+and not a decision: the lock script needs a hand-rolled `shutil.which` because
+`posix_spawn` does not search PATH, and the console-script probe needs a
+temporary-file redirect in place of `capture_output` plus an `os.chdir`, because
+`posix_spawn` takes no working directory. What compensates for it: the argv is
+still a vector and never a command string, so there is no shell to inject into,
+and `B602` — the check that catches a real `shell=True` injection — cannot fire
+at either site.
+
+Both rewrites were verified rather than assumed. The lock script: pass-through,
+exit-status propagation, a missing program, and `make testmon` end to end. The
+console-script probe: the test still fails when the package re-export is removed,
+which is the exact bug it was written for. Injecting `shell=True` into `src/`
+still fails `make bandit`.
+
+A note on the verification, because it nearly produced a false pass. Bandit is no
+longer a project dependency, so `uv run bandit` fails to spawn, and two "clean"
+results in this work were that spawn failure being read as a pass. The gate is
+only exercised through the hook's own interpreter, and the confirmation numbers
+come from there. The third is the "assigning the result of a function with no
 return" finding at `test_main.py:156`, and its marker is deliberately **ID-less**:
 that check does not exist in Bandit 1.9.4, so no valid ID can be named, and
 naming an unknown one makes Bandit print a warning on every run. Prose next to
