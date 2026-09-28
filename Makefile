@@ -129,7 +129,7 @@ security: ## Full pre-push security gate: zizmor + osv-scanner + gitleaks
 	$(PREK) run --all-files --stage pre-push
 
   bandit: ## Python security analysis (pre-push hook)
-	$(RUN) bandit -q -r src scripts tests -c pyproject.toml
+	$(PREK) run bandit --all-files
 
   zizmor: ## GitHub Actions SAST, medium+ severity (pre-push hook)
 	$(PREK) run zizmor --all-files --stage pre-push

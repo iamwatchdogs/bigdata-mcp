@@ -270,16 +270,34 @@ Two conclusions drawn from that were wrong, and both were the same mistake:
   read it. That is true and irrelevant: the file is consumed by the Codacy
   *platform*, and the platform was the thing producing the findings.
 
-`.codacy.yml` with `exclude-patterns` for the B603 message cleared both, and
-`exclude-paths` for `uv.lock` cleared the E501 pair. **Codacy now reports zero
-annotations.** B602, the check that catches a real `shell=True` injection, is
-deliberately not matched by the pattern and stays enforced.
+`.codacy.yml` with `exclude-patterns` and `exclude-paths` was then tried and did
+**not** work. It was briefly believed to have worked: an in-progress run reported
+`annotations=0`, and that partial result was read as success and committed as
+such. A completed run reports the same four findings. The file was removed rather
+than kept, because a configuration that looks effective and is not is the worst
+outcome available — worse than having no configuration, since it invites the next
+reader to stop looking.
+
+So `.codacy.yml` is also a dead lever. The correct summary of this entry is that
+the platform honours `[tool.bandit]` in pyproject.toml and nothing else tried here,
+and the four findings reduce to two `B603` calls that need dashboard settings.
+
+**What was fixed instead, and it was worth fixing.** The two `E501` findings on
+`uv.lock` were self-inflicted: they exist only because `bandit` became a project
+dev-dependency, and uv writes each `sdist` and `wheel` record as a single line,
+so any package with a long name or URL pushes them past a line-length limit.
+`uv.lock` must never be hand-edited to satisfy a linter. Bandit is therefore no
+longer a project dependency: the pre-push hook installs it in its own isolated
+environment at a pinned version, which is where a linter belongs, and the gate
+still fails closed — verified by injecting `shell=True` (B602) and `hashlib.md5`
+(B324) into `src/` and watching the hook catch both through the new install path.
+The lock file is no longer churned by a security tool.
 
 The generalisable part: `codacy-cli` cannot reproduce the platform's analysis, so
-a config file the CLI ignores is not thereby a config file the platform ignores.
-Ruling a lever out on the wrong tool's behaviour is the same error as fitting a
-hypothesis too well to the wrong data — which is what the `.venv` red herring
-earlier in this entry was.
+nothing about the platform's configuration surface can be established with it —
+not that a file works, and not that it does not. Both of the wrong conclusions in
+this entry came from treating that tool as a proxy for the one that emits the
+findings.
 
 The `os.posix_spawn` rewrite of the lock script was written, verified end to end
 (`make testmon`, exit-status propagation, and the missing-program path), and

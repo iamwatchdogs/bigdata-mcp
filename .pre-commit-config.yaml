@@ -120,8 +120,19 @@ repos:
         # `test_bandit_skip_list_is_exactly_the_reviewed_set` asserts the list
         # has not grown. Scoped to the first-party trees: `.venv` is excluded
         # because `-r` is given explicit roots rather than a bare directory.
-        entry: make bandit
-        language: system
+        #
+        # Bandit is installed HERE, in the hook's own environment, rather than
+        # as a project dev-dependency. That is not a packaging preference: as a
+        # dev-dependency it lands in uv.lock, and uv writes each sdist and wheel
+        # record as a single line, so a package with a long name or URL pushes
+        # those lines past any line-length limit and Codacy reports E501 on a
+        # file that must never be hand-edited to satisfy a linter. The gate is
+        # worth having and the lock file is worth not churning, so the tool goes
+        # where the tool belongs. Pinned to an exact version for the same reason
+        # every other hook revision in this file is.
+        entry: bandit -q -r src scripts tests -c pyproject.toml
+        language: python
+        additional_dependencies: ["bandit==1.9.4"]
         files: ^(src|tests|scripts)/.*\.py$|^pyproject\.toml$
         types: [python]
         pass_filenames: false
