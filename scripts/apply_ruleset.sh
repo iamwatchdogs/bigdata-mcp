@@ -34,6 +34,20 @@
 # the real gate is the required status check plus the auto-merge policy's own
 # allow-list.
 #
+# CODE QUALITY AND COVERAGE RULES — TWO PREREQUISITES
+# `code_quality` blocks on unresolved findings from GitHub Code Quality. It is
+# inert unless that product is enabled for the repository; the API reports
+# "Code quality is not available for this repository" until it is. Unlike the
+# `code_scanning` rule, which keys on CodeQL alerts, this rule also covers
+# findings uploaded by any other code-quality tool, including zizmor -- so the
+# severity chosen here decides whether a zizmor warning blocks a merge.
+#
+# `code_coverage` evaluates GitHub's BUILT-IN coverage data, not Codecov. It
+# requires `actions/upload-code-coverage` to publish a Cobertura report; without
+# that upload the rule has no data to evaluate. The thresholds below are line
+# coverage, matching `[tool.coverage.report] fail_under` in pyproject.toml, so
+# one number is enforced locally and one by the ruleset.
+#
 # Run `make ruleset` to print, or `make ruleset-apply` to apply. Applying needs
 # `gh` authenticated with admin scope on the repository.
 set -euo pipefail
@@ -120,6 +134,19 @@ payload() {
             "security_alerts_threshold": "high_or_higher"
           }
         ]
+      }
+    },
+    {
+      "type": "code_quality",
+      "parameters": {
+        "severity": "errors"
+      }
+    },
+    {
+      "type": "code_coverage",
+      "parameters": {
+        "minimum_coverage": 80.0,
+        "max_coverage_drop": 5.0
       }
     }
   ]

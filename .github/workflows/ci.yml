@@ -206,6 +206,10 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      # Required only by actions/upload-code-coverage, which publishes to
+      # GitHub's built-in coverage. Scoped to this job so the other jobs in
+      # this workflow do not carry it.
+      code-quality: write
 
     env:
       IS_COVERAGE_RUN: >-
@@ -247,6 +251,34 @@ jobs:
           files: coverage.xml
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
+
+      # GitHub's OWN built-in coverage, which is what the `code_coverage`
+      # ruleset rule evaluates. Codecov and this are separate systems: the ruleset
+      # rule does not read Codecov's numbers, so without this step
+      # `minimum_coverage` in the branch ruleset has nothing to measure and the
+      # rule is inert.
+      #
+      # Both uploads run on purpose. This one feeds the merge gate and the PR
+      # comment from github-code-quality[bot]; Codecov keeps the history,
+      # dashboard, and trend data.
+      #
+      # Uploaded on pushes to main rather than on every pull request: a PR from
+      # a fork has no `code-quality: write` here, and the ruleset evaluates
+      # coverage relative to the default branch anyway. `fail-on-error: false`
+      # for the same reason as the `if:` -- an upload the token cannot perform
+      # is not a coverage regression, and failing the job for it would make
+      # every fork PR red for no reason.
+      - name: Upload coverage to GitHub
+        if: >-
+          env.IS_COVERAGE_RUN == 'true' &&
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main'
+        uses: actions/upload-code-coverage@d8e329117199404bba6fc81efe8093dc7c015e34 # v1.4.2
+        with:
+          file: coverage.xml
+          language: Python
+          label: code-coverage/pytest
+          fail-on-error: false
 
   ci-status-checker:
     name: CI Status

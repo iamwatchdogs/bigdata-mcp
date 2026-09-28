@@ -1,0 +1,32 @@
+# actionlint configuration.
+#
+# Scoped to a single file, a single rule, and a single literal string, for a
+# reason that is verifiable rather than cosmetic.
+#
+# The `permissions` rule fires on ci.yml's `code-quality: write` because
+# actionlint v1.7.12 (2026-03-30) predates that permission scope. The scope is
+# real and required: GitHub's own documentation for
+# `actions/upload-code-coverage` states "The `code-quality: write` permission is
+# required to upload coverage data. No other elevated permissions are needed",
+# and shows exactly this scope in its example workflow.
+#
+# The filter is a message pattern, not a rule name, so it suppresses THIS ONE
+# error and nothing else. Any other unknown scope in ci.yml still fails:
+#   `bogus-scope: write` -> caught (verified)
+#   `code-quality: write` -> suppressed (the only intended exception)
+# Dropping the native coverage upload instead would leave the `code_coverage`
+# ruleset rule with no data to evaluate, since that rule reads GitHub's built-in
+# coverage and not Codecov's.
+#
+# Remove this file once actionlint ships a release that knows the scope. Check
+# with:
+#   gh api repos/rhysd/actionlint/releases --jq '.[0].tag_name'
+paths:
+  ".github/workflows/ci.yml":
+    # `ignore` is a LIST of regular expressions matched against the error
+    # MESSAGE, not a list of rule names (see rhysd/actionlint config.go,
+    # IgnorePatterns). Anchored on the quoted scope name so it can only match
+    # this one error, and prefixed with `^` so it cannot match a substring of a
+    # different message.
+    ignore:
+      - '^unknown permission scope "code-quality"'
