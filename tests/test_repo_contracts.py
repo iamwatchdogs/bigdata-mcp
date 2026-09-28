@@ -3986,13 +3986,22 @@ def test_ruleset_payload_name_is_derived_from_the_lookup_variable(
         result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
             [_bash(), str(script), "--print"],
             capture_output=True,
-            text=True,
+            # `text=True` alone decodes with the LOCALE encoding, which is
+            # charmap on the Windows runner and raises UnicodeDecodeError on
+            # the non-ASCII names below -- before the assertion under test ever
+            # runs. Pin UTF-8 so this test checks the payload and not the
+            # runner's code page.
+            encoding="utf-8",
             # GITHUB_REPOSITORY is set so resolve_repo does not depend on the
             # checkout having an `origin` remote: a source tarball or a vendor
             # copy has none, and this assertion is about the payload name, not
             # about how the repository is discovered.
             env={**os.environ, "RULESET_NAME": name, "GITHUB_REPOSITORY": "o/r"},
             check=True,
+        )
+        assert result.stdout is not None, (
+            "the ruleset script produced no stdout, so there is no payload to "
+            f"assert on (stderr: {result.stderr!r})"
         )
         lines = result.stdout.splitlines()
         body = "\n".join(line for line in lines if not line.startswith("#"))
