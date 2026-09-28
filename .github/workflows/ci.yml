@@ -6,6 +6,11 @@ on:
     branches:
       - main
   pull_request:
+  # A manual dispatch runs every job. Path filters decide scope from the files
+  # changed in the last commit, so a dispatch of a docs-only commit would skip
+  # the Python jobs entirely -- and `CI Status` accepts a skipped job only when
+  # detect-changes reported its filter as false, so the run would still report
+  # success having checked almost nothing. "Run the checks now" has to mean that.
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -28,7 +33,11 @@ concurrency:
 jobs:
   detect-changes:
     name: Detect changes
-    if: ${{ !inputs.run-all }}
+    # Skipped when a caller forces the full matrix, and on a manual dispatch.
+    # A dispatch means "run the checks now", so letting path filters decide
+    # scope from the last commit could run nothing while still reporting a
+    # green `CI Status`.
+    if: ${{ !inputs.run-all && github.event_name != 'workflow_dispatch' }}
 
     runs-on: ubuntu-latest
     permissions:
@@ -71,7 +80,7 @@ jobs:
   lint-gh-workflows:
     needs: [detect-changes]
     if: |
-      (inputs.run-all ||
+      (inputs.run-all || github.event_name == 'workflow_dispatch' ||
       needs.detect-changes.outputs.workflows == 'true') &&
       !failure() &&
       !cancelled()
@@ -96,7 +105,7 @@ jobs:
   lint-json:
     needs: [detect-changes]
     if: |
-      (inputs.run-all ||
+      (inputs.run-all || github.event_name == 'workflow_dispatch' ||
       needs.detect-changes.outputs.json == 'true') &&
       !failure() &&
       !cancelled()
@@ -149,7 +158,7 @@ jobs:
   precheck-ci-pipeline:
     needs: [detect-changes]
     if: |
-      (inputs.run-all ||
+      (inputs.run-all || github.event_name == 'workflow_dispatch' ||
       needs.detect-changes.outputs.python == 'true') &&
       !failure() &&
       !cancelled()
@@ -190,7 +199,7 @@ jobs:
   test-matrix-pipeline:
     needs: [detect-changes]
     if: |
-      (inputs.run-all ||
+      (inputs.run-all || github.event_name == 'workflow_dispatch' ||
       needs.detect-changes.outputs.python == 'true') &&
       !failure() &&
       !cancelled()
