@@ -227,11 +227,27 @@ jobs:
       code-quality: write
 
     env:
+      # Coverage is GENERATED on the canonical cell for every event that runs
+      # the Python jobs: the push to main, the pull request, the reusable
+      # release call, and a manual dispatch. `fail_under = 80` therefore
+      # applies on a pull request too, which is the point of having a floor.
+      #
+      # It is PUBLISHED in two different ways, because the two consumers are
+      # different systems:
+      #   - Codecov, on the canonical cell of any event, for history and trends
+      #   - GitHub's built-in coverage, on push to main AND on same-repository
+      #     pull requests, because the `code_coverage` ruleset rule evaluates
+      #     the pull-request branch against the default branch
       IS_COVERAGE_RUN: >-
-        ${{ matrix.os == 'ubuntu-latest' &&
-        matrix.python-version == '3.14' &&
-        github.event_name == 'push' &&
-        github.ref == 'refs/heads/main' }}
+        ${{ matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14' }}
+      # A fork pull request gets no `code-quality: write` token, and
+      # secrets.CODECOV_TOKEN is not exposed to forks, so a fork's coverage
+      # cannot be uploaded by either path. It is still generated and still has
+      # to clear `fail_under`.
+      CAN_PUBLISH_COVERAGE: >-
+        ${{ matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14' &&
+        (github.event_name != 'pull_request' ||
+        github.event.pull_request.head.repo.full_name == github.repository) }}
 
     steps:
       - name: Check out the repo
@@ -255,12 +271,12 @@ jobs:
         if: env.IS_COVERAGE_RUN == 'true'
         run: uv run pytest --cov-report=xml
 
-      - name: Run tests
+      - name: Run tests without coverage
         if: env.IS_COVERAGE_RUN != 'true'
         run: uv run pytest --no-cov
 
       - name: Upload coverage to Codecov
-        if: env.IS_COVERAGE_RUN == 'true'
+        if: env.CAN_PUBLISH_COVERAGE == 'true'
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: coverage.xml
@@ -277,17 +293,24 @@ jobs:
       # comment from github-code-quality[bot]; Codecov keeps the history,
       # dashboard, and trend data.
       #
-      # Uploaded on pushes to main rather than on every pull request: a PR from
-      # a fork has no `code-quality: write` here, and the ruleset evaluates
-      # coverage relative to the default branch anyway. `fail-on-error: false`
-      # for the same reason as the `if:` -- an upload the token cannot perform
-      # is not a coverage regression, and failing the job for it would make
-      # every fork PR red for no reason.
+      # Uploaded on a push to main AND on a same-repository pull request. The
+      # ruleset rule compares the pull-request branch against the default
+      # branch, so it needs data for BOTH sides: without the pull-request
+      # upload there is nothing on the left of the comparison and
+      # `minimum_coverage` cannot be evaluated. Gating this to main only --
+      # which is what an earlier revision of this file did -- left the rule
+      # permanently inert while appearing to be configured.
+      #
+      # A fork pull request is excluded by CAN_PUBLISH_COVERAGE: it has no
+      # `code-quality: write` token here. `fail-on-error: false` for the same
+      # reason -- an upload the token cannot perform is not a coverage
+      # regression, and failing the job would turn every fork PR red for
+      # nothing.
       - name: Upload coverage to GitHub
         if: >-
-          env.IS_COVERAGE_RUN == 'true' &&
-          github.event_name == 'push' &&
-          github.ref == 'refs/heads/main'
+          env.CAN_PUBLISH_COVERAGE == 'true' &&
+          (github.event_name == 'push' ||
+          github.event_name == 'pull_request')
         uses: actions/upload-code-coverage@d8e329117199404bba6fc81efe8093dc7c015e34 # v1.4.2
         with:
           file: coverage.xml

@@ -71,10 +71,15 @@ Two decisions this changed, recorded because they are not obvious from the files
   arguments, so those assertions would be vacuous. `tests/test_main.py` exercises
   the `__main__` guard, which is what gives the exit-0 assertion meaning. The
   smoke test should grow a `--version` flag once the CLI does.
-- **Coverage reports from one matrix cell, but the floor applies to all three.**
-  The floor is `fail_under = 80` in `pyproject.toml`, so every cell enforces it;
-  only the upload is restricted to linux + 3.14 + a push to `main`, so three
-  numbers never race one Codecov project.
+- **Coverage is generated on one matrix cell, and published on two systems.** The
+  floor is `fail_under = 80` in `pyproject.toml`, so every cell enforces it.
+  Only the canonical cell (linux + 3.14) generates a report, so three numbers
+  never race one Codecov project. Publication differs by consumer: Codecov
+  receives it for history and trends, while GitHub's built-in coverage receives
+  it for the `code_coverage` ruleset rule, which needs the **pull-request
+  branch** as well as the default branch to compare. Restricting the native
+  upload to pushes to `main` — the first attempt — left that rule permanently
+  inert while looking configured.
 
 **Not a research decision:** the tooling, hook, and workflow conventions live in
 `AGENTS.md` and the commit history, not here. This ledger tracks decisions about
