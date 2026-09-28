@@ -1,25 +1,7 @@
-# OpenSSF Scorecard grades the repository's supply-chain hygiene and publishes
-# the result to the Security tab, where a badge and an ongoing grade live.
-#
-# No `SCORECARD_TOKEN` is configured. Scorecard's own recommendation for a
-# public repository is the default `GITHUB_TOKEN`; a PAT is only needed to
-# unlock the Branch-Protection check on a public repo, or any check on a
-# private one. `id-token: write` is what `publish_results: true` requires.
-#
-# NOTE: there is deliberately no `pull_request` trigger. Upstream supports only
-# `push`, `schedule` and `branch_protection_rule`; `pull_request` is
-# experimental and runs local-only (`supply-chain/local`), so its SARIF omits the
-# `branch-protection` and `online-scm` categories present on the default branch.
-# That produces a "configurations not found" code-scanning warning on every pull
-# request, which trains reviewers to ignore code-scanning warnings — the exact
-# failure mode this file is meant to reduce. PR-time workflow safety is covered
-# by CodeQL's `actions` analysis and by zizmor.yml.
 name: Scorecard supply-chain security
 
 on:
-  # Re-scores when branch protection settings change.
   branch_protection_rule:
-  # Keeps the Maintained check fresh even in a quiet week.
   schedule:
     - cron: "42 2 * * 0"
   push:
@@ -29,9 +11,6 @@ permissions:
   contents: read
 
 concurrency:
-  # As in codeql.yml: the scheduled run needs its own group, because
-  # cancel-in-progress is evaluated on the arriving run and a shared group
-  # would let a push kill the weekly scan.
   group: scorecard-${{ github.ref }}${{ github.event_name == 'schedule' && '-scheduled' || '' }}
   cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
@@ -56,14 +35,6 @@ jobs:
         with:
           results_file: results.sarif
           results_format: sarif
-
-          # Uncomment `repo_token: ${{ secrets.SCORECARD_TOKEN }}` only if this
-          # repository goes private, or to enable the Branch-Protection check on
-          # a public repository.
-          #
-          # Every remaining trigger (push to main, schedule,
-          # branch_protection_rule) runs on the default branch, so publishing
-          # always succeeds. There is no PR trigger to suppress here.
           publish_results: true
 
       - name: Upload artifact
@@ -73,10 +44,6 @@ jobs:
           path: results.sarif
           retention-days: 5
 
-      # Defense in depth. There is no pull_request trigger, so this cannot fire
-      # today; it exists so that re-adding a PR trigger later cannot silently
-      # start overwriting the default-branch SARIF baseline with a
-      # `supply-chain/local` result that lacks its categories.
       - name: Upload to code-scanning
         if: github.event_name != 'pull_request'
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2

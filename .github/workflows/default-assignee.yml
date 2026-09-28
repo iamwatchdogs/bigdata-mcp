@@ -1,15 +1,5 @@
 name: Assign default owner
 
-# Three triggers, because "who owns this" is asked in three different places:
-# a new issue, a new pull request, and an unassigned code-scanning alert that
-# only appears after CodeQL finishes.
-#
-# Every privileged trigger here is `pull_request_target` or `workflow_run`, both
-# of which run with a write token against code an attacker may control. That is
-# safe only because this workflow never checks out the PR and never runs PR
-# code. Its steps are fixed `gh api` calls against hardcoded endpoints, with the
-# only variable input read from `env:` and never interpolated into a `run:`
-# script. Do not add a checkout, a build step, or an interpolation here.
 on:
   issues:
     types: [opened]
@@ -18,10 +8,6 @@ on:
     types: [opened]
 
   workflow_run: # zizmor: ignore[dangerous-triggers]
-    # Must match `name:` in codeql.yml EXACTLY. A `workflow_run` filter matches
-    # on the workflow's name, not its file, so a rename on either side silently
-    # stops the code-scanning assignment from ever running again -- with no
-    # error anywhere. tests/test_repo_contracts.py asserts the two agree.
     workflows: ["CodeQL Advanced"]
     types: [completed]
   workflow_dispatch:
@@ -30,13 +16,6 @@ permissions:
   contents: read
 
 concurrency:
-  # `github.event.number` rather than `github.event.issue.number` /
-  # `github.event.pull_request.number`: it is the same integer on both payloads,
-  # and it is assigned by GitHub rather than being attacker-supplied text. The
-  # untrusted-input contract test forbids the `pull_request.*` / `issue.*`
-  # prefixes outside an `env:` mapping on principle, and this satisfies it
-  # without weakening the test for the fields that genuinely are injectable
-  # (branch names, PR titles, author-controlled strings).
   group: default-assignee-${{ github.event_name }}-${{ github.event.number || github.run_id }}
   cancel-in-progress: true
 
@@ -54,8 +33,6 @@ jobs:
       - name: Assign repository owner
         env:
           GH_TOKEN: ${{ github.token }}
-          # The assignees endpoint is issue-shaped, so an issue and a pull
-          # request use the same URL with different numbers.
           ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
           DEFAULT_ASSIGNEE: ${{ github.repository_owner }}
         run: |
@@ -74,8 +51,6 @@ jobs:
 
   assign-code-scanning-alerts:
     name: Assign unassigned code-scanning alerts
-    # Only after a successful CodeQL run, so alerts exist to be assigned, and
-    # never after a failed or cancelled one.
     if: >-
       ${{ (github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success') ||

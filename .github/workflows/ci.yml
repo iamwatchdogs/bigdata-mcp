@@ -1,8 +1,6 @@
 name: CI
 
-# Path-filtered so a docs-only or workflow-only change does not pay for the
-# Python matrix. `run-all` exists for the release gate in cd.yml, which must
-# exercise every job regardless of which paths the tag touched.
+
 on:
   push:
     branches:
@@ -16,10 +14,6 @@ on:
         required: false
         default: false
         type: boolean
-    # Declared explicitly because a reusable workflow does not inherit the
-    # caller's secrets implicitly, and actionlint rejects a caller passing a
-    # secret the callee never declares. cd.yml passes CODECOV_TOKEN for the
-    # release gate; see the note there.
     secrets:
       CODECOV_TOKEN:
         required: false
@@ -28,17 +22,12 @@ permissions:
   contents: read
 
 concurrency:
-  # head_ref groups every push to one PR so superseded runs are cancelled. On
-  # push/dispatch, head_ref is empty, so the group falls back to run_id and is
-  # unique per run — otherwise workflow_dispatch runs would cancel each other.
   group: ci-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   detect-changes:
     name: Detect changes
-    # Skipped entirely when a caller forces the full matrix; every downstream
-    # job then takes the run-all branch of its own `if`.
     if: ${{ !inputs.run-all }}
 
     runs-on: ubuntu-latest
@@ -52,9 +41,6 @@ jobs:
       json: ${{ steps.filter.outputs.json }}
 
     steps:
-      # paths-filter reads changed files from the API on pull requests, so no
-      # working tree is needed there. Checking out everywhere else costs a full
-      # clone for a job that only needs a file list.
       - name: Check out the repo
         if: github.event_name != 'pull_request'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -84,8 +70,6 @@ jobs:
 
   lint-gh-workflows:
     needs: [detect-changes]
-    # Status guards stay the last conjunct so a failed or cancelled run can
-    # never be resurrected by the run-all short-circuit.
     if: |
       (inputs.run-all ||
       needs.detect-changes.outputs.workflows == 'true') &&
@@ -101,16 +85,12 @@ jobs:
       - name: Check out the repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # actionlint only reads .github, so a sparse checkout avoids pulling
-          # the source tree for a config-linting job.
           sparse-checkout: .github
           persist-credentials: false
 
       - name: Run actionlint
         uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
         with:
-          # Pinned to match `rev: v1.7.12` in .pre-commit-config.yaml so the CI
-          # verdict and the local verdict for a workflow edit cannot disagree.
           version: v1.7.12
 
   lint-json:
@@ -136,9 +116,6 @@ jobs:
       - name: Ensure ripgrep
         run: command -v rg >/dev/null || sudo apt-get install -y ripgrep
 
-      # Two independent validators rather than one. jq and the stdlib disagree
-      # about some edge cases, so a single tool would mean a single tool's
-      # blind spots.
       - name: Validate JSONL with jq
         if: ${{ hashFiles('**/*.jsonl') != '' }}
         run: |
@@ -159,11 +136,6 @@ jobs:
           rg --files --hidden --no-follow --null -g '*.jsonl' \
             | xargs -0 -r -n1 python -m json.tool --json-lines --compact > /dev/null
 
-      # A plain .json document is a single JSON value, not JSON Lines, so
-      # `--json-lines` would reject it. It needs its own pass, and the `json`
-      # path filter matches .json as well as .jsonl, so without this a change
-      # touching only a malformed .json would flip the filter, run this job,
-      # validate nothing, and report green.
       - name: Validate JSON
         if: ${{ hashFiles('**/*.json') != '' }}
         run: |
@@ -210,14 +182,6 @@ jobs:
       - name: Run type checking
         run: uv run ty check src
 
-      # Runs the remaining hook set. The SKIP list removes hooks that either
-      # duplicate a dedicated job above (ruff, ty, actionlint) or make no sense
-      # in CI: no-commit-to-branch has no branch to guard under
-      # actions/checkout, and pytest-testmon's subset selection would report a
-      # meaningless coverage number (see the note in .pre-commit-config.yaml).
-      # The pre-push security hooks (zizmor, osv-scanner, gitleaks) are not in
-      # this stage at all: zizmor.yml and dependency-review.yml cover the first
-      # two in CI, and gitleaks has no CI equivalent because it scans history.
       - name: Run precommit hooks
         uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0
         env:
@@ -233,10 +197,6 @@ jobs:
 
     strategy:
       matrix:
-        # Quoted on purpose: bare 3.14 parses as the float 3.14, and an
-        # unquoted 3.10 would become 3.1. Only the pinned interpreter is
-        # tested, because it is the only one the manifest, ty and ruff all
-        # claim support for.
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.14"]
       fail-fast: false
@@ -248,10 +208,6 @@ jobs:
       contents: read
 
     env:
-      # Coverage is reported from exactly one cell: the pinned interpreter, on
-      # the default branch only. Uploading from all three cells would race
-      # three uploads of three different numbers into one Codecov project, and
-      # PR runs would report numbers that no longer describe main.
       IS_COVERAGE_RUN: >-
         ${{ matrix.os == 'ubuntu-latest' &&
         matrix.python-version == '3.14' &&
@@ -276,8 +232,6 @@ jobs:
       - name: Setup project
         run: uv sync --locked
 
-      # Both cells run the same suite, and fail_under = 80 in pyproject.toml
-      # applies in every cell, not only the coverage one.
       - name: Run tests with coverage
         if: env.IS_COVERAGE_RUN == 'true'
         run: uv run pytest --cov-report=xml
@@ -291,27 +245,9 @@ jobs:
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: coverage.xml
-          # Fail closed: a silently dropped coverage upload would let a
-          # regression in the reporting path go unnoticed. Requires the
-          # CODECOV_TOKEN repository secret to be configured.
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  # Single required status check for the branch ruleset, replacing per-job
-  # required checks. Succeeds only when every applicable job succeeded.
-  #
-  # `if: always()` is required because GitHub treats a *skipped* job as
-  # success for required checks. Without it, a cancelled run would leave this
-  # gate itself "skipped" — that is, passing — and broken code would merge.
-  #
-  # Fail-closed provenance: a skipped job passes only when detect-changes
-  # explicitly reported its filter as "false", meaning the job legitimately did
-  # not apply. A job skipped for any other reason, including a run cancelled
-  # before the job started, fails the gate. This closes the runner behaviour
-  # where cancelled runs leave never-started jobs as "skipped" rather than
-  # "cancelled" (github.com/actions/runner#3041).
-  #
-  # Branch ruleset: require a status check named "CI Status".
   ci-status-checker:
     name: CI Status
 

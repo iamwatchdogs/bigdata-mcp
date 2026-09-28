@@ -1,13 +1,3 @@
-# zizmor analyses the workflow files themselves. The pre-push hook runs the same
-# analysis locally at medium+ severity and blocks; this job uploads findings to
-# the Security tab so they are visible to anyone auditing the repository without
-# cloning and running the hooks.
-#
-# Findings are uploaded but never fail this job. Two reasons: the local
-# pre-push gate is already the blocking one, and making this job blocking too
-# would require a second required status check, which the single "CI Status"
-# gate exists to avoid. To make this blocking instead, add a code-scanning
-# merge-protection rule rather than adding another required check.
 name: GitHub Actions Security Analysis with zizmor
 
 on:
@@ -19,8 +9,7 @@ on:
     paths:
       - ".github/**"
 
-# Deny-all default. Every scope a job needs is granted on that job instead, so
-# a new job cannot silently inherit write access to the repository.
+
 permissions: {}
 
 concurrency:
@@ -42,8 +31,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # zizmor only reads workflow files, so a sparse checkout avoids
-          # pulling the source tree for a config-scanning job.
           sparse-checkout: .github
 
       - name: Run zizmor

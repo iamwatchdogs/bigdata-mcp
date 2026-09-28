@@ -1,28 +1,5 @@
 name: CD
 
-# Flow: CI (reusable call) -> Build artifacts (OS matrix) -> Publish release.
-# `release` needs both, so a red CI or a failed build skips the release and
-# fails the workflow. Matrix fail-fast is on by default, so the first build
-# failure cancels the rest.
-#
-# TRIGGERS
-#   - pushing a `v*` tag: builds, creates the release if missing, uploads
-#   - `release: published`: builds and appends artifacts to that release
-#
-# Both events fire this workflow and both resolve to the same `refs/tags/vX`
-# ref, so the `cd-` concurrency group below serialises the two runs. Both
-# publish: the assets have identical digests and softprops' default
-# `overwrite_files: true` makes the second upload an idempotent overwrite. That
-# keeps releases working for tags pushed before this workflow existed, where
-# only the `release: published` event fires.
-#
-# CACHING
-# Release builds deliberately restore nothing from the Actions cache. A
-# poisoned cache entry must never be able to influence a release artifact
-# (zizmor's cache-poisoning audit). setup-uv's `auto` default already disables
-# the cache on tag-push and release events; `enable-cache: false` states it
-# explicitly so the intent survives a future bump of that default.
-
 on:
   push:
     tags:
@@ -38,24 +15,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Reuse the CI workflow rather than duplicating its jobs. `run-all: true`
-  # forces every job regardless of which paths the tag touched, so a tag that
-  # only moved a markdown file still runs the full Python matrix. The release
-  # gate is exactly the case where "the path filter said it was fine" is not a
-  # good enough reason to skip testing.
   ci:
     name: CI (reusable)
     permissions:
       contents: read
     with:
       run-all: true
-    # A reusable workflow does NOT inherit the caller's secrets implicitly, and
-    # `secrets:` on a caller only NARROWS from the caller's own scope. A missing
-    # entry here means `secrets.CODECOV_TOKEN` is empty inside ci.yml. That is
-    # currently harmless, because IS_COVERAGE_RUN also requires
-    # `github.ref == 'refs/heads/main'` and a tag push never matches -- so this
-    # is an invisible four-way coupling that a future edit to either condition
-    # would turn into a red release build.
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     uses: ./.github/workflows/ci.yml
@@ -71,9 +36,6 @@ jobs:
 
     strategy:
       matrix:
-        # `include` rather than a cross-product, because the asset name differs
-        # per platform (Windows needs the .exe suffix) and each OS produces
-        # exactly one artifact.
         include:
           - os: ubuntu-latest
             asset: bigdata-mcp-linux
@@ -91,7 +53,6 @@ jobs:
       - name: Setup uv with Python 3.14
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          # See the caching note in the header: release builds restore nothing.
           enable-cache: false
           cache-python: false
 
@@ -105,22 +66,12 @@ jobs:
           --paths src
           src/bigdata_mcp/main.py
 
-      # Proves the frozen artifact actually starts. The entry point is the
-      # `if __name__ == "__main__":` guard in main.py, which
-      # tests/test_main.py already exercises through runpy, so this is a
-      # meaningful check rather than a formality: without that guard the binary
-      # would build successfully and do nothing.
       - name: Smoke test the binary
         shell: bash
         run: |
           ./dist/"${{ matrix.asset }}"
           echo "smoke test passed: ${{ matrix.asset }}"
 
-      # SLSA provenance for the artifact, bound to the commit it was built from.
-      # `actions/attest` v4 is the current entry point; the older
-      # attest-build-provenance action is now a thin wrapper over it.
-      # Note: on Free/Pro/Team plans this requires a public repository (private
-      # needs Enterprise Cloud). The repository is public, so this works.
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -131,8 +82,6 @@ jobs:
         with:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}
-          # An absent binary must fail the build rather than produce a release
-          # with a platform silently missing.
           if-no-files-found: error
 
   release:
@@ -141,8 +90,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      # The only elevated scope in this workflow, on the only job that needs
-      # it. There is no checkout here.
       contents: write
 
     steps:
@@ -155,10 +102,6 @@ jobs:
       - name: Create or update release and upload assets
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          # One expression serves both triggers: a release event carries the tag
-          # name, a tag push resolves it from the ref.
           tag_name: ${{ github.event.release.tag_name || github.ref_name }}
           files: dist/*
-          # Let GitHub generate the release notes from the merged pull requests
-          # rather than maintaining a changelog by hand.
           generate_release_notes: true

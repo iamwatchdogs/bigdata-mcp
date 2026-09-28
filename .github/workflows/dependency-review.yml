@@ -1,10 +1,3 @@
-# Fails a pull request that introduces a dependency with a known
-# vulnerability. This runs on every PR rather than on a schedule, because the
-# window where a bad dependency is merged is the moment it matters.
-#
-# Only blocks merging if this check is required in the branch ruleset. Without
-# the ruleset entry it is advisory only, which is still useful: findings appear
-# on the PR.
 name: "Dependency review"
 
 on:
@@ -25,7 +18,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      # Required to read the pull request's dependency diff via the API.
       pull-requests: read
 
     steps:
@@ -37,14 +29,5 @@ jobs:
       - name: Dependency review
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
-          # Moderate and above blocks the pull request outright, critical
-          # included. There is no severity band that defers to a human here:
-          # the check is a hard gate, and a human still reviews the diff on top
-          # of it. A critical finding that cannot be fixed without a breaking
-          # change is a reason to change the policy, not to let the PR through
-          # with a note.
           fail-on-severity: moderate
-          # The advisory database snapshots can lag the pull request event, so a
-          # snapshot warning is a race rather than a finding. Retrying is
-          # correct; failing the PR for it is not.
           retry-on-snapshot-warnings: true

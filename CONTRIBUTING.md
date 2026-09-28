@@ -76,7 +76,7 @@ make coverage-html     # htmlcov/ report
 ### The two hook stages
 
 | Stage | When | What runs |
-|---|---|---|
+| --- | --- | --- |
 | `pre-commit` | every commit | `ruff` lint and format, `ty`, `complexipy`, 12 hygiene hooks, `actionlint`, `pytest-testmon` on changed files |
 | `pre-push` | every push | `zizmor` (Actions SAST, medium+), `osv-scanner` (dependency CVEs), `gitleaks` (secrets across full history) |
 
