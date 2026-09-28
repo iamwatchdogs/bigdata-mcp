@@ -206,12 +206,45 @@ fi
 
 command -v gh >/dev/null || { echo "error: gh is required to apply a ruleset" >&2; exit 1; }
 command -v jq  >/dev/null || { echo "error: jq is required to apply a ruleset" >&2; exit 1; }
+command -v comm >/dev/null || { echo "error: comm is required to apply a ruleset" >&2; exit 1; }
 
 # GitHub documents two separate endpoints: POST /repos/{owner}/{repo}/rulesets
 # creates, PUT /repos/{owner}/{repo}/rulesets/{id} updates an existing one.
 # There is no "id 0 creates" behaviour, so the create path must use POST.
 existing="$(gh api "repos/$REPO/rulesets" --jq \
   ".[] | select(.name == \"$RULESET_NAME\") | .id" 2>/dev/null || true)"
+
+# PUT REPLACES the whole ruleset, so a rule that exists upstream and is absent
+# from the payload is DELETED, and the call still reports success by name. That
+# is how `copilot_code_review` was silently lost once already. The payload-side
+# guard in the contract tests only stops the same mistake recurring from THIS
+# file; it cannot see a rule somebody added through the GitHub UI. So the live
+# ruleset is read and anything it has that the payload lacks is reported before
+# the write, not after.
+if [ -n "$existing" ]; then
+  live_types="$(gh api "repos/$REPO/rulesets/$existing" --jq \
+    '[.rules[].type] | sort | join(" ")' 2>/dev/null || true)"
+  if [ -n "$live_types" ]; then
+    payload_types="$(payload | jq -r '[.rules[].type] | sort | join(" ")' 2>/dev/null || true)"
+    # Both lists arrive as a single space-delimited string, and are converted to
+    # newline-delimited with `tr` rather than by unquoted expansion, so nothing
+    # here depends on word splitting.
+    would_drop="$(comm -23 \
+      <(printf '%s' "$live_types"  | tr ' ' '\n' | sort -u) \
+      <(printf '%s' "$payload_types" | tr ' ' '\n' | sort -u))"
+    if [ -n "$would_drop" ]; then
+      echo "refusing to apply: the live ruleset has rule(s) this payload does not" >&2
+      echo "  would be deleted by the PUT: $(printf '%s' "$would_drop" | tr '\n' ' ')" >&2
+      echo "  add them to the payload in this script, or remove them in the" >&2
+      echo "  GitHub UI first if they are genuinely obsolete." >&2
+      echo "  re-run with --force to apply anyway and accept the deletion." >&2
+      # This script takes no subcommand, so a flag is always $1.
+      if [ "${1:-}" != "--force" ]; then
+        exit 1
+      fi
+    fi
+  fi
+fi
 
 if [ -n "$existing" ]; then
   endpoint="repos/$REPO/rulesets/$existing"
