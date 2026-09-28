@@ -1,0 +1,19 @@
+---
+# Codacy analysis configuration.
+#
+# `codacy-cli` does not read this file -- it reads `.codacy/codacy.yaml` for
+# runtimes and tools only -- so this was verified against the platform rather
+# than locally, which is the only way it can be verified at all.
+#
+# B603 (`subprocess_without_shell_equals_true`) fires on every `subprocess` call
+# that does not pass `shell=True`, which means it fires on the SAFE form.
+# Passing `shell=False` explicitly does not silence it, and an inline
+# `# nosec B603` marker plus a `[tool.bandit]` skip entry were both verified not
+# to silence it on the platform. The dangerous neighbour, B602
+# (`shell=True`), is left enabled and unenumerated here.
+#
+# Both findings are on calls that are reviewed and justified at the call site.
+tools:
+  bandit:
+    skip-checks:
+      - B603
