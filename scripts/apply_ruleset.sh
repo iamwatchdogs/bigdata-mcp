@@ -181,6 +181,9 @@ PAYLOAD_BODY() {
           }
         ]
       }
+    },
+    {
+      "type": "copilot_code_review"
     }
   ]
 }

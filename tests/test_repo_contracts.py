@@ -4044,6 +4044,68 @@ PR_TEMPLATE_AUTO_APPLIED_PATHS = (
 UNEVALUABLE_RULESET_RULE_TYPES = frozenset({"code_coverage", "code_quality"})
 
 
+# The exact rule set this repository's branch protection is meant to carry.
+# Enumerated rather than derived, because `apply_ruleset.sh` applies with PUT,
+# which REPLACES the whole ruleset: a rule simply absent from the payload is
+# deleted from the live configuration with no error and no diff. That is not
+# hypothetical. An earlier revision of the payload dropped
+# `copilot_code_review` while removing the two unevaluable coverage rules, and
+# nothing failed -- the ruleset went from eight rules to five and the only
+# visible symptom was the rule quietly ceasing to be enforced.
+EXPECTED_RULESET_RULE_TYPES = frozenset({
+    "non_fast_forward",
+    "deletion",
+    "pull_request",
+    "required_status_checks",
+    "code_scanning",
+    "copilot_code_review",
+})
+
+
+def test_ruleset_payload_declares_exactly_the_intended_rules(
+    repo_root: Path,
+) -> None:
+    """Assert the payload's rule types match the intended set, no more, no less.
+
+    ``scripts/apply_ruleset.sh`` selects PUT to update an existing ruleset, and
+    PUT is a whole-object replace on this endpoint: whatever the payload omits
+    is removed. The script has no way to notice that, because the call succeeds
+    and reports the ruleset by name. So the payload is asserted against an
+    explicit enumeration here, and a removal has to be a deliberate edit to both
+    files in one commit.
+
+    Both directions matter. A missing rule is a protection that silently stopped
+    applying; an extra rule is a gate this repository cannot evaluate, which is
+    the failure the adjacent `test_ruleset_declares_no_unevaluable_gate` exists
+    to prevent.
+    """
+    payload = _ruleset_payload(repo_root)
+    rules = payload.get("rules")
+    assert isinstance(rules, list), f"the ruleset declares `rules: {rules!r}`"
+
+    declared = {str(rule.get("type")) for rule in rules if isinstance(rule, dict)}
+    assert declared == set(EXPECTED_RULESET_RULE_TYPES), (
+        f"{RULESET_SCRIPT} declares {sorted(declared)}, expected exactly "
+        f"{sorted(EXPECTED_RULESET_RULE_TYPES)}. Applying this ruleset uses PUT, "
+        "which replaces the live configuration wholesale, so a type missing "
+        "from the payload is deleted from the repository's branch protection "
+        "while the script still reports success by name. If a rule is being "
+        "removed on purpose, remove it from EXPECTED_RULESET_RULE_TYPES in the "
+        "same commit so the change is reviewed as a change"
+    )
+
+    duplicated = sorted(
+        str(rule.get("type"))
+        for rule in rules
+        if isinstance(rule, dict)
+        and [r.get("type") for r in rules if isinstance(r, dict)].count(
+            rule.get("type")
+        )
+        > 1
+    )
+    assert not duplicated, f"the payload declares duplicate rule types: {duplicated}"
+
+
 def test_every_shell_script_is_linted_by_shellcheck(
     repo_root: Path,
 ) -> None:
