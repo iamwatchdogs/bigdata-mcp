@@ -1,0 +1,225 @@
+# CodeRabbit configuration for iamwatchdogs/bigdata-mcp.
+#
+# Maximum strictness, and the reasoning behind each non-obvious choice. Read
+# against the v2 schema at https://www.coderabbit.ai/integrations/schema.v2.json.
+#
+# This file configures the GitHub App. It is not read by the `coderabbit` CLI's
+# `review` command, which sends the diff to CodeRabbit's servers and answers
+# with model output. That is deliberate: an LLM verdict is non-deterministic
+# and billable, so it does not belong in a pre-push gate. The strictness that
+# can be deterministic lives here, on the PR, where the ruleset already requires
+# `CI Status` before a merge.
+#
+# Defaults are stated where they are being changed, so a future reader can see
+# what this file actually buys rather than inferring it from the absence of a
+# line.
+
+# en-US is the default; stated so the file is self-describing. This
+# repository's code, comments, and docs are English.
+language: en-US
+
+reviews:
+  # `assertive` is the strictest of the three. `chill` is the default and
+  # `quiet` reviews less. Assertive may feel nitpicky, which is the intent.
+  profile: assertive
+
+  # Every pre-merge check in `error` mode requires resolution before merging.
+  # The default for each is `warning`, which posts a comment and lets the PR
+  # through. `error` only blocks if the platform enforces the check, so each one
+  # is paired with a threshold or a requirement below -- a check in `error`
+  # mode with nothing to assert would block everything or nothing.
+  pre_merge_checks:
+    # The PR author cannot override or silence a failing check. Without this an
+    # author can dismiss the checks this file turns into errors, which would
+    # make every `error` mode below decorative.
+    override_requested_reviewers_only: true
+
+    # 100%, not the default 80. This repository documents a rule that every
+    # public function carries a docstring, and the two test files assert their
+    # own reasoning in prose. A partial threshold would let that drift.
+    docstrings:
+      mode: error
+      threshold: 100
+
+    # The commit format is documented in .agents/instructions/commit.instruction.md
+    # and the branch naming in AGENTS.md, so the check can restate them rather
+    # than inventing a rule.
+    title:
+      mode: error
+      requirements: >-
+        Conventional Commits format: `type(scope): subject`, where type is one
+        of feat, fix, docs, style, refactor, perf, test, build, ci, chore, or
+        revert. Subject in the imperative mood, lowercase, no trailing period.
+        Under 72 characters. Exactly one logical change per pull request.
+
+    # A PR that changes behaviour without saying why is the reviewer's first
+    # question, and answering it in the description saves a round trip.
+    description:
+      mode: error
+
+    # The linked-issue assessment is the check that a fix actually addresses
+    # the issue it claims to close, rather than a drive-by.
+    issue_assessment:
+      mode: error
+
+    custom_checks:
+      # Not in the schema's examples, and deliberately so: these encode rules
+      # this repository actually enforces elsewhere, and a check that merely
+      # restates a tool already running in CI is a comment, not a gate.
+      #
+      # What belongs here is what no other gate covers -- decisions a reviewer
+      # would otherwise have to make from memory every time.
+      - name: tests live in tests and cover src
+        mode: error
+        instructions: >-
+          This repository keeps `tests/` exclusively for `src/`. A test that
+          asserts something about `.github/`, the `Makefile`, or `pyproject.toml`
+          belongs with the tool that owns that file (actionlint, zizmor,
+          check-yaml, the bandit hook), not in the product's suite. A
+          repository-contract test in `tests/` couples `make test` to CI wiring
+          and reports coverage on files that ship nothing. Reject a change that
+          adds one.
+
+      - name: no secrets, tokens, or credentials in the diff
+        mode: error
+        instructions: >-
+          Reject any added file or line containing a credential, token, private
+          key, connection string with a password, or a base64 blob that
+          decodes to one. A reference to a secret must be by name and read from
+          the environment, never a literal. Note that a 40-character hex commit
+          SHA and a 64-character hex content hash are NOT secrets, even though
+          naive scanners flag a field named `key` holding one; gitleaks has
+          already produced a false positive of exactly that shape in this
+          repository's history.
+
+      - name: commit and branch hygiene
+        mode: error
+        instructions: >-
+          Reject a branch named anything other than `<type>/<short-kebab-description>`
+          and a commit whose subject does not state the why. Never commit
+          directly to main. Never force-push or amend a pushed commit.
+
+  # Do not auto-approve when comments are resolved. The default is false, and
+  # it stays false: the ruleset requires a `CI Status` check, and the
+  # auto-merge workflow is restricted to Dependabot semver-patch updates by its
+  # own allow-list. Granting blanket approval on comment resolution would give
+  # that workflow a second, unlogged path to a merge.
+  request_changes_workflow: false
+
+  # Fail the outward-facing review status when a review errors, rather than
+  # leaving a check that reports success for a review that never ran. Default
+  # is false.
+  fail_commit_status: true
+
+  # The extra context a strict review needs to be useful rather than noisy.
+  high_level_summary: true
+  review_status: true
+  review_details: true
+  collapse_walkthrough: false
+  changed_files_summary: true
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+
+  # `in_progress_fortune` defaults to true and prints a fortune while the
+  # review runs. Off, because it is noise in a security-sensitive repository.
+  in_progress_fortune: false
+
+  auto_review:
+    # Review every PR, not just the labelled ones. The default is true, and
+    # pinning it means a future change to the default cannot quietly narrow
+    # coverage to PRs that happen to carry a label.
+    enabled: true
+    # Re-review on every push rather than only the first. Default is true.
+    auto_incremental_review: true
+    # Drafts included, so review starts before the PR is marked ready.
+    # Default is false.
+    drafts: true
+    # 0 disables the pause, which is the default 5's neighbour. A review that
+    # stops after five commits is a review that stops before the PR is done.
+    auto_pause_after_reviewed_commits: 0
+    # No keyword escape hatches. A skip list is a list of pull requests that
+    # will not be reviewed, and every entry is a hole.
+    ignore_title_keywords: []
+    labels: []
+    ignore_usernames: []
+
+  # No author is exempt. The default empty list already achieves this; it is
+  # stated under auto_review above rather than duplicated.
+
+  finishing_touches:
+    # Everything that can write to the repository is off. A model editing the
+    # branch under review, opening a follow-up PR, or committing a merge
+    # resolution is a second writer on a repository whose ruleset requires an
+    # attested artifact traced to a commit.
+    #
+    # autofix defaults to true and is the one most likely to be turned on by
+    # muscle memory, so it is pinned false here.
+    autofix:
+      enabled: false
+    simplify:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+    fix_ci:
+      enabled: false
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+
+  # Labels are suggestions, never applied. `auto_apply_labels` defaults to
+  # false; `auto_assign_reviewers` defaults to false. Both stay false, and
+  # `auto_apply_labels` specifically because labelling a PR is a write.
+  auto_apply_labels: false
+  auto_assign_reviewers: false
+  suggested_reviewers: true
+
+  # Review everything, including generated and vendored paths, rather than
+  # trusting a filter nobody has re-examined. The default is an empty list,
+  # which reviews all paths; stated explicitly because a path filter is where
+  # "maximum strictness" is usually quietly reduced to "whatever was excluded
+  # last time". If a path must be excluded later, it should be a deliberate
+  # commit that says why, not a default that crept in.
+  path_filters: []
+
+  path_instructions:
+    - path: src/**
+      instructions: >-
+        This is the shipped package. `main()` is currently a deliberate stub
+        that exists so packaging, the console script, and the PyInstaller smoke
+        test have a callable target. Treat an empty function body as intended
+        until the server implementation lands, not as an oversight.
+    - path: tests/**
+      instructions: >-
+        Behaviour tests only, mirroring `src/` module by module. They must
+        never touch the public internet -- mock HTTP, or use a local server or
+        a fixture. Every assertion must be provable to fail by mutation; a test
+        that cannot fail is a taxidermy test. Assert a finding count maps to the
+        right exit status, not that a function exists.
+    - path: .github/**
+      instructions: >-
+        These workflows hold write tokens. A third-party `uses:` must be pinned
+        to a 40-character commit SHA with a trailing version comment. Untrusted
+        input reaches a shell through `env:`, never interpolated into a `run:`
+        body. A workflow on `pull_request_target` or `workflow_run` must contain
+        no checkout and must never execute untrusted code. A `workflow_run`
+        filter matches on a workflow's `name:`, not its filename.
+    - path: scripts/**
+      instructions: >-
+        Executable tooling invoked by `make` and by the pre-push hook. A gate
+        must fail closed: a check that cannot distinguish "found nothing" from
+        "could not run" is not a gate. Verify a wrapper exists wherever the
+        underlying tool's exit status carries no information.
+
+  # Review the cached state of the repo rather than a fresh clone on every run.
+  # `disable_cache` defaults to false; left false deliberately, since the cache
+  # is what makes a large review affordable.
+  disable_cache: false
+
+# Deliberately absent: `reviews.tools`. The schema's own description says tool
+# levels are derived from `profile`, and the hosted integrations listed there
+# (ruff, bandit, opengrep, zizmor, gitleaks, actionlint) each already run
+# locally in this repository's pre-push stage. Enabling one here would add a
+# cloud copy of a check that is already enforced, fail-closed and free.

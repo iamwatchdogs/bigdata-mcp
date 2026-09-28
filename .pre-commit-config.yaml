@@ -194,3 +194,36 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+
+      - id: coderabbit-advisory
+        name: "advisory coderabbit (stored findings, no cloud call)"
+        # Advisory only, and never blocking. It prints findings left by an
+        # earlier `coderabbit review` and always exits 0, for two measured
+        # reasons.
+        #
+        # `coderabbit review` is a cloud LLM call: `doctor` lists a reachable
+        # backend and WebSocket as prerequisites, `--remote` reviews "on the
+        # server without a local checkout", and the account has 3 reviews per
+        # hour. A non-deterministic, billable command does not belong in a
+        # pre-push gate, so it is not run here.
+        #
+        # `coderabbit review findings` is the local half. It reads
+        # ~/.coderabbit/ and was verified to work with the network blocked --
+        # every proxy pointed at a dead port -- while `coderabbit doctor` under
+        # those same conditions reports "Cannot reach https://app.coderabbit.ai"
+        # and exits nonzero. So this costs no credits and no inference.
+        #
+        # Its limit is stated here because it is the whole caveat: these are the
+        # findings of the LAST review, not of the commits being pushed, so they
+        # can be stale. A stale advisory is still worth printing; a stale one
+        # that blocks a push is not.
+        #
+        # A wrapper, not `coderabbit review findings || true`: prek does not run
+        # an entry through a shell, so that arrives as two literal CLI arguments
+        # and fails with "too many arguments for 'findings'". The script owns
+        # the exit status instead.
+        entry: uv run python scripts/coderabbit_advisory.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

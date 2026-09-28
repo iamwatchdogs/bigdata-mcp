@@ -23,6 +23,7 @@ HYGIENE := trailing-whitespace end-of-file-fixer mixed-line-ending \
         hooks-validate lint lint-check format format-check fmt fix typecheck \
         complexity actionlint workflows test testmon coverage coverage-html \
         hygiene checks security zizmor osv gitleaks bandit codacy codacy-install \
+        coderabbit \
         verify ci run build binary \
         remote clean clean-all
 
@@ -126,7 +127,7 @@ hygiene: ## Run commit-time hygiene hooks on all files
 checks: ## Full pre-commit stage on all files (skips branch guard)
 	$(PREK) run --all-files --skip no-commit-to-branch
 
-security: ## Full pre-push security gate: zizmor + osv-scanner + gitleaks + codacy
+security: ## Pre-push gate: zizmor + osv-scanner + gitleaks + codacy + coderabbit (advisory)
 	$(PREK) run --all-files --stage pre-push
 
   bandit: ## Python security analysis (pre-push hook)
@@ -176,6 +177,9 @@ gitleaks: ## Secret scan over full git history (pre-push hook)
 		exit 1; \
 	}
 	$(PREK) run codacy --stage pre-push
+
+  coderabbit: ## CodeRabbit stored findings, advisory only (no cloud call)
+	$(PREK) run coderabbit-advisory --stage pre-push
 
 verify: checks security ## Everything CI gates on: commit stage + security gate
 
