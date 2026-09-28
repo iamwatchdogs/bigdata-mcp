@@ -131,7 +131,20 @@ security: ## Full pre-push security gate: zizmor + osv-scanner + gitleaks
   zizmor: ## GitHub Actions SAST, medium+ severity (pre-push hook)
 	$(PREK) run zizmor --all-files --stage pre-push
 
-  workflows: ## Parse + validate every workflow: YAML syntax and actionlint
+  workflows: ## Parse + validate every workflow: YAML syntax, actionlint, shellcheck
+	@# actionlint shells out to shellcheck to lint every `run:` body. When
+	@# shellcheck is not on PATH, actionlint drops that rule and EXITS 0 --
+	@# its "Rule \"shellcheck\" was disabled" notice goes to the verbose log
+	@# (rhysd/actionlint linter.go: `log` returns early below LogLevelVerbose),
+	@# and the hook here does not pass -verbose. So on a machine without
+	@# shellcheck this target reports success having checked no shell at all.
+	@# Silent, green, and coverage-free is the exact shape of bug this repo
+	@# fails closed against, so the dependency is asserted instead of assumed.
+	@command -v shellcheck >/dev/null 2>&1 || { \
+		echo "error: shellcheck not found on PATH; 'make workflows' would pass without linting any run: body"; \
+		echo "       install it (macOS: brew install shellcheck) or let CI be the gate"; \
+		exit 1; \
+	}
 	$(PYTHON) -c "import sys,pathlib,yaml; [yaml.safe_load(p.read_text()) for p in sorted(pathlib.Path('.github/workflows').rglob('*.y*ml'))]; print('all workflows parse')"
 	$(PREK) run actionlint --all-files
 
