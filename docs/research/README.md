@@ -120,13 +120,13 @@ Two decisions this changed, recorded because they are not obvious from the files
   branch while gating nothing. The same holds for a step that cannot succeed —
   `fail-on-error: false` converts a broken gate into a green one.
 
-### D5 — Codacy's PR findings are the dependency tree, not this code — 2026-09-28
+### D5 — Codacy's PR findings are Bandit and Agentlinter noise, not defects — 2026-09-28
 
-`codacy-production[bot]` commented 36 new issues on PR #1 (2 critical, 19 high,
-13 medium, 2 minor), categorised as Security, ErrorProne, and BestPractice. The
-comment body carries counts only; the individual findings sit behind Codacy's
-authenticated dashboard, the check-run output is a single summary line, and the
-bot posted no inline comments. The API returns 404 without a token.
+`codacy-production[bot]` commented on PR #1 with a headline of 36 issues, later
+34, categorised as Security, ErrorProne, and BestPractice. The comment body
+carries counts only, so the natural assumption is that the individual findings
+are unreachable. They are not: Codacy attaches every one of them to the check run
+as annotations.
 
 Reproduced locally with `codacy-cli`, which fetched the same tool set from the
 Codacy API (opengrep 1.30.0, pylint 4.0.8, trivy 0.74.0, lizard 1.24.0):
@@ -160,19 +160,54 @@ Two things were checked so the conclusion is not a guess:
   `.codacy/codacy.yaml` for runtimes and tools. The file was removed rather than
   committed unverified.
 
-**Correction, added after Codacy re-reported 34 issues on a later commit.** The
-local run is NOT a reproduction of Codacy's analysis, and this entry originally
-implied it was. `codacy-cli` fetched four tools (opengrep, pylint, trivy, lizard)
-and `codacy-cli init` warned that five more configured on the Codacy side are
-unsupported: **markdownlint, Prospector, Bandit, Agentlinter, ShellCheck**. The
-34 issues the platform reports can therefore come from any of those, and none of
-them ran here. markdownlint alone reports **2,730** findings on this repository
-with default rules, against Codacy's 10 BestPractice issues, so its configured
-rule set is far narrower and cannot be inferred from the CLI either.
+**Correction: the root cause above is WRONG, and the annotations say so.** The
+individual findings were retrievable all along — not from the dashboard, but from
+the check run's annotations endpoint, which I did not try:
 
-So the accurate statement is narrower than the one above: the four CLI-supported
-tools find nothing in this repository's own code. What the other five find is
-unknown without the dashboard.
+    GET /repos/OWNER/REPO/check-runs/{id}/annotations
+
+Codacy attaches all 34 there. They are **not** in the dependency tree. They are
+in files this repository owns, and the analysis surface is Bandit plus
+Agentlinter, both of which `codacy-cli` cannot run and which I never executed:
+
+| File | Count | Analyzer |
+|---|---|---|
+| `tests/test_main.py` | 21 | Bandit (17 × B101 assert, 2 × B603, 2 × B404/B607, 1 × B018) |
+| `AGENTS.md` | 10 | Agentlinter, "absolute rule without escape hatch" |
+| `scripts/with_testmon_lock.py` | 3 | Bandit (B404, B603, B607) |
+
+The `.venv` explanation above was a red herring. It fit the local numbers
+perfectly, and the fit was the problem: locally the 620 findings really were in
+`.venv`, so a hypothesis that matched them seemed settled. But the server has no
+virtualenv, and its 34 come from two analyzers the CLI never ran. The lesson is
+that a local reproduction of a *different* tool set cannot validate a claim about
+the platform's output, however well the numbers line up.
+
+Every annotation was checked against the code rather than dismissed by category:
+
+- **B018, `test_main.py:156`** — "assigning the result of a function that has no
+  return". The flagged assertion is `result = main()` followed by
+  `assert result is None`. `main()` is annotated `-> None`, but an annotation is
+  not a runtime guarantee, so the check can fail. Proved it: injecting
+  `return 7` into `main()` fails the test. Kept.
+- **B101 ×17** — asserts inside tests. That is what a pytest suite is made of;
+  `pyproject.toml` already suppresses the ruff equivalent (`S101`) for
+  `tests/`. A false positive by construction.
+- **B404 / B603 / B607 ×6** — `subprocess` import and call. In
+  `with_testmon_lock.py` the command *is* the argument list, which is the entire
+  purpose of the script, and in `test_main.py` the only non-literal element is a
+  repository-root path built by the test itself. Both already carry
+  `# ruff: ignore[suspicious-subprocess-import]` with the reasoning inline. An
+  attacker who can control those argv entries already controls the code.
+- **Agentlinter ×10** — stylistic. Each flags an absolute rule in `AGENTS.md`
+  that offers no escape hatch. Whether agent instructions should carry one is a
+  judgement about this project's standards, not a defect, and the rules it
+  targets are the ones that make the repository fail closed.
+
+**Conclusion: none of the 34 is a defect in this repository.** Two of them name
+a real weakness that is worth fixing on its own terms, though — see the
+ShellCheck entry below, which is exactly what Codacy's Bandit-adjacent
+inspection was pointing at.
 
 **One finding the local run did surface, and it was real.** Codacy runs
 ShellCheck, which `codacy-cli` cannot. Checking whether the repository covered
