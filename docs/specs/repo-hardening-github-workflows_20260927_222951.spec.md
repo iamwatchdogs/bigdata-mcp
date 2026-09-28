@@ -259,9 +259,13 @@ make lint-check && make format-check && make typecheck && make complexity \
 - `.gitignore` — add `.agents/council/*.jsonl` block with rationale comment
 - `git rm --cached .agents/council/extraction-candidates.jsonl`
 - `.github/CODEOWNERS` — `* @iamwatchdogs`
-- `SECURITY.md` — GitHub private vulnerability reporting as the preferred
-  channel, plus email fallback; 7-day ack / 30-day assessment / 90-day fix;
-  scope explicitly covers the CLI **and** `.github/` workflows
+- `SECURITY.md` — GitHub private vulnerability reporting as the **sole**
+  channel; 7-day ack / 30-day assessment / 90-day fix; scope explicitly covers
+  the CLI **and** `.github/` workflows. An email fallback was specified here and
+  later removed: the maintainer asked for the address not to be published, and
+  the no-reply substitution that would have replaced it discards mail, so
+  advertising it would list a security channel that silently fails. One working
+  private route beats two, one of which is a black hole
 - **Tests:** extend `tests/test_repo_contracts.py` (invariants 5, 7)
 
 ### C2 — Package metadata & coverage gate

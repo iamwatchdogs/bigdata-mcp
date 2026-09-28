@@ -8,16 +8,23 @@ reporting an issue against an older version.
 
 ## Reporting a vulnerability
 
-**Do not open a public issue for a security report.** Use one of these private
-channels:
+**Do not open a public issue for a security report.** Report through GitHub
+private vulnerability reporting:
 
-- GitHub private vulnerability reporting (preferred):
-  <https://github.com/iamwatchdogs/bigdata-mcp/security/advisories/new>
-- Email: <shamith301102@gmail.com>
+<https://github.com/iamwatchdogs/bigdata-mcp/security/advisories/new>
 
-Private vulnerability reporting is preferred because it keeps the report, the
-discussion, the fix, and the coordinated release in one private place. The
-blank-issues setting is disabled, so a public route is not the intended path.
+That is the only channel. It is deliberately the sole one rather than one of
+several because it keeps the report, the discussion, the fix, and the
+coordinated release in one private place, and because it is the only channel
+here that a maintainer can be sure reaches a human.
+
+An earlier revision also published a maintainer email address. It was removed
+rather than replaced with a no-reply address: `…@users.noreply.github.com`
+exists so a real address stays hidden in commit metadata, and mail sent to it is
+discarded. Listing one as a reporting route advertises a channel that appears to
+work and silently does not, which for a security contact is worse than having
+one fewer. The blank-issues setting is disabled, so a public route is not the
+intended path either.
 
 ## Scope
 
