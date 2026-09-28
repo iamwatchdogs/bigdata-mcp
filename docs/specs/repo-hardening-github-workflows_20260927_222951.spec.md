@@ -81,9 +81,15 @@ removing the field, or replacing the value all yield **0 findings**.
 ### 3.2 A delete-commit is NOT sufficient
 
 gitleaks' git source runs
-`git log --full-history --all --diff-filter=tuxdb` — the filter **includes
-deletions**. Measured: after a `git rm` + commit, the original blob is still
-scannable and all findings persist. Per D2 a genuine history rewrite is required.
+`git log --full-history --all --diff-filter=tuxdb`. In git's `--diff-filter`,
+lowercase letters are **exclusions**, so `tuxdb` means "every status except
+type-changed, unmerged, unknown, deleted, broken" — it *excludes* deletions
+rather than including them. The conclusion is unchanged but the reasoning was
+wrong: the rewrite is still required because the offending file was **added** in
+commit `c4255a1`, and an addition is precisely the kind of entry this filter
+keeps. A later delete-commit does not remove that earlier addition from history.
+Measured: after a `git rm` + commit, the original blob is still scannable and
+all findings persist. Per D2 a genuine history rewrite is required.
 
 ### 3.3 No commit SHA is cited anywhere — a rewrite invalidates nothing
 
@@ -448,7 +454,8 @@ replaced. Append:
 
 - **Failure ledger and known traps** — seeded with the real incidents this change
   surface produced: the broken console script; gitleaks' `dedup_key` field name;
-  `--filter=tuxdb` meaning a delete-commit is not a purge; `filter-branch`'s
+  gitleaks' diff filter keeping ADDED entries, so a delete-commit is not a
+  purge; `filter-branch`'s
   `refs/original`; `requires-python` vs `py314` skew; actionlint's `parallel:` gap
 - **Boundaries** — no secrets; never commit to `main`; ask before adding
   dependencies; never hand-edit `uv.lock` or `.github/` without `make actionlint`;

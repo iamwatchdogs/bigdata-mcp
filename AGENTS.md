@@ -74,7 +74,8 @@ claim rather than re-deriving it.
   gitleaks' `generic-api-key` rule matches on the substring `key` and a 64-char
   hex value clears its entropy threshold. Fixed by purging history *and*
   gitignoring `.agents/council/*.jsonl`. A delete-commit is **not** a purge:
-  gitleaks scans with `--filter=tuxdb`, which includes deletions. And
+  gitleaks' diff filter keeps ADDED entries, and the flagged content was added
+  in the initial commit, so deleting it later leaves it scannable. And
   `git filter-branch` leaves `refs/original` holding the old blobs, so
   `rm -rf .git/refs/original` plus `reflog expire` plus `gc --prune=now` is
   mandatory or the gate still fails.
