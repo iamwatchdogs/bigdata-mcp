@@ -249,29 +249,45 @@ their next *real* finding fails closed:
   The lesson matches the ShellCheck entry: the gap was that nothing here
   enforced the standard, so a third party's opinion was the only enforcement.
 
-**Two Codacy findings could not be fixed from this repository, after three
-attempts.** `B603` (subprocess without a static string) is reported at
-`with_testmon_lock.py:110` and `test_main.py:326` and survives everything tried
-here, in this order:
+**The last four Codacy findings, and the two wrong conclusions behind them.**
 
-1. `B603` was added to the `[tool.bandit]` skip list. The 17 `B101` findings did
-   disappear from the platform's report when that landed, so the config is read
-   to some degree — but `B603` did not.
-2. An inline site-level suppression marker, verified against Bandit 1.9.4 in
-   isolation to confirm it actually suppresses. Unchanged.
-3. The same marker reordered ahead of the ruff directive, since two ID-bearing
-   comments on one line is a shape the platform may not parse. Unchanged.
+Two were `B603` (subprocess without a static string) at
+`with_testmon_lock.py:110` and `test_main.py:326`, and two were `E501`
+line-length on `uv.lock`, which appeared as soon as `bandit` joined the
+dependency set because its `sdist` and `wheel` records are single lines longer
+than 88 characters.
 
-A marker on the preceding line was tried in between and rejected: it looks
-equivalent and suppresses nothing. Each attempt cost a push and a Codacy
-round-trip, because `codacy-cli` cannot run the check that decides this.
+Four attempts on `B603` from the code and the Bandit config all failed, in this
+order: the `[tool.bandit]` skip list; an inline site-level suppression verified
+against Bandit 1.9.4 in isolation to confirm it really suppresses; the same
+marker reordered ahead of the ruff directive; and a marker on the preceding line,
+which suppresses nothing at all. Each cost a push and a Codacy round trip.
 
-So the conclusion is narrow and worth stating precisely: **this is not fixable
-from a file in this repository.** Suppressing it requires Codacy dashboard
-settings — adding `B603` to the skipped checks there, or marking the two findings
-ignored. The local gate already treats both lines as clean, and the reasoning for
-each is written beside them, so nothing is lost if the platform never stops
-reporting them. The third is the "assigning the result of a function with no
+Two conclusions drawn from that were wrong, and both were the same mistake:
+
+- I concluded the findings were not fixable from this repository. They were.
+- I had ruled out `.codacy.yml` early, on the evidence that `codacy-cli` does not
+  read it. That is true and irrelevant: the file is consumed by the Codacy
+  *platform*, and the platform was the thing producing the findings.
+
+`.codacy.yml` with `exclude-patterns` for the B603 message cleared both, and
+`exclude-paths` for `uv.lock` cleared the E501 pair. **Codacy now reports zero
+annotations.** B602, the check that catches a real `shell=True` injection, is
+deliberately not matched by the pattern and stays enforced.
+
+The generalisable part: `codacy-cli` cannot reproduce the platform's analysis, so
+a config file the CLI ignores is not thereby a config file the platform ignores.
+Ruling a lever out on the wrong tool's behaviour is the same error as fitting a
+hypothesis too well to the wrong data — which is what the `.venv` red herring
+earlier in this entry was.
+
+The `os.posix_spawn` rewrite of the lock script was written, verified end to end
+(`make testmon`, exit-status propagation, and the missing-program path), and
+deliberately not kept. It needed a hand-rolled `shutil.which` because
+`posix_spawn` does not search PATH, and it could not be applied to the test at
+all, since that call needs stdout and stderr captured. Paying a readability cost
+in reviewed code to satisfy a check that fires on the safe form was the wrong
+trade, and the reasoning is at each call site where a reviewer needs it. The third is the "assigning the result of a function with no
 return" finding at `test_main.py:156`, and its marker is deliberately **ID-less**:
 that check does not exist in Bandit 1.9.4, so no valid ID can be named, and
 naming an unknown one makes Bandit print a warning on every run. Prose next to
