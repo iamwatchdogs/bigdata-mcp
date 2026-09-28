@@ -57,9 +57,20 @@
 #   coverage  `[tool.coverage.report] fail_under = 80` in pyproject.toml. A
 #             run below the floor exits 1, which fails the ubuntu matrix cell,
 #             which fails the `CI Status` check this ruleset REQUIRES. Verified:
-#             a subset run covering 0% exits 1; the full suite exits 0. So the
-#             floor bites before merge, on every pull request, without any
-#             GitHub-side coverage product.
+#             a subset run covering 0% exits 1; the full suite exits 0.
+#
+#             SCOPE, stated precisely because an earlier version of this comment
+#             overreached. The floor blocks merges for pull requests that match
+#             the `python` filter in .github/workflows/ci.yml -- `src/**`,
+#             `tests/**`, `pyproject.toml`, `uv.lock`, the pre-commit config and
+#             the Makefile. A documentation-only pull request matches nothing
+#             there, so `test-matrix-pipeline` is skipped, and `ci-status-checker`
+#             accepts a skipped job whenever the matching filter output is
+#             `false`. Such a pull request therefore never evaluates the floor
+#             and merges without it. That is inherent to path filtering rather
+#             than a gap in this ruleset: the same is true of the lint and
+#             actionlint jobs. Narrow the `python` filter if the floor must hold
+#             for every pull request.
 #
 #   security  the `code_scanning` rule above, keyed on CodeQL alerts, which runs
 #             on this repository and publishes real alerts.

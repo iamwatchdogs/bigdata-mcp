@@ -227,8 +227,11 @@ jobs:
       # the floor blocks the merge without any GitHub-side coverage product.
       # That matters because this repository cannot use one: GitHub's
       # code-coverage API answers 404 here, so a `code_coverage` ruleset rule
-      # would enforce nothing. Codecov below is the historical record, not a
-      # gate.
+      # would enforce nothing. Codecov below is also a CI gate, but a different
+      # kind: it fails this job when the UPLOAD fails. It says nothing about the
+      # coverage number, which is what `fail_under` is for -- Codecov's own
+      # project status is what would gate on a coverage delta, and no status
+      # check from it is required by the ruleset.
       IS_COVERAGE_RUN: >-
         ${{ matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14' }}
       # secrets.CODECOV_TOKEN is not exposed to forks, so a fork's report cannot

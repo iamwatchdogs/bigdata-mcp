@@ -331,7 +331,22 @@ REQUIRED_BUILD_OPERATING_SYSTEMS = frozenset({
     "ubuntu-latest",
     "windows-latest",
 })
-REQUIRED_PYTHON_FILTER_PATHS = ("pyproject.toml", "uv.lock")
+# Every glob whose absence would stop the coverage floor from being evaluated
+# on a pull request that changes it. The floor lives in the test matrix, the
+# test matrix is gated on this filter, and `ci-status-checker` accepts a skipped
+# job whenever the matching filter output is `false` -- so a glob missing here
+# means changes to it merge without the floor being applied. `src/**/*.py` and
+# `tests/**/*.py` are the two that decide whether coverage can change at all;
+# the rest are the files that decide what the floor measures or which command
+# runs it.
+REQUIRED_PYTHON_FILTER_PATHS = (
+    "src/**/*.py",
+    "tests/**/*.py",
+    "pyproject.toml",
+    "uv.lock",
+    ".pre-commit-config.yaml",
+    "Makefile",
+)
 REQUIRED_REQUIRES_PYTHON = ">=3.14"
 REQUIRED_SCHEDULE_INTERVAL = "weekly"
 REQUIRED_STATUS_CHECK_NAME = "CI Status"

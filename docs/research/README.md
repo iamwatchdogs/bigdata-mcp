@@ -78,6 +78,18 @@ Two decisions this changed, recorded because they are not obvious from the files
   full suite exits 0. Only the canonical cell (linux + 3.14) generates a report,
   so three numbers never race one Codecov project.
 
+  The floor's scope is narrower than "every pull request", and that is worth
+  stating because an earlier version of this ledger implied otherwise. It
+  applies to pull requests matching the `python` filter in `ci.yml` — `src/**`,
+  `tests/**`, `pyproject.toml`, `uv.lock`, the pre-commit config, the Makefile.
+  A documentation-only pull request matches nothing there, so the test matrix
+  is skipped and `ci-status-checker` accepts the skip whenever the matching
+  filter output is `false`. Such a pull request merges without the floor being
+  evaluated. That is what path filtering means, and the same holds for the lint
+  and actionlint jobs; the globs above are now asserted by
+  `test_detect_changes_path_filters_cover_the_guarded_directories`, so the set
+  cannot shrink unnoticed.
+
   Two earlier attempts to gate this from the GitHub side are worth recording,
   because both looked right:
 
