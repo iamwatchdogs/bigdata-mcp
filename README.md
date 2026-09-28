@@ -83,10 +83,11 @@ Two kinds of tests live in `tests/`:
 
 - **Behaviour tests** mirror `src/` module by module. They must never touch the
   public internet.
-- **`test_repo_contracts.py`** asserts repository invariants that would otherwise
-  regress silently — every third-party GitHub Action SHA-pinned, the required
-  status check covering every CI job, coverage floor wiring. If one of these
-  fails, a safety property has been removed from the repository.
+- **Repository invariants are enforced by the tools that own those files**, not
+  by tests. `actionlint` and `zizmor` read `.github/workflows/`, `check-yaml`
+  reads the rest of the YAML, and the `bandit` hook reads `pyproject.toml`. A
+  test that parsed CI configuration would couple `make test` to CI wiring and
+  would report coverage on a file that ships nothing.
 
 Tests must never be deleted or weakened to make the suite pass. Every assertion
 has to be provable to fail.

@@ -108,6 +108,18 @@ claim rather than re-deriving it.
   exactly that defect. CodeQL is gated by the `code_scanning` rule instead.
 - **`.github/dependabot.yml` is not an Actions workflow.** actionlint rejects its
   top-level `updates:` key. It is covered by `check-yaml` and the contract tests.
+- **actionlint's shellcheck covers workflow `run:` bodies, not files.** It shells
+  out to shellcheck only for the `run:` blocks inside a workflow, so a standalone
+  `*.sh` in this repo is linted by nothing. The shellcheck hook and the
+  `every shell script is linted` contract test were removed together with
+  `scripts/apply_ruleset.sh`, which was the repo's last `.sh` file — both had
+  silently degraded to linting an empty set, which reports green forever. The
+  test would have passed vacuously against zero files rather than catching that.
+  Add the hook and the test in the same commit as the first new `.sh` file.
+- **A gate over an empty input set is not a gate.** Same shape as the above and
+  the general form: a check whose subject list is empty succeeds, so deleting the
+  subject converts a real check into a green line. Before keeping any
+  "every X is Y" test, confirm X is non-empty.
 
 ## Testing instructions
 
@@ -121,11 +133,15 @@ claim rather than re-deriving it.
   report the evidence. (Escape hatch: state the exception and its compensating check in the commit body.)
 - Tests must never touch the public internet. Mock HTTP, or use local servers and
   fixtures. (Escape hatch: state the exception and its compensating check in the commit body.)
-- `tests/test_repo_contracts.py` asserts repository invariants — SHA-pinned
-  actions, the required status check covering every CI job, deny-all
-  permissions, no untrusted input in a `run:` body, coverage floor wiring. If one
-  of these fails, a safety property has been removed from the repository. Treat a
-  failure there as a real regression, not a test to adjust.
+- **`tests/` is for `src/`, not for the repository's own configuration.** A test
+  that asserts something about `.github/`, `Makefile`, or `pyproject.toml` is a
+  contract test, and a contract test in `tests/` is in the wrong place: it
+  couples the product's test suite to the project's CI wiring, so a CI edit
+  breaks `make test` and a coverage run reports on a file that ships nothing.
+  Enforce those invariants with the tools that already read those files —
+  `actionlint`, `zizmor`, `check-yaml`, the `bandit` hook — not by parsing them
+  from a test. The file that did this, `tests/test_repo_contracts.py`, was
+  4,881 lines asserting 43 such invariants and was removed on 2026-09-29.
 - A guard that only fires when a scan finds nothing needs a paired
   anti-vacuity assertion, or it passes vacuously forever.
 

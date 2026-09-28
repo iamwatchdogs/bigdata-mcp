@@ -361,9 +361,21 @@ integration only covers `run:` blocks *inside workflows*, so the repository's
 only standalone shell script, `scripts/apply_ruleset.sh`, was linted by no gate
 at all. Confirmed by mutation — `make verify` exited **0** with an injected
 `SC2086` unquoted expansion and an `SC2070` `-n` against an unquoted argument.
-A shellcheck hook and a contract test now cover it, and `make verify` exits 2 on
-the same injection. This is the shape of finding Codacy is for, and it was
-missing from a repository that otherwise fails closed.
+A shellcheck hook and a contract test were added to cover it, and `make verify`
+then exited 2 on the same injection. This is the shape of finding Codacy is
+for, and it was missing from a repository that otherwise fails closed.
+
+**Both the script and the hook have since been removed.** `apply_ruleset.sh`
+existed only to PUT a branch-ruleset payload, and the ruleset is live
+configuration on GitHub rather than a file in this repository, so the script
+was a convenience wrapper with no second source of truth behind it. The
+shellcheck hook went with it, because deleting the repository's last `.sh` file
+left it linting nothing — a green gate that cannot fail is worse than no gate,
+and a test asserting "every shell script is linted" would have passed vacuously
+against an empty set. If a standalone script is added, the hook and that test
+come back with it. The lesson survives the removal: actionlint does not lint
+files, only workflow `run:` blocks, so a shell script in this repository needs
+its own gate.
 
 **Unverified:** the server-side 34 were never visible, so this entry still
 cannot claim what they are. Confirming that needs the dashboard.

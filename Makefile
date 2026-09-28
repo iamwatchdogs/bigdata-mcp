@@ -23,7 +23,7 @@ HYGIENE := trailing-whitespace end-of-file-fixer mixed-line-ending \
         hooks-validate lint lint-check format format-check fmt fix typecheck \
         complexity actionlint workflows test testmon coverage coverage-html \
         hygiene checks security zizmor osv gitleaks bandit verify ci run build binary \
-        remote ruleset ruleset-apply clean clean-all
+        remote clean clean-all
 
 ##@ Setup
 
@@ -165,18 +165,6 @@ ci: verify ## Alias for verify
 
 remote: ## Show the configured origin remote
 	@git remote -v
-
-# Invoked as ./scripts/apply_ruleset.sh, NOT as `sh scripts/...`. The script
-# declares `#!/usr/bin/env bash` and needs it: `set -o pipefail` is rejected by
-# dash, which is what `sh` is on Debian/Ubuntu, so forcing `sh` made every one of
-# these targets exit 2 with "set: Illegal option -o pipefail". That is invisible
-# on macOS, where /bin/sh is bash. Executing the file honours the shebang and is
-# the only form that is correct on every platform.
-ruleset: ## Print the default-branch ruleset payload (does not apply it)
-	@./scripts/apply_ruleset.sh --print
-
-ruleset-apply: ## Create or update the default-branch ruleset (needs gh + admin)
-	@./scripts/apply_ruleset.sh
 
 ##@ Build & run
 

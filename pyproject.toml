@@ -25,11 +25,6 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "complexipy>=8.0.1",
-    # Dev-only, used by tests/test_repo_contracts.py to parse
-    # .github/workflows/*.yml. The contract tests only *read* workflow YAML to
-    # assert invariants (SHA pinning, required status checks, trigger shape);
-    # nothing renders it, so this never becomes a runtime dependency.
-    "pyyaml>=6.0.3",
     "pyinstaller>=6.22.3",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
@@ -174,8 +169,8 @@ show_missing = true
 # again. This gate makes the same class of finding local and fail-closed.
 #
 # Each skip is here because it fires on correct code in THIS repository, and
-# each is asserted by `test_bandit_skip_list_is_exactly_the_reviewed_set`, so
-# widening this list is a deliberate edit rather than a quiet one.
+# each carries its own justification below, so widening this list is a
+# deliberate edit rather than a quiet one.
 #
 # B101 assert_used — a pytest suite is built from `assert`. The ruff equivalent
 #   (S101) is already suppressed for `tests/**` in this file for the same

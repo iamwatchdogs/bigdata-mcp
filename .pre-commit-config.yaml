@@ -86,7 +86,7 @@ repos:
         # this to other YAML under .github/: dependabot.yml is not an Actions
         # workflow, and actionlint's parser rejects its top-level `updates:`
         # key as an unknown workflow section. dependabot.yml is validated by
-        # `check-yaml` (pre-commit-hooks) and by the contract tests instead.
+        # `check-yaml` (pre-commit-hooks) instead.
 
   - repo: local
     hooks:
@@ -137,21 +137,6 @@ repos:
         files: ^(src|tests|scripts)/.*\.py$|^pyproject\.toml$
         types: [python]
         pass_filenames: false
-
-      - id: shellcheck
-        name: "lint shell scripts (shellcheck)"
-        # actionlint runs shellcheck over the `run:` blocks INSIDE workflows, so
-        # it covers workflow shell but not a standalone script. Before this hook
-        # the repository's only shell script, `scripts/apply_ruleset.sh`, was
-        # linted by nothing: an unquoted-expansion or quoting bug in it passed
-        # `make verify` green. Verified by mutation, not assumed.
-        #
-        # This is the same check, made enforceable locally and in CI rather than
-        # advisory in a third-party dashboard.
-        entry: shellcheck
-        language: system
-        types: [shell]
-        files: \.sh$
 
   # ---------------------------------------------------------------------------
   # Security gate — pre-push stage. Local replicas of the CI security
