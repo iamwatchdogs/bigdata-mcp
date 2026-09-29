@@ -120,6 +120,16 @@ ignore = [
 # namespace package) do not apply to a script run directly by path.
 # S404/S603 are suppressed at the call site, where the argument list is fixed.
 "scripts/**/*.py" = ["T20", "INP"]
+# S607 (start-process-with-a-partial-path) applies to exactly one call site:
+# scripts/coderabbit_advisory.py, which spells its argv inline so Opengrep's
+# `dangerous-subprocess-use-audit` rule sees a literal and stops reporting it.
+# The bare name is deliberate there: an absolute path would silence the check by
+# hardcoding one machine's install prefix, and the resolved path from
+# shutil.which is the one shape Opengrep refuses. B607 carries the same
+# justification below, and the hook still prints which of the three failures
+# occurred. Scoped to the file so the next script that spawns a bare name has to
+# come back and say why.
+"scripts/coderabbit_advisory.py" = ["S607"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -189,7 +199,18 @@ show_missing = true
 #   tell a good argv from a bad one by inspection, which is not a distinction a
 #   linter can make anyway.
 #
+# B607 start_process_with_partial_path — fires on a bare command name, i.e. one
+#   resolved through PATH. `scripts/coderabbit_advisory.py` has exactly one such
+#   call, and it is there on purpose: Opengrep's
+#   `dangerous-subprocess-use-audit` rule exempts only an argv literal, so a
+#   `shutil.which` result is reported and a hardcoded absolute path would
+#   silence this check by binding one machine's install prefix. The trade is
+#   deliberate -- the rule being satisfied is the one that flags a non-literal
+#   argv, and the one being given up asks for a literal path that this
+#   repository cannot write down. The call is preceded by a `shutil.which`
+#   existence check and its failure modes are each reported by name.
+#
 # B608 hardcoded_sql_expressions — this repository has no database and no SQL.
 #   The single hit is a false positive on the word "update" inside an assertion
 #   message that reads "create-versus-update".
-skips = ["B101", "B404", "B603", "B608"]
+skips = ["B101", "B404", "B603", "B607", "B608"]

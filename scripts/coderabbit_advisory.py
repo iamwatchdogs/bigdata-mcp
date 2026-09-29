@@ -65,8 +65,20 @@ def main() -> int:
         return 0
 
     try:
-        completed = subprocess.run(  # nosec B603  # ruff: ignore[subprocess-without-shell-equals-true]
-            [executable, "review", "findings"],
+        # The literal argv is load-bearing, not tidiness. Opengrep's
+        # `dangerous-subprocess-use-audit` rule -- the one that reported this
+        # call site -- exempts exactly three shapes: a literal string, a literal
+        # list, and a literal tuple. A path resolved by `shutil.which` is none of
+        # them, which is the whole content of the rule.
+        #
+        # `executable` above is now used only for the `is None` test, and that
+        # is deliberate: it owns the "not on PATH" message, which is what lets a
+        # reader tell "no findings" from "never ran". Do not remove it as dead.
+        # Do not promote it to an absolute path either -- a resolved one would
+        # silence the partial-path check below by hardcoding a Homebrew prefix
+        # that is wrong on every other install.
+        completed = subprocess.run(
+            ["coderabbit", "review", "findings"],
             check=False,
             capture_output=True,
             text=True,
