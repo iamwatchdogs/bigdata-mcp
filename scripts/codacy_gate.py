@@ -17,6 +17,18 @@ all three are checked: a false `executionSuccessful`, an error-level
 notification, a `null` `results`. Absent `invocations` is not one of them, and
 two of the three runs this analyser emits have none.
 
+**A report that names no runs is not a clean report either.** Those three signals
+are all per-run, so a report whose `runs` array is empty passes every one of them
+and still describes an analysis that never happened. It is the shape this
+analyser leaves behind when a tool fails to start -- measured, not assumed: with
+a runtime pin naming a Python that could not be downloaded, all three tools
+failed and the report came back as 149 bytes with an empty `runs` array, which
+this gate reported as `codacy: clean, 0 findings` and exited 0. An empty array
+is now rejected. It is not compared against the number of configured tools,
+because a Codacy release that adds or drops a tool would otherwise turn a
+legitimate report into a failure; the rule is about evidence that something was
+analysed, not about how many things were.
+
 **No exclusion mechanism and no path argument.** It walks the current directory
 and `exclude_paths` in `.codacy/codacy.yaml` is silently ignored. Staging is
 therefore the only lever that drops `.venv`, and it is what makes the gate fast
@@ -304,6 +316,20 @@ def _findings(sarif_path: Path) -> list[dict[str, Any]] | None:
     if not isinstance(runs, list):
         _reject(f"{sarif_path} has no `runs` array")
         return None
+    if not runs:
+        # A report with zero runs is how this analyser represents a tool that
+        # never started, and it is indistinguishable from a report where every
+        # tool ran and found nothing: both yield an empty list of results. The
+        # count of runs is deliberately not compared against a roster of the
+        # configured tools, because a Codacy release that adds or drops one would
+        # then turn a legitimate report into a failure. The rule is about
+        # evidence that something was analysed, not about how many things were.
+        _reject(
+            f"{sarif_path} names no runs, so no tool reported anything. That is "
+            "the shape a tool that failed to start leaves behind, and reading it "
+            "as zero findings would pass a run that never happened."
+        )
+        return None
 
     findings: list[dict[str, Any]] = []
     for run_index, raw_run in enumerate(runs):
@@ -399,8 +425,9 @@ def main() -> int:
         results = _findings(sarif_path)
         if results is None:
             return _fail(
-                "the analysis produced no readable SARIF report, so its result is "
-                "unknown. Not treating that as zero findings."
+                "the analysis produced no SARIF report this gate can trust, so its "
+                "result is unknown. Not treating that as zero findings. The line "
+                "above says why this report was rejected."
             )
 
     if not results:
