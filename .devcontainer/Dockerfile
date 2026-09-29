@@ -78,6 +78,19 @@ COPY --from=ghcr.io/astral-sh/uv:0.12.20@sha256:100047e74f30778ab704942321a09750
 #
 # The archive wraps its payload in a directory named after the target triple,
 # so --strip-components=1 is what yields the bare binary.
+#
+# DL4006 asks for `SHELL ["/bin/bash", "-o", "pipefail", "-c"]` here, because a
+# `sha256sum ... | cut ...` pipeline hides a failure in its first stage: `set -e`
+# reads the status of the *last* stage, so a missing download would sail through
+# and only be caught by the checksum comparison, as a misleading "mismatch: got
+# , want ...". Measured on this base image rather than assumed: it declares no
+# SHELL at all, so Docker's default applies, and /bin/sh here is dash, which
+# has no pipefail to set.
+#
+# So there is no pipeline to lose. `sha256sum` on its own fails loudly and
+# `|| exit 1` makes `set -e` cover it; `${got%% *}` strips the two spaces and
+# the filename that `sha256sum` appends, which is what `cut -d' ' -f1` was
+# doing, without a second process to go wrong.
 ARG PREK_VERSION=v0.5.4
 ARG PREK_SHA256_AMD64=6147dfe64051af590f4bfc2c073a0780fb5e2cc37d9eab8e47fe9fe26c7dfb80
 ARG PREK_SHA256_ARM64=5478e436210b5226b8db3dccdd1a2e9094b1c63d81155d96bfa8b83f0398885c
@@ -91,7 +104,8 @@ RUN set -eux; \
     base="https://github.com/j178/prek/releases/download/${PREK_VERSION}"; \
     file="prek-${arch}-unknown-linux-gnu.tar.gz"; \
     curl -fsSLo "/tmp/$file" "$base/$file"; \
-    got="$(sha256sum "/tmp/$file" | cut -d' ' -f1)"; \
+    got="$(sha256sum "/tmp/$file")" || exit 1; \
+    got="${got%% *}"; \
     if [ "$got" != "$want" ]; then \
       echo "prek: sha256 mismatch for $file: got $got, want $want" >&2; exit 1; \
     fi; \
@@ -121,6 +135,10 @@ RUN set -eux; \
 # name; the README's `alias codacy-cli=...` is a shell alias, not a binary.
 # Nothing upstream puts a command named `codacy-cli` on PATH, which is what
 # both Makefile:149 and codacy_gate.py:374 require.
+#
+# The checksum is read the pipe-free way for the reason recorded above: this
+# base image has no pipefail, so `sha256sum | cut` would let a failed download
+# reach the comparison as an empty digest instead of aborting where it happened.
 ARG CODACY_CLI_VERSION=1.0.0-main.382.sha.473b61c
 ARG CODACY_CLI_SHA256_AMD64=c9417215e4e53ec338debdf0ff48f2f05f00fefdb4833cbe0d98d307e246f8ad
 ARG CODACY_CLI_SHA256_ARM64=787920760144d4030fc441fb5a2dbe47707e21cf3821a10c62d8c260e1044f4d
@@ -134,7 +152,8 @@ RUN set -eux; \
     base="https://github.com/codacy/codacy-cli-v2/releases/download/${CODACY_CLI_VERSION}"; \
     file="codacy-cli-v2_${CODACY_CLI_VERSION}_linux_$(dpkg --print-architecture).tar.gz"; \
     curl -fsSLo "/tmp/$file" "$base/$file"; \
-    got="$(sha256sum "/tmp/$file" | cut -d' ' -f1)"; \
+    got="$(sha256sum "/tmp/$file")" || exit 1; \
+    got="${got%% *}"; \
     if [ "$got" != "$want" ]; then \
       echo "codacy-cli: sha256 mismatch for $file: got $got, want $want" >&2; exit 1; \
     fi; \
