@@ -130,13 +130,13 @@ checks: ## Full pre-commit stage on all files (skips branch guard)
 security: ## Pre-push gate: zizmor + osv-scanner + gitleaks + codacy + coderabbit (advisory)
 	$(PREK) run --all-files --stage pre-push
 
-  bandit: ## Python security analysis (pre-push hook)
+bandit: ## Python security analysis (pre-push hook)
 	$(PREK) run bandit --all-files
 
-  zizmor: ## GitHub Actions SAST, medium+ severity (pre-push hook)
+zizmor: ## GitHub Actions SAST, medium+ severity (pre-push hook)
 	$(PREK) run zizmor --all-files --stage pre-push
 
-  workflows: ## Parse + validate every workflow: YAML syntax, actionlint, shellcheck
+workflows: ## Parse + validate every workflow: YAML syntax, actionlint, shellcheck
 	@# actionlint shells out to shellcheck to lint every `run:` body. When
 	@# shellcheck is not on PATH, actionlint drops that rule and EXITS 0 --
 	@# its "Rule \"shellcheck\" was disabled" notice goes to the verbose log
@@ -159,7 +159,7 @@ osv: ## Dependency vulnerability scan (pre-push hook)
 gitleaks: ## Secret scan over full git history (pre-push hook)
 	$(PREK) run gitleaks --stage pre-push
 
-  codacy-install: ## Fetch the Codacy analysis tools named in .codacy/codacy.yaml
+codacy-install: ## Fetch the Codacy analysis tools named in .codacy/codacy.yaml
 	@command -v codacy-cli >/dev/null 2>&1 || { \
 		echo "error: codacy-cli not found on PATH"; \
 		echo "       install it (macOS: brew install codacy-cli), then re-run this target"; \
@@ -167,7 +167,7 @@ gitleaks: ## Secret scan over full git history (pre-push hook)
 	}
 	codacy-cli install
 
-  codacy: ## Codacy SAST + complexity, staged off .venv (pre-push hook)
+codacy: ## Codacy SAST + complexity, staged off .venv (pre-push hook)
 	@# Assert the tool is present rather than letting the gate report it. Same
 	@# reasoning as the shellcheck assertion in `workflows`: a gate that cannot
 	@# run must not be able to report success.
@@ -178,7 +178,7 @@ gitleaks: ## Secret scan over full git history (pre-push hook)
 	}
 	$(PREK) run codacy --stage pre-push
 
-  coderabbit: ## CodeRabbit stored findings, advisory only (no cloud call)
+coderabbit: ## CodeRabbit stored findings, advisory only (no cloud call)
 	$(PREK) run coderabbit-advisory --stage pre-push
 
 verify: checks security ## Everything CI gates on: commit stage + security gate
