@@ -144,7 +144,22 @@ repos:
         # The gate is worth having and the lock file is worth not churning, so
         # the tool goes where the tool belongs. Pinned to an exact version for
         # the same reason every other hook revision in this file is.
-        entry: bandit -q -r src scripts tests -c pyproject.toml
+        #
+        # The entry is a wrapper, not `bandit ...`, because Bandit's exit status
+        # is not a gate. 1.9.4 decides with `results_count(...) > 0` alone, and a
+        # file it cannot open or parse goes into `manager.skipped` and is never
+        # counted: a tree whose only Python file has a syntax error exits 0, and
+        # under `-q` prints nothing at all. scripts/bandit_gate.py reads the
+        # `errors` key that `-f json` writes from `manager.get_skipped()` and
+        # fails on it. Shell syntax cannot do that here: prek splits `entry` with
+        # `shlex` and execs the argv, so `|| exit 1` arrives as two arguments.
+        #
+        # The wrapper invokes `sys.executable -m bandit`, which is this hook
+        # environment's own interpreter and therefore the copy of bandit that
+        # `additional_dependencies` installed. The `bandit` on PATH is checked
+        # separately only so its absence is a stated failure rather than a
+        # traceback.
+        entry: python scripts/bandit_gate.py
         language: python
         additional_dependencies: ["bandit==1.9.4"]
         files: ^(src|tests|scripts)/.*\.py$|^pyproject\.toml$
