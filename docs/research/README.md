@@ -251,16 +251,47 @@ their next *real* finding fails closed:
   comments on one line left the platform still reporting the finding while the
   local gate was already satisfied.
 
+  All of that is true of Bandit and only of Bandit. The marker is `# nosec`, and
+  the platform finding these paragraphs were chasing is not Bandit's — see the
+  correction below. Read as a statement about the local gate it holds; read as a
+  statement about what the platform reads, it is the mistake that cost four
+  pushes.
+
   The lesson matches the ShellCheck entry: the gap was that nothing here
   enforced the standard, so a third party's opinion was the only enforcement.
 
 **The last four Codacy findings, and the two wrong conclusions behind them.**
 
-Two were `B603` (subprocess without a static string) at
+Two were reported as `B603` (subprocess without a static string) at
 `with_testmon_lock.py:110` and `test_main.py:326`, and two were `E501`
 line-length on `uv.lock`, which appeared as soon as `bandit` joined the
 dependency set because its `sdist` and `wheel` records are single lines longer
 than 88 characters.
+
+**Correction, added later: those two are not Bandit findings.** "Detected
+subprocess function 'run' without a static string" is the message of Opengrep's
+`dangerous-subprocess-use-audit` rule, severity ERROR. The string does not occur
+anywhere in the Bandit 1.9.4 sdist — all 208 files were checked — and B603's own
+text is "subprocess call - check for execution of untrusted input." So every
+attempt below was configuring a tool that was never reading those lines, which
+is why four of them failed and the fifth did not.
+
+The rule is three `pattern-not` guards: a literal string, a literal list, and a
+literal tuple are exempt. A path from `shutil.which` is none of them, so the fix
+is to spell the argv inline, and `# nosec` cannot help because it is Bandit's
+marker and Opengrep reads `# nosemgrep`. Opengrep was enabled in
+`.codacy/codacy.yaml` on the commit that added the Codacy gate, so the tool that
+produced these findings is one this repository turned on itself. That it needs
+`# nosemgrep` or a literal argv rather than configuration is the answer to "not
+fixable from this repository" — the finding was fixable, and the mechanism is in
+the rule, not in the config file.
+
+`with_testmon_lock.py:110` is still reported on every run, and is expected to
+stay reported. Its argv is the caller's command, which is the script's entire
+purpose, so no literal is available to it and `# nosemgrep` would be a blanket
+suppression of a real audit finding. The `os.posix_spawn` rewrite described
+above was the same shape of attempt: it satisfied B603 and left this rule
+unsatisfied, which is why the finding changed name rather than going away.
 
 Four attempts on `B603` from the code and the Bandit config all failed, in this
 order: the `[tool.bandit]` skip list; an inline site-level suppression verified
@@ -357,7 +388,9 @@ confirmation number comes from the hook's own interpreter.
 A root `.codacy.yml` was tried and **removed unverified**: it reduced nothing
 locally, because `codacy-cli` reads only `.codacy/codacy.yaml`. Suppressing
 these on the Codacy side, rather than in this repository, is the remaining lever
-and is a dashboard setting, not a file.
+and is a dashboard setting, not a file — for the two call sites whose argv cannot
+be made literal. For the others it is not a lever at all, and treating it as the
+answer is what made the four pushes above necessary.
 
 **One finding the local run did surface, and it was real.** Codacy runs
 ShellCheck, which `codacy-cli` cannot. Checking whether the repository covered
@@ -382,8 +415,22 @@ come back with it. The lesson survives the removal: actionlint does not lint
 files, only workflow `run:` blocks, so a shell script in this repository needs
 its own gate.
 
-**Unverified:** the server-side 34 were never visible, so this entry still
-cannot claim what they are. Confirming that needs the dashboard.
+**Still unverified, and it is not the identity of the 34.** The check run's
+annotations endpoint returned all 34 and every one was reviewed above, so what
+they are is established. What the annotations do not carry is each finding's
+disposition on the platform: the per-finding suppression that would clear the two
+remaining `B603`-shaped findings needs a dashboard setting, and whether it has
+been applied is unconfirmed. That is the lever left open, and it is a dashboard
+setting rather than a file in this repository.
+
+The count has moved since. The same check run on `d2ef22c` reported 4, not 34:
+three Agentlinter findings on `AGENTS.md` and one Opengrep `B603`-shaped finding
+on `scripts/coderabbit_advisory.py:59`. The trend across the branch is
+36 → 34 → 15 → 4 → 2 → 1 → 4, and each step is a commit that fixed a specific
+site. The last of those four is now fixed in the repository as well, by giving
+the call site a literal argv; only a Codacy re-run can confirm the platform sees
+it, and only the dashboard can confirm the two `with_testmon_lock.py` findings,
+which are the same rule on an argv that cannot be made literal.
 
 Codacy is not a merge gate here. The ruleset requires exactly one check,
 `CI Status`; there is no classic branch protection. Five independent gates cover
