@@ -136,7 +136,7 @@ bandit: ## Python security analysis (pre-push hook)
 zizmor: ## GitHub Actions SAST, medium+ severity (pre-push hook)
 	$(PREK) run zizmor --all-files --stage pre-push
 
-workflows: ## Parse + validate every workflow: YAML syntax, actionlint, shellcheck
+workflows: ## Validate every workflow: actionlint syntax + shellcheck on every run: body
 	@# actionlint shells out to shellcheck to lint every `run:` body. When
 	@# shellcheck is not on PATH, actionlint drops that rule and EXITS 0 --
 	@# its "Rule \"shellcheck\" was disabled" notice goes to the verbose log
@@ -145,12 +145,25 @@ workflows: ## Parse + validate every workflow: YAML syntax, actionlint, shellche
 	@# shellcheck this target reports success having checked no shell at all.
 	@# Silent, green, and coverage-free is the exact shape of bug this repo
 	@# fails closed against, so the dependency is asserted instead of assumed.
+	@#
+	@# There is no separate YAML parse here, and there never should be. This
+	@# target used to run `uv run python -c "import yaml; ..."` before
+	@# actionlint, which made it fail on every invocation: pyyaml is in neither
+	@# pyproject.toml nor uv.lock, so the import raised ModuleNotFoundError and
+	@# make exited 2. The documented gate was unrunnable and nothing called it,
+	@# which is how it stayed that way. See the failure ledger in AGENTS.md.
+	@#
+	@# The parse is also redundant, which is the part worth recording. actionlint
+	@# parses each workflow before linting it and exits 1 on a syntax error
+	@# (verified against a bad block indent and an unclosed flow sequence), and
+	@# the check-yaml hygiene hook already parses every YAML file in the
+	@# repository at commit stage, workflows included. Two owners for one check
+	@# is how a check drifts out of sync with the tool that actually runs it.
 	@command -v shellcheck >/dev/null 2>&1 || { \
 		echo "error: shellcheck not found on PATH; 'make workflows' would pass without linting any run: body"; \
 		echo "       install it (macOS: brew install shellcheck) or let CI be the gate"; \
 		exit 1; \
 	}
-	$(PYTHON) -c "import sys,pathlib,yaml; [yaml.safe_load(p.read_text()) for p in sorted(pathlib.Path('.github/workflows').rglob('*.y*ml'))]; print('all workflows parse')"
 	$(PREK) run actionlint --all-files
 
 osv: ## Dependency vulnerability scan (pre-push hook)

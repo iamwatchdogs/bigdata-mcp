@@ -56,7 +56,7 @@ the full list.
 | Complexity gate | `make complexity` (max 15) |
 | Tests | `make test` (coverage floor 80 applies) |
 | Tests on changed files only | `make testmon` |
-| Workflow validation | `make workflows` (parse + actionlint) |
+| Workflow validation | `make workflows` (actionlint + shellcheck) |
 | Codacy SAST (pre-push) | `make codacy` |
 | Fetch Codacy's analysis tools (once) | `make codacy-install` |
 | CodeRabbit stored findings (**advisory, never blocks**) | `make coderabbit` |
@@ -123,6 +123,18 @@ claim rather than re-deriving it.
   the general form: a check whose subject list is empty succeeds, so deleting the
   subject converts a real check into a green line. Before keeping any
   "every X is Y" test, confirm X is non-empty.
+- **A documented gate that cannot run is worse than an absent one.** `make
+  workflows` ran `uv run python -c "import yaml; ..."` before actionlint, and
+  pyyaml is in neither `pyproject.toml` nor `uv.lock`, so the import raised
+  `ModuleNotFoundError` and the target exited 2 on every invocation. It survived
+  because nothing called it: `make verify` reaches actionlint through the
+  prek hook, not through this target, so CI stayed green on a command AGENTS.md
+  listed as a gate and a boundary depended on. A local spot check would not
+  have caught it either — pyyaml *is* present in Codacy's own local environment,
+  so `import yaml` succeeds there. When a target duplicates a check another tool
+  already owns, drop the duplicate: actionlint parses each workflow and exits 1
+  on a syntax error, and `check-yaml` already parses every YAML file at commit
+  stage. Two owners for one check is how the copy goes stale.
 - **`codacy-cli analyze` exits 0 no matter what.** Measured four ways: a clean
   tree, a tree with a confirmed `subprocess(..., shell=True)`, a missing config,
   and a malformed one all returned 0. A hook whose entry is that command is
