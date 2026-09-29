@@ -98,27 +98,47 @@ These are real, reproduced, and not worked around.
 
 ### 1. Two of Codacy's three analyzers cannot be installed
 
-`.codacy/codacy.yaml` declares `python@3.12`. `codacy-cli` resolves that to a
-pinned `python-build-standalone` release, `20250317`:
+`.codacy/codacy.yaml` declares `python@3.12`. `codacy-cli` substitutes that
+version verbatim into a URL template for a pinned `python-build-standalone`
+release, `20250317`:
 
 ```
 https://github.com/astral-sh/python-build-standalone/releases/download/20250317/
-  cpython-3.12+20250317-<arch>-unknown-linux-gnu-install_only.tar.gz   → 404
+  cpython-3.12+20250317-<arch>-unknown-linux-gnu-install_only.tar.gz      → 404
+  cpython-3.12.9+20250317-<arch>-unknown-linux-gnu-install_only.tar.gz   → 200
 ```
 
-That release still exists but now contains **zero** 3.12 assets, on every
-platform and both architectures. So the runtime download 404s, leaves a
-zero-byte file behind, and `pylint` and `lizard` — both Python tools that
-reuse that runtime — then fail extracting it with `EOF`. Only `opengrep`, a
-bare binary download, installs.
+**The release was never missing anything.** It carries 184 assets for 3.12 —
+every one of them `3.12.9` — across both architectures, every platform, and the
+`aarch64` and `x86_64` `install_only` builds among them. What it has never
+published, in this release or any other, is a *bare-minor* name: zero assets in
+the whole release match `cpython-3.12+<date>-…`, because every asset carries a
+patch number. `codacy-cli` interpolates the configured pin with no patch
+resolution anywhere, so `python@3.12` asks for a filename that has never existed
+and the download 404s. A warm host proves the same thing from the other
+direction: its cache holds a 18 MB
+`cpython-3.11.11+20250317-…-install_only.tar.gz` from the same release and the
+same template, which is exactly the shape a pin *with* a patch produces.
 
-A host that has been used since before the assets were removed still works,
-because Codacy's installer keys on the extracted `runtimes/python` path
-rather than the requested version. That is why this is not visible on an
-already-warm machine and is fatal on a fresh one.
+The 404 leaves a zero-byte file behind, and `pylint` and `lizard` — both Python
+tools that reuse that runtime — then fail extracting it with `EOF`. Only
+`opengrep`, a bare binary download, installs. `codacy-cli install` still exits 0,
+so nothing surfaces the failure to a caller.
 
-**Nothing in this repository can fix it.** It clears when Codacy re-pins the
-runtime release. No newer `codacy-cli` exists; `1.0.0-main.382` is current.
+A host that has been used since before the pin changed still works, because
+Codacy's installer keys on the extracted `runtimes/python` path rather than the
+requested version. That is why this is not visible on an already-warm machine
+and is fatal on a fresh one.
+
+**This one is fixable in this repository, and the fix is a one-line change to
+`.codacy/codacy.yaml`.** Pinning `python@3.12.9` instead of `python@3.12` makes
+the template resolve to an asset that verifiably exists — see the 200 above. It
+is deliberately not made here: it changes what the host's own Codacy run does,
+and this pull request is about the devcontainer. It is recorded here because the
+previous version of this section claimed the opposite, that nothing in the
+repository could fix it and it would clear when Codacy re-pinned the release. A
+re-pin would not clear it — the template would still interpolate `3.12` and
+still ask for a name the release does not publish.
 
 ### 2. The Codacy gate passes even when no analyzer runs
 

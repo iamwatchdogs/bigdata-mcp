@@ -463,21 +463,45 @@ verified. `make verify` exited 0 with all 29 hooks passing.
 
 Two of Codacy's three analyzers cannot be installed at all, on any architecture, and the
 gate is green anyway. `.codacy/codacy.yaml` declares `python@3.12`, which `codacy-cli`
-resolves to a pinned `python-build-standalone` release `20250317`. That release still
-exists but now contains **zero** 3.12 assets, on every platform and both architectures, so
-the download 404s:
+interpolates verbatim into a URL template for a pinned `python-build-standalone` release
+`20250317`, so the download 404s:
 
 ```
 https://github.com/astral-sh/python-build-standalone/releases/download/20250317/
   cpython-3.12+20250317-aarch64-unknown-linux-gnu-install_only.tar.gz   → 404
+  cpython-3.12.9+20250317-aarch64-unknown-linux-gnu-install_only.tar.gz → 200
 ```
+
+The release is not missing 3.12. It carries 184 assets for 3.12, all of them `3.12.9`, on
+both architectures and every platform. What it has never published is a *bare-minor* name:
+no asset in the release matches `cpython-3.12+<date>-…`, because every one carries a patch
+number, and `codacy-cli` does no patch resolution. The 404 is therefore a name `codacy-cli`
+invented, not an asset anyone removed. A warm host confirms it from the other side: its
+cache holds an 18 MB `cpython-3.11.11+20250317-…-install_only.tar.gz` from the same release
+and the same template.
 
 The 404 leaves a zero-byte file behind, and `pylint` and `lizard` — both Python tools that
 reuse that runtime — then fail extracting it with `EOF`. Only `opengrep`, a bare binary
-download, installs. An already-warm host keeps working because Codacy's installer keys on
-the extracted `runtimes/python` path rather than the requested version: the host's pylint
-venv is built on `python3.11.11` from a cache populated before the assets were removed.
-That is why this is invisible on a used machine and fatal on a fresh one.
+download, installs, and `codacy-cli install` exits 0 regardless, so no caller learns of it.
+An already-warm host keeps working because Codacy's installer keys on the extracted
+`runtimes/python` path rather than the requested version, and its pylint venv is built on
+`python3.11.11` — the version that pins to a filename which exists. That is why this is
+invisible on a used machine and fatal on a fresh one.
+
+**Corrected 2026-09-29.** This section previously said the release "now contains zero 3.12
+assets" and that "nothing in this repository can fix it". Both were wrong, and §8 below
+cites the same claim. The first was a misreading of a 404: an earlier draft of this work
+asserted the assets were removed upstream, and nothing was ever removed. The second
+followed from the first — given a deletion, the only remedy is a re-pin. Given a filename
+mismatch, the remedy is to stop asking for the filename, which is one line in
+`.codacy/codacy.yaml`: `python@3.12.9` resolves to the asset confirmed 200 above. A re-pin
+of the release would *not* clear it, because the template would still interpolate `3.12`.
+
+That fix is still not made here, and the reason is scope rather than the reasoning above:
+it changes which runtime the host's own Codacy analysis builds against, which is not what
+this document is about. It is recorded because a wrong root cause is worse than a known
+one — the old text would have sent the next reader looking for a deletion that never
+happened, and told them not to look for a fix that does exist.
 
 Worse, and this is a bug in this repository rather than in the devcontainer:
 `codacy-cli analyze` exits 0 and writes a well-formed SARIF even when every tool fails to
@@ -499,7 +523,7 @@ report — and that is a change to `scripts/`, so it is deliberately not made he
 | Risk | Severity | Handling |
 |---|---|---|
 | `codacy-cli`'s analyzers are fetched without integrity verification | medium | §3.4; upstream behaviour, unfixable here, recorded in the README |
-| Codacy's pinned `python@3.12` runtime 404s, so 2 of 3 analyzers cannot install | **high** | §6.1; upstream breakage, no newer `codacy-cli` exists, nothing here can fix it. Documented in the README so it is not re-diagnosed |
+| Codacy's pinned `python@3.12` runtime 404s, so 2 of 3 analyzers cannot install | **high** | §6.1; a filename `codacy-cli` invents by interpolating a bare-minor pin into a template that only ever shipped patch-qualified names. Not upstream breakage — `python@3.12.9` fixes it, in a change of its own. Documented in the README so it is not re-diagnosed |
 | The codacy gate reports success when no analyzer ran | **high** | §6.1; a real hole in `codacy_gate.py`, deliberately not patched here. Until it is, the container's codacy line is weaker than the host's |
 | `shellcheck` 0.9.0 on bookworm vs 0.11.0 upstream | low | accepted; `make workflows` only needs it to *exist*, and CI installs no shellcheck at all |
 | Digest pins drift from the ecosystem Dependabot raises | low | intended; a PR proposes the change and this repo's gates run on it |
@@ -510,10 +534,17 @@ report — and that is a change to `scripts/`, so it is deliberately not made he
 
 ## 8. Out of scope
 
-- **No fix for the `python@3.12` runtime pin.** It lives in `.codacy/codacy.yaml` and in
-  Codacy's own hardcoded release, and the release it names no longer carries 3.12. Editing
-  the version locally would paper over a third-party outage with an unverified pin, which
-  is the symptom-patch pattern `AGENTS.md` warns about. §6.1.
+- **No fix for the `python@3.12` runtime pin.** It lives in `.codacy/codacy.yaml`, and
+  `python@3.12.9` would fix it — see the correction in §6.1. It is still not done here, and
+  the reason is scope, not the reasoning that used to be recorded here. This bullet
+  previously said the release "no longer carries 3.12" and that editing the version "would
+  paper over a third-party outage with an unverified pin". There is no outage: the asset
+  exists and is served today, so a pin to it is verified rather than invented, and the
+  symptom-patch objection does not apply. What is true is that changing it alters which
+  runtime the *host's* Codacy analysis builds against, which is a different logical change
+  from adding a devcontainer, and `AGENTS.md` requires one logical change per change. It
+  deserves its own pull request and its own verification, and leaving it here as a
+  documented, one-line, known fix is more useful than leaving it as an unfixable mystery.
 - **No fix for the gate hole.** `codacy_gate.py` should treat a SARIF with no `runs` as an
   unknown result, exactly as it already treats an unreadable report. That is a change to
   `scripts/` with its own test and its own change, and one logical change per change
