@@ -19,6 +19,39 @@ FROM mcr.microsoft.com/devcontainers/python:3.14-bookworm@sha256:8179b9d5f68dab0
 # `language: golang` hooks in .pre-commit-config.yaml, which prek builds from
 # source with `go install`; installing release binaries would duplicate work
 # prek already does.
+#
+# DL3008 asks for `apt-get install pkg=<version>` here. Declining, with reasons,
+# because following it trades one problem for a worse one:
+#
+#   * Debian replaces superseded revisions rather than keeping them, so a pin
+#     stops resolving the moment the archive moves past it. Verified concretely
+#     rather than assumed: curl_7.88.1-10+deb12u7_amd64.deb returns 404 because
+#     bookworm now carries u15. The .dsc survives, so the source metadata is
+#     retained and only the binary is gone. The same has already happened to
+#     curl inside a single stable release.
+#   * These are Debian *revision* bumps, not upstream releases. u7 to u15 is the
+#     same upstream 7.88.1 eight revisions on, and those arrive silently as
+#     security pushes, so a pin to u15 dies on deb12u16 with no signal.
+#   * Nothing here would update the pin. Dependabot's docker ecosystem parses
+#     FROM lines and manifest YAML only; it never reads a RUN, and it has no
+#     apt ecosystem at all. So the breakage would land on curl and
+#     ca-certificates, the two packages where falling behind is the actual
+#     risk, in a file no bot touches.
+#   * The reproducibility this rule wants is not absent, it is one level up. The
+#     base image is digest-pinned, so the image filesystem is reproducible. The
+#     apt repository contents do still drift between builds, and that is a real
+#     and orthogonal exposure, but the honest trade is drift, not an unmaintained
+#     pin that hard-fails the build and delays the security updates it was
+#     protecting.
+#
+# `apt-mark hold` was considered and does not apply: it protects an already
+# installed package, and this layer installs them for the first time.
+# snapshot.debian.org is the real remedy when reproducibility outranks security
+# currency, and it does serve superseded versions, but it needs
+# `check-valid-until=no`, has documented import gaps, and is volunteer-hosted.
+# That is a reasonable thing to reach for and a poor default for a developer
+# image.
+# hadolint ignore=DL3008
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
       ca-certificates \
