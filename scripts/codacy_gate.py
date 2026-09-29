@@ -400,9 +400,10 @@ def main() -> int:
     if shutil.which("codacy-cli") is None:
         return _fail(
             "codacy-cli is not on PATH, so this gate cannot run. Install it with "
-            "`brew install codacy-cli` and run `make codacy-install` once to fetch "
-            "the analysis tools. Refusing to pass: a gate that silently does not "
-            "run is indistinguishable from a gate that found nothing."
+            "`brew install codacy/codacy-cli-v2/codacy-cli-v2` and run "
+            "`make codacy-install` once to fetch the analysis tools. Refusing to "
+            "pass: a gate that silently does not run is indistinguishable from a "
+            "gate that found nothing."
         )
 
     if not CONFIG_SOURCE.is_file():

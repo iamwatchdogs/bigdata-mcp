@@ -148,7 +148,7 @@ gitleaks: ## Secret scan over full git history (pre-push hook)
 codacy-install: ## Fetch the Codacy analysis tools named in .codacy/codacy.yaml
 	@command -v codacy-cli >/dev/null 2>&1 || { \
 		echo "error: codacy-cli not found on PATH"; \
-		echo "       install it (macOS: brew install codacy-cli), then re-run this target"; \
+		echo "       install it (macOS: brew install codacy/codacy-cli-v2/codacy-cli-v2), then re-run this target"; \
 		exit 1; \
 	}
 	codacy-cli install
@@ -159,7 +159,7 @@ codacy: ## Codacy SAST + complexity, staged off .venv (pre-push hook)
 	@# run must not be able to report success.
 	@command -v codacy-cli >/dev/null 2>&1 || { \
 		echo "error: codacy-cli not found on PATH; 'make codacy' would fail, and the pre-push hook with it"; \
-		echo "       install it (macOS: brew install codacy-cli) and run 'make codacy-install'"; \
+		echo "       install it (macOS: brew install codacy/codacy-cli-v2/codacy-cli-v2) and run 'make codacy-install'"; \
 		exit 1; \
 	}
 	$(PREK) run codacy --stage pre-push

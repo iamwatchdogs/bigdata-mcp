@@ -591,12 +591,18 @@ honestly red — correct behaviour, and a devcontainer whose acceptance criterio
   container's codacy line red while the pin is still broken, and the pin fix alone
   leaves the hole waiting for the next tool failure. Each landed as its own commit so
   the history stays revertable in either order.
-- **No fix for the broken Homebrew advice.** `Makefile:151` and `codacy_gate.py:376` both tell the user to
-  run `brew install codacy-cli`, which **fails** — nothing by that name is in
-  homebrew-core. The real command needs the tap prefix
-  (`brew install codacy/codacy-cli-v2/codacy-cli-v2`). This is a genuine documentation
-  bug, and it is **not** fixed here: it is a different logical change, and
-  `AGENTS.md` requires one logical change per PR. Recorded here so it is not lost.
+- **The broken Homebrew advice — fixed 2026-09-29, in this branch.** `Makefile:151`,
+  `Makefile:162` and `codacy_gate.py:403` all told the user to run
+  `brew install codacy-cli`, which **fails** — nothing by that name is in
+  homebrew-core. The real command needs the tap prefix, and all three now say
+  `brew install codacy/codacy-cli-v2/codacy-cli-v2`. This was recorded here as out of
+  scope on the grounds that it was a different logical change. It was found again while
+  correcting the two limitations above, because it sits in two of the same files, and
+  fixing it was approved. Worth noting why it is worth fixing rather than merely
+  recording: the gate's own "codacy-cli is not on PATH" message is the text a user
+  reads at the moment they are stuck, and it was sending them to a command that
+  cannot work. The sibling advice was checked in the same pass and is fine —
+  `shellcheck` and `coderabbit` are both real Homebrew names.
 - **No `features` in `devcontainer.json`.** All four official features are already in the
   base image's layers (§4.1).
 - **No `devcontainer-lock.json`.** It would pin the Features, and this design declares
