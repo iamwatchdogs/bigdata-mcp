@@ -138,9 +138,9 @@ ignore = [
 # is preceded by a `shutil.which` check, and pre-commit prepends the hook's venv
 # `bin` to `PATH`, so check and call resolve to the same binary. Scoped per file
 # so the next script spawning a bare name has to come back and say why.
-"scripts/coderabbit_advisory.py" = ["S607"]
-"scripts/bandit_gate.py" = ["S603", "S607"]
-"scripts/codacy_gate.py" = ["S603", "S607"]
+"scripts/coderabbit_advisory.py" = ["start-process-with-partial-path"]
+"scripts/bandit_gate.py" = ["subprocess-without-shell-equals-true", "start-process-with-partial-path"]
+"scripts/codacy_gate.py" = ["subprocess-without-shell-equals-true", "start-process-with-partial-path"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
