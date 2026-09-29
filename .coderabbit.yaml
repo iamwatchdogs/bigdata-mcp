@@ -218,8 +218,38 @@ reviews:
   # is what makes a large review affordable.
   disable_cache: false
 
-# Deliberately absent: `reviews.tools`. The schema's own description says tool
-# levels are derived from `profile`, and the hosted integrations listed there
-# (ruff, bandit, opengrep, zizmor, gitleaks, actionlint) each already run
-# locally in this repository's pre-push stage. Enabling one here would add a
-# cloud copy of a check that is already enforced, fail-closed and free.
+  # The hosted tool integrations are on by default; they are not off because
+  # this key is absent. Every tool entry in the schema documents
+  # `enabled: true` as its own default, and the tools guide says almost all
+  # tools are enabled out of the box with CodeRabbit picking the relevant ones
+  # per repository -- so omitting `reviews.tools` adds a second copy of each
+  # tool below to every pull request rather than suppressing one.
+  #
+  # `profile` does not stand in for this. The only place the schema derives
+  # anything from a profile is a *level* knob, and only on phpstan, which this
+  # repository has no equivalent of. Tool enablement is its own key.
+  #
+  # Each of these already runs here and is enforced rather than advisory:
+  # ruff through the `ruff lint` and `ruff format` hooks; actionlint and zizmor
+  # through their own hooks; gitleaks across the whole history; osv-scanner over
+  # the dependency graph; opengrep through the fail-closed Codacy gate, which
+  # is the only place that reads its findings and exits nonzero on them. Bandit
+  # is absent from this list because it is not a CodeRabbit tool -- the schema
+  # and the tools list have no entry for it -- so there is nothing to disable.
+  #
+  # This is a deny list with no wildcard, and it will rot: the schema has no
+  # `disable_all` and no catch-all, so a tool CodeRabbit adds later defaults to
+  # enabled again. Widening it is a deliberate edit, not a default.
+  tools:
+    ruff:
+      enabled: false
+    actionlint:
+      enabled: false
+    zizmor:
+      enabled: false
+    gitleaks:
+      enabled: false
+    osvScanner:
+      enabled: false
+    opengrep:
+      enabled: false
