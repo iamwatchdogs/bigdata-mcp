@@ -96,82 +96,7 @@ and the matching sha256 in the same edit and rebuild.
 
 These are real, reproduced, and not worked around.
 
-### 1. Two of Codacy's three analyzers cannot be installed
-
-`.codacy/codacy.yaml` declares `python@3.12`. `codacy-cli` substitutes that
-version verbatim into a URL template for a pinned `python-build-standalone`
-release, `20250317`:
-
-```
-https://github.com/astral-sh/python-build-standalone/releases/download/20250317/
-  cpython-3.12+20250317-<arch>-unknown-linux-gnu-install_only.tar.gz      → 404
-  cpython-3.12.9+20250317-<arch>-unknown-linux-gnu-install_only.tar.gz   → 200
-```
-
-**The release was never missing anything.** It carries 184 assets for 3.12 —
-every one of them `3.12.9` — across both architectures, every platform, and the
-`aarch64` and `x86_64` `install_only` builds among them. What it has never
-published, in this release or any other, is a *bare-minor* name: zero assets in
-the whole release match `cpython-3.12+<date>-…`, because every asset carries a
-patch number. `codacy-cli` interpolates the configured pin with no patch
-resolution anywhere, so `python@3.12` asks for a filename that has never existed
-and the download 404s. A warm host proves the same thing from the other
-direction: its cache holds a 18 MB
-`cpython-3.11.11+20250317-…-install_only.tar.gz` from the same release and the
-same template, which is exactly the shape a pin *with* a patch produces.
-
-The 404 leaves a zero-byte file behind, and `pylint` and `lizard` — both Python
-tools that reuse that runtime — then fail extracting it with `EOF`. Only
-`opengrep`, a bare binary download, installs. `codacy-cli install` still exits 0,
-so nothing surfaces the failure to a caller.
-
-A host that has been used since before the pin changed still works, because
-Codacy's installer keys on the extracted `runtimes/python` path rather than the
-requested version. That is why this is not visible on an already-warm machine
-and is fatal on a fresh one.
-
-**This one is fixable in this repository, and the fix is a one-line change to
-`.codacy/codacy.yaml`.** Pinning `python@3.12.9` instead of `python@3.12` makes
-the template resolve to an asset that verifiably exists — see the 200 above. It
-is deliberately not made here: it changes what the host's own Codacy run does,
-and this pull request is about the devcontainer. It is recorded here because the
-previous version of this section claimed the opposite, that nothing in the
-repository could fix it and it would clear when Codacy re-pinned the release. A
-re-pin would not clear it — the template would still interpolate `3.12` and
-still ask for a name the release does not publish.
-
-### 2. The Codacy gate passes even when no analyzer runs
-
-This matters more than the above, and it is a bug in this repository's gate
-rather than in the devcontainer.
-
-`codacy-cli analyze` exits 0 and writes a well-formed SARIF even when every
-tool fails to start. With an empty analyzer cache the report is 149 bytes:
-
-```
-runs: 0
-results: 0
-```
-
-`scripts/codacy_gate.py` checks that the report is *readable* and that the
-`codacy-cli` binary is *present*, but never that any analyzer actually ran. It
-therefore reports `codacy: clean, 0 findings (analyze exit 0)` and exits 0
-whether three analyzers ran, one ran, or none did.
-
-So the green `security codacy` line inside the container is **not** evidence of
-SAST coverage. On the host it covers `opengrep`, `pylint` and `lizard`; in a
-clean container it can only ever cover `opengrep`, and it would still be green
-with none. The gate's own error message says it is trying to avoid exactly
-this — "a gate that silently does not run is indistinguishable from a gate that
-found nothing" — but the check is on the binary, not on the work.
-
-The fix belongs at the boundary: treat a SARIF with no `runs` as an unknown
-result, the way the gate already treats an unreadable report. That is a change
-to `scripts/`, so it is deliberately not made here — one logical change per
-change. Until then, treat the Codacy line as weaker inside the container than
-outside it.
-
-### 3. Dependabot's cooldown does not apply to this base image
+### 1. Dependabot's cooldown does not apply to this base image
 
 Microsoft Container Registry exposes no publication dates, so Dependabot
 cannot age a release and uses a new digest immediately. Digest bumps arrive as
@@ -179,14 +104,14 @@ pull requests on the day the base image is republished rather than after the
 default three-day delay. Recorded because it is real behaviour, not a defect to
 chase.
 
-### 4. `shellcheck` is 0.9.0
+### 2. `shellcheck` is 0.9.0
 
 That is what Debian bookworm ships, two releases behind upstream 0.11.0. It is
 enough for `make workflows`, which only requires the binary to exist. Note that
 CI installs no `shellcheck` at all, so actionlint's `run:`-body linting behaves
 differently in each place.
 
-### 5. Git hooks are shared with the host
+### 3. Git hooks are shared with the host
 
 `.git/` is bind-mounted, so `prek install` inside the container rewrites the
 same shims the host uses. Both forms fall back to `prek` on `PATH` when their
@@ -214,16 +139,25 @@ The `git config --global --add safe.directory` line is an emulation of
 `updateRemoteUserUID`, which a plain `docker run` does not perform. It is not
 part of the devcontainer configuration; an editor-driven open handles it.
 
-**This run's `security codacy` line covers `opengrep` and nothing else** — see
-limitation 2. It is not a full re-verification, and no extra step in this
-command changes that. Adding `make codacy-install` to the chain does not help,
-and the reason is worth stating because it looks like an obvious omission: that
-command exits 0 whether or not the analyzers arrived, so inserting it would add
-a download, print `installation completed with some failures` into an otherwise
-clean transcript, and leave the verification green with two analyzers missing. A
-step that cannot fail closed is not a check, which is the same defect the gate
-has. The honest form of this command would be one that fails when the analyzers
-are absent, and it does not exist yet.
+**What this run's `security codacy` line now covers.** All three analyzers:
+`opengrep`, `pylint` and `lizard`. That was not true of the version of this manual
+that preceded it, and the difference is the point worth recording.
+
+`make codacy-install` is still absent from the chain above, deliberately, and the
+reason has not changed: `codacy-cli install` exits 0 whether or not the analyzers
+arrived, so adding the step would put a download in the transcript and a
+`installation completed with some failures` line in it, and change nothing about
+whether the verification passes. A step that cannot fail closed is not a check.
+What has changed is what the check on the other end can do with the result — the
+gate now rejects a report that names no runs, so a missing analyzer makes the run
+red rather than silently green, and `make codacy-install` is not what the reader
+should be reaching for when they see it.
+
+The reason this run reaches three analyzers rather than one is the runtime pin in
+`.codacy/codacy.yaml`. It names a Python version whose download resolves, so all
+three tools install on a cold volume; it did not before, and only `opengrep`, which
+needs no runtime, survived. The image itself is unchanged by any of that, and the
+chain above is still the honest one to run.
 
 ## Resetting a half-built container
 

@@ -297,15 +297,18 @@ verification, with negative controls to prove the validation is not vacuous.
 three ecosystems. `file_fetcher.rb` matches
 `/dockerfile|containerfile/i` over the directory, so the file is found.
 
-`dependabot-auto-merge.yml:69-72` says:
+`.github/workflows/dependabot-auto-merge.yml:69-72` says:
 
 > This repository ships no container build, so a docker pull request would signal an
 > unexpected new dependency.
 
-That premise becomes false here, and leaving it would leave a misleading comment plus a
-branch that can never fire — since the digest-only PR the ecosystem raises is not
-`version-update:semver-patch` and would fall through to the fail-closed `else`. Adding
-the ecosystem *and* correcting the branch are one logical change, not two.
+That premise became false with this change, and leaving it would have left a
+misleading comment plus a branch that can never fire — since the digest-only PR the
+ecosystem raises is not `version-update:semver-patch` and would fall through to the
+fail-closed `else`. Adding the ecosystem *and* correcting the branch were one logical
+change, not two. Both shipped: the comment now explains the digest pin, and the
+branch returns `reason="docker base image bumps are not exercised by CI and need
+review"`.
 
 ## 4. Design
 
@@ -422,7 +425,7 @@ on both platforms.
 | `.devcontainer/devcontainer.json` | new |
 | `.devcontainer/README.md` | new — the operating manual, and the record of the known limitations |
 | `.github/dependabot.yml` | add the `docker` ecosystem |
-| `.github/dependabot-auto-merge.yml` | correct the falsified premise at `:69-72` |
+| `.github/workflows/dependabot-auto-merge.yml` | corrected the falsified premise at `:69-72` |
 
 No change to `Makefile`, `.pre-commit-config.yaml`, `pyproject.toml`, `uv.lock`, or
 anything under `src/`, `tests/`, or `scripts/`. The devcontainer reproduces the existing
@@ -497,11 +500,33 @@ mismatch, the remedy is to stop asking for the filename, which is one line in
 `.codacy/codacy.yaml`: `python@3.12.9` resolves to the asset confirmed 200 above. A re-pin
 of the release would *not* clear it, because the template would still interpolate `3.12`.
 
-That fix is still not made here, and the reason is scope rather than the reasoning above:
-it changes which runtime the host's own Codacy analysis builds against, which is not what
-this document is about. It is recorded because a wrong root cause is worse than a known
-one — the old text would have sent the next reader looking for a deletion that never
-happened, and told them not to look for a fix that does exist.
+**Resolved 2026-09-29, in the same branch as this document.** The paragraph above
+originally said this fix "is still not made here" and gave scope as the reason. Both
+the pin and the gate it made reachable were fixed on 2026-09-29, after this document
+was written and reviewed. Two corrections to the reasoning above came out of making
+the fix rather than out of reading it again:
+
+The remedy is `python@3.13.2`, not `python@3.12.9`. The runtime cannot be 3.14, which
+is what this project targets, and no pin can make it 3.14: release `20250317` was
+published on 2025-03-17 and Python 3.14 shipped in October 2025, so the release
+predates 3.14 outright. The newest Python it contains is 3.13.2, which is what was
+pinned — the closest to the project's own version that the release can supply.
+Confirmed by fetching each URL: `3.12` → 404, `3.12.9` → 200, `3.13` → 404,
+`3.13.2` → 200, `3.14` → 404, `3.14.0` → 404.
+
+The reason the defect was invisible on a used machine is sharper than "the installer
+keys on the extracted path". The venvs under `~/.codacy/runtimes` were Python
+3.13.15, matching the system interpreter, so `codacy-cli` never exercised the
+download path at all on a host that already had a Python. The defect is only
+reachable from a cold cache, which is exactly the state a new devcontainer is in.
+
+Verified in a cold container, which is the condition that used to fail: all four
+install items report success, and the analysis returns three runs — Pylint 3.3.6,
+Lizard, and Opengrep OSS — with 0 results.
+
+The reasoning in the paragraph above is kept rather than replaced, because it is what
+corrected the earlier wrong root cause, and a document that loses its own history
+tends to be re-wrong the same way twice.
 
 Worse, and this is a bug in this repository rather than in the devcontainer:
 `codacy-cli analyze` exits 0 and writes a well-formed SARIF even when every tool fails to
@@ -516,15 +541,34 @@ So the green `security codacy` line inside the container is **not** evidence of 
 coverage. The honest statement is: 28 of 29 hooks provide full coverage, and the 29th
 covers `opengrep` only while reporting success. The fix belongs at the boundary — treat a
 SARIF with no `runs` as an unknown result, the way the gate already treats an unreadable
-report — and that is a change to `scripts/`, so it is deliberately not made here.
+report.
+
+**Resolved 2026-09-29.** That fix is made. `codacy_gate.py` now rejects a `runs` array
+that is present, a list, and empty, and `main` reports a report it cannot trust rather
+than a report it cannot read. Measured both ways against a stubbed `codacy-cli`: the
+empty-runs report previously printed `codacy: clean, 0 findings (analyze exit 0)` and
+exited 0, and now exits 1. A three-clean-run report still exits 0 and a report with one
+finding still exits 1 with the finding rendered, so the new rejection does not catch
+legitimate reports.
+
+The run count is deliberately not compared against the number of configured tools. The
+gate has no business knowing Codacy's roster, and a release that adds or drops a tool
+would otherwise turn a legitimate report into a failure. The rule is evidence that
+something was analysed, not how many things were.
+
+The two fixes are one change rather than two, which is worth recording because it was
+not obvious. The pin fix alone leaves the gate bug waiting for the next tool failure.
+The gate fix alone, with the pin still broken, turns the container's codacy line
+honestly red — correct behaviour, and a devcontainer whose acceptance criterion is
+`make verify` failing on first open. Only both together leave it honest and green.
 
 ## 7. Risks
 
 | Risk | Severity | Handling |
 |---|---|---|
 | `codacy-cli`'s analyzers are fetched without integrity verification | medium | §3.4; upstream behaviour, unfixable here, recorded in the README |
-| Codacy's pinned `python@3.12` runtime 404s, so 2 of 3 analyzers cannot install | **high** | §6.1; a filename `codacy-cli` invents by interpolating a bare-minor pin into a template that only ever shipped patch-qualified names. Not upstream breakage — `python@3.12.9` fixes it, in a change of its own. Documented in the README so it is not re-diagnosed |
-| The codacy gate reports success when no analyzer ran | **high** | §6.1; a real hole in `codacy_gate.py`, deliberately not patched here. Until it is, the container's codacy line is weaker than the host's |
+| Codacy's pinned runtime named a bare minor, so 2 of 3 analyzers could not install | **high** | **fixed 2026-09-29**; §6.1. A filename `codacy-cli` invented by interpolating a bare-minor pin into a template that only ever shipped patch-qualified names. Pinned `python@3.13.2`, the newest version the release contains, and confirmed in a cold container that all three analyzers run |
+| The codacy gate reported success when no analyzer ran | **high** | **fixed 2026-09-29**; §6.1. A real hole in `codacy_gate.py`, now rejecting a report that names no runs. The container's codacy line is no longer weaker than the host's |
 | `shellcheck` 0.9.0 on bookworm vs 0.11.0 upstream | low | accepted; `make workflows` only needs it to *exist*, and CI installs no shellcheck at all |
 | Digest pins drift from the ecosystem Dependabot raises | low | intended; a PR proposes the change and this repo's gates run on it |
 | Dependabot cooldown fails open on MCR | low | §3.1; recorded, not mitigated |
@@ -534,21 +578,19 @@ report — and that is a change to `scripts/`, so it is deliberately not made he
 
 ## 8. Out of scope
 
-- **No fix for the `python@3.12` runtime pin.** It lives in `.codacy/codacy.yaml`, and
-  `python@3.12.9` would fix it — see the correction in §6.1. It is still not done here, and
-  the reason is scope, not the reasoning that used to be recorded here. This bullet
-  previously said the release "no longer carries 3.12" and that editing the version "would
-  paper over a third-party outage with an unverified pin". There is no outage: the asset
-  exists and is served today, so a pin to it is verified rather than invented, and the
-  symptom-patch objection does not apply. What is true is that changing it alters which
-  runtime the *host's* Codacy analysis builds against, which is a different logical change
-  from adding a devcontainer, and `AGENTS.md` requires one logical change per change. It
-  deserves its own pull request and its own verification, and leaving it here as a
-  documented, one-line, known fix is more useful than leaving it as an unfixable mystery.
-- **No fix for the gate hole.** `codacy_gate.py` should treat a SARIF with no `runs` as an
-  unknown result, exactly as it already treats an unreadable report. That is a change to
-  `scripts/` with its own test and its own change, and one logical change per change
-  applies. Recorded in §6.1 and in the README so it is not lost.
+- **The `python@` runtime pin — fixed 2026-09-29, in this branch.** This bullet
+  previously read "No fix for the `python@3.12` runtime pin", and before that said the
+  release "no longer carries 3.12" and that editing the version "would paper over a
+  third-party outage with an unverified pin". There was no outage: the asset exists and
+  is served today, so a pin to it is verified rather than invented. It is now
+  `python@3.13.2`, for the reason in §6.1, and confirmed in a cold container.
+- **The gate hole — fixed 2026-09-29, in this branch.** `codacy_gate.py` now treats a
+  SARIF with no `runs` as an unknown result, exactly as it already treated an unreadable
+  report. The separate-pull-request argument above was sound as far as it went, and it
+  was overridden: the two fixes are coupled, because the gate fix alone turns the
+  container's codacy line red while the pin is still broken, and the pin fix alone
+  leaves the hole waiting for the next tool failure. Each landed as its own commit so
+  the history stays revertable in either order.
 - **No fix for the broken Homebrew advice.** `Makefile:151` and `codacy_gate.py:376` both tell the user to
   run `brew install codacy-cli`, which **fails** — nothing by that name is in
   homebrew-core. The real command needs the tap prefix

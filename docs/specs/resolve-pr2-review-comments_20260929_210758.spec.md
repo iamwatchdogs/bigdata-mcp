@@ -100,9 +100,9 @@ yields `findings == []`. The docstring is explicit that this is the accepted sha
 a tool that never started. So a container where all three analyzers fail to install
 produces `codacy: clean, 0 findings` and exit 0.
 
-**The pin.** `.codacy/codacy.yaml:2` reads `python@3.12`. Every asset in release
-`20250317` for 3.12 is `3.12.9`, and `codacy-cli` interpolates the version into the
-URL verbatim. Re-verified here directly, not taken from the earlier commit:
+**The pin.** `.codacy/codacy.yaml:2` reads `python@3.12`. `codacy-cli` interpolates the
+version into the download URL verbatim, and the release it targets has never published a
+bare-minor name. Re-verified here directly, not taken from the earlier commit:
 
 ```
 cpython-3.12   -> HTTP 404
@@ -176,8 +176,18 @@ procedure is followed verbatim, not paraphrased.
 
 ### 2.2 The pin is fixed in this branch, and its blast radius is measured first
 
-**Decision.** Change `.codacy/codacy.yaml` to `python@3.12.9`, then measure what
+**Decision.** Change `.codacy/codacy.yaml` to `python@3.13.2`, then measure what
 `pylint` and `lizard` actually report before claiming the container is green.
+
+**Why 3.13.2 and not 3.12.9.** The first draft of this document specified `3.12.9`,
+on the reasoning that the patch number was the only thing missing. Checking the
+release rather than only the filename showed a second constraint. Release `20250317`
+was published on 2025-03-17; Python 3.14 shipped in October 2025, so the release
+predates 3.14 and no pin can reach it. The newest Python it contains is `3.13.2`.
+Since the project targets 3.14, `3.13.2` is the closest the release can supply, and
+it was chosen over `3.12.9` for that reason rather than to move a minor version for
+its own sake. Every candidate URL was fetched rather than inferred: `3.12` → 404,
+`3.12.9` → 200, `3.13` → 404, `3.13.2` → 200, `3.14` → 404, `3.14.0` → 404.
 
 **The honest risk.** These two analyzers have never run in a clean container. Turning
 them on for the first time may surface real findings and turn `make verify` red. That
@@ -275,13 +285,22 @@ rather than replacing the set.
 
 ```diff
 -    - python@3.12
-+    - python@3.12.9
++    - python@3.13.2
 ```
 
 Nothing else in the repository depends on this string. `pyproject.toml` requires
 `>=3.14` for the *project*; `.codacy/codacy.yaml` names the *analyser's* runtime, and
-those are independent. The 3.12 pin is not a conflict with the project constraint and
-should not be "fixed" to 3.14 — Codacy's own tool set is what constrains it.
+those are independent. The pin is not a conflict with the project constraint and
+cannot simply be moved to 3.14 — the release codacy-cli downloads from predates 3.14
+entirely, so 3.14 is unreachable regardless of how the version is written. The
+newest version that release can supply is 3.13.2.
+
+The explanation for the pin is not written in that file. `codacy-cli install`
+rewrites `.codacy/codacy.yaml` in a normalised form and strips comments, verified by
+installing over a config carrying a marker comment and reading the file back: the
+value survives and the prose does not. A comment there would be deleted the first
+time a contributor ran `make codacy-install`, so the reasoning lives in the devcontainer
+manual and in the devcontainer spec instead, neither of which the tool rewrites.
 
 ### 3.4 `.coderabbit.yaml` — one line plus its reason
 
@@ -326,7 +345,7 @@ something about the repository that is not true.
 | File | Change |
 |---|---|
 | `scripts/codacy_gate.py` | treat a `runs`-less report as a failure rather than zero findings |
-| `.codacy/codacy.yaml` | `python@3.12` → `python@3.12.9` |
+| `.codacy/codacy.yaml` | `python@3.12` → `python@3.13.2` |
 | `.coderabbit.yaml` | `title.requirements` asks for a capitalized subject, matching `commit.instruction.md` |
 | `docs/specs/devcontainer-setup_20260929_151013.spec.md:425` | correct the workflow path; §3.7 tense |
 | `.devcontainer/README.md` | drop limitations 1 and 2, renumber 3-5, fix cross-references, rewrite 217-226 |
