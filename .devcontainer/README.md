@@ -213,3 +213,37 @@ docker run --rm -it -v "$PWD":/workspaces/bigdata-mcp \
 The `git config --global --add safe.directory` line is an emulation of
 `updateRemoteUserUID`, which a plain `docker run` does not perform. It is not
 part of the devcontainer configuration; an editor-driven open handles it.
+
+**This run's `security codacy` line covers `opengrep` and nothing else** — see
+limitation 2. It is not a full re-verification, and no extra step in this
+command changes that. Adding `make codacy-install` to the chain does not help,
+and the reason is worth stating because it looks like an obvious omission: that
+command exits 0 whether or not the analyzers arrived, so inserting it would add
+a download, print `installation completed with some failures` into an otherwise
+clean transcript, and leave the verification green with two analyzers missing. A
+step that cannot fail closed is not a check, which is the same defect the gate
+has. The honest form of this command would be one that fails when the analyzers
+are absent, and it does not exist yet.
+
+## Resetting a half-built container
+
+The three named volumes are the expensive part, and they are the first thing to
+throw away when a `postCreateCommand` was interrupted partway through — a
+half-written venv or a prek cache that got no further than `go install` will
+fail the next run in a way that looks like a toolchain problem.
+
+The devcontainer suffixes each volume with a computed id, so the names an
+editor-created container uses are **not** the three below; they are the same
+three words plus a hyphen and an opaque hash, and `docker volume ls | grep -E
+'^(venv|uv-cache|prek)-'` will list them. The volumes in the `docker run`
+command above have no such suffix and are safe to name directly.
+
+```bash
+docker volume ls | grep -E '^(venv|uv-cache|prek)-|^Docker (volume )?(venv|uvcache|prek)$'
+docker volume rm venv uvcache prek                  # then: rebuild
+```
+
+Removing them is safe and recoverable: the image still carries every tool, and
+`make install` plus the `prek` rebuild reconstructs the rest. The one cost is
+the cold start in the opening section. If only the venv is suspect, remove just
+that one — the prek volume is the difference between 25 minutes and a minute.
