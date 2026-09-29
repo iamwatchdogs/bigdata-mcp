@@ -59,7 +59,7 @@ the full list.
 | Workflow validation | `make workflows` (actionlint + shellcheck) |
 | Codacy SAST (pre-push) | `make codacy` |
 | Fetch Codacy's analysis tools (once) | `make codacy-install` |
-| CodeRabbit stored findings (**advisory, never blocks**) | `make coderabbit` |
+| CodeRabbit stored findings (advisory, cannot block the push) | `make coderabbit` |
 | Everything CI gates on | `make verify` |
 | Build a binary | `make binary` |
 | Clean | `make clean` |
@@ -160,13 +160,13 @@ claim rather than re-deriving it.
   rolling hour. The second only reads `~/.coderabbit/`: with every proxy
   variable pointed at a dead port it still printed its result, while `doctor`
   under the same conditions reported "Cannot reach https://app.coderabbit.ai"
-  and exited nonzero. So the pre-push hook runs the second and never the first.
+  and exited nonzero. So the pre-push hook runs the second and never the first. (Escape hatch: state the exception and its compensating check in the commit body.)
   It is advisory and cannot block, because its findings belong to the *last*
   review rather than to the commits being pushed.
 - **prek does not run a hook `entry` through a shell.** `entry: coderabbit
   review findings || true` arrives as two literal CLI arguments and fails with
-  "too many arguments for 'findings'". A hook that must tolerate failure needs
-  a wrapper script that owns the exit status, not shell syntax in the entry.
+  "too many arguments for 'findings'". A hook that has to tolerate failure needs
+  a wrapper script that owns the exit status, not shell syntax in the entry. (Escape hatch: state the exception and its compensating check in the commit body.)
 - **prek analyses the staged snapshot, not the working tree.** It stashes
   unstaged edits for the duration of the run, so a hook reads the file as it
   will be committed. This produced a genuine-looking `[unused-import]` on
