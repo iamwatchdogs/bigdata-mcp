@@ -19,10 +19,19 @@ to reach for ``--no-verify``, which costs every real gate its authority.
 this account gets per rolling hour, produce a non-deterministic answer for
 identical input, and require the backend to be reachable to push at all.
 
-**It does not report success when the tool is missing.** An absent CLI prints
-a line saying so and exits 0, because the hook is advisory by construction --
-but a reader needs to be able to tell "no findings" from "never ran", so the
-message says which.
+**It does not report success when the tool is missing or unstartable.** An
+absent CLI prints a line saying so and exits 0, and so does one that
+`shutil.which` resolves but the kernel then refuses; the hook is advisory by
+construction -- but a reader needs to be able to tell "no findings" from "never
+ran", so the message says which.
+
+The second case is not hypothetical. `shutil.which` checks existence and the
+execute bit once, and the kernel does its own check at `exec`: a dangling
+symlink, a file replaced between the two, or a Homebrew shim whose interpreter
+moved all arrive as `FileNotFoundError` or `PermissionError`. Both are
+`OSError`, and neither is `TimeoutExpired`, so a handler that only caught the
+latter let the exception escape `main()` and a pre-push hook exited 1 -- a hook
+whose entire contract is that it cannot block, blocking the push.
 
 The wrapper exists because prek does not run a hook ``entry`` through a shell:
 ``|| true`` in the entry line arrives as two literal arguments to the CLI, which
@@ -66,6 +75,18 @@ def main() -> int:
     except subprocess.TimeoutExpired:
         print(
             f"coderabbit: reading stored findings exceeded {TIMEOUT_SECONDS}s. "
+            "Advisory only; the push is not affected."
+        )
+        return 0
+    except OSError as error:
+        # `shutil.which` above is not enough. It checks existence and the execute
+        # bit once; the kernel checks again at exec. A dangling symlink, a file
+        # replaced in between, or a shim whose interpreter has moved all land
+        # here as FileNotFoundError or PermissionError -- both OSError, neither
+        # of them TimeoutExpired. An advisory hook that raises is a hook that
+        # blocks the push, which is the one thing it exists not to do.
+        print(
+            f"coderabbit: could not start the CLI ({error}). "
             "Advisory only; the push is not affected."
         )
         return 0
