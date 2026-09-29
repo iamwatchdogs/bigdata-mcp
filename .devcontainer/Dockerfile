@@ -196,3 +196,37 @@ RUN mkdir -p /home/vscode/.cache/prek \
 # must resolve against the workspace folder, whose name depends on what the user
 # opens, so they are set in devcontainer.json with ${containerWorkspaceFolder}
 # rather than baked to a path here that would silently go stale.
+#
+# Two generic image rules are declined here rather than obeyed, for the same
+# reason DL3008 is declined above: an unexamined "fix" for a scan finding costs
+# more than the finding.
+#
+# CKV_DOCKER_2 / DS-0026, "add a HEALTHCHECK". There is nothing to probe. This
+# image serves no port and runs no daemon; its whole purpose is to be exec'd
+# into. A healthcheck here would either be `CMD true`, which reports a fact
+# about nothing, or a `make verify` probe, which duplicates the thing the
+# container is opened to run and would turn a slow Go toolchain build into a
+# container that is declared unhealthy while still working.
+#
+# CKV_DOCKER_3 / DS-0002, "specify a non-root USER". The image does run as root
+# by default, and that is not what the numbers in a scan are measuring. The
+# `vscode` user and its NOPASSWD sudoers drop-in come from the base image, which
+# is why this file does not create one, and devcontainer.json sets
+# `remoteUser: vscode` with `updateRemoteUserUID: true`, which overrides
+# `Config.User` for every lifecycle hook and terminal. A `USER` instruction
+# would be inert as a matter of behaviour and would additionally have to come
+# after the last `RUN`, which needs root. It would also make this file read as
+# though the root-owned-volume problem above had been handled by it. It was
+# not: that is the `mkdir` and `chown` two blocks up, plus the `sudo chown` in
+# postCreateCommand, and a `USER` instruction does not help, because the daemon
+# creates a volume's mount point as root whatever `Config.User` says. Measured
+# on this image with a `USER vscode` override in place -- the mount point still
+# came out root:root. The honest fix for the finding is not to add a line that
+# does nothing; it is to be able to say why the container is not exposed as a
+# network service, which is that nothing in it listens.
+#
+# None of these scanners run against this file locally. codacy_gate.py stages
+# only src/, tests/ and scripts/, and there is no hadolint, checkov or trivy
+# hook in .pre-commit-config.yaml, so the rules above are advisory and arrived
+# through a hosted review. That is why the answers are written here rather than
+# left in a review thread.
