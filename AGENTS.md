@@ -99,8 +99,14 @@ claim rather than re-deriving it.
   untracked path reports "no files to check" and looks green. `git add` first.
 - **actionlint cannot parse GitHub's `parallel:` step syntax** in any released
   version (latest v1.7.12, no v1.8.x). Use sequential steps.
-- **`on:` parses as the boolean `True`** in YAML 1.1, not the string `"on"`. Any
-  code reading a workflow must handle `data[True]`. (Escape hatch: state the exception and its compensating check in the commit body.)
+- **`on:` is only a boolean under a YAML 1.1 parser.** YAML 1.1's
+  `tag:yaml.org,2002:bool` regex includes `on|off|yes|no|y|n` in every case
+  variant, so PyYAML turns the key into `True` and `data["on"]` raises
+  `KeyError`; YAML 1.2's core schema resolves only `true | false`, so a 1.2
+  parser such as ruamel's default keeps the string. Code that loads a workflow
+  through a 1.1 parser must handle `data[True]`, and must not assume that
+  behaviour is universal — measured both ways, PyYAML 6.0.3 gives `{True: 1}`
+  and ruamel 0.19.1 gives `{'on': 1}`. (Escape hatch: state the exception and its compensating check in the commit body.)
 - **The entry point has no CLI surface yet.** `main()` takes no arguments, so a
   `--help` / `--version` smoke test would be vacuous. The release smoke test
   asserts exit code 0 only, and `tests/test_main.py` is what gives that meaning.
