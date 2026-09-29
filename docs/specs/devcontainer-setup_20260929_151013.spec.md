@@ -327,23 +327,26 @@ scenario. `init: true` is opted into, since it is not the default.
 ### 4.2 Lifecycle commands, and why they are in this order
 
 ```
-postCreateCommand:  make install && make codacy-install && prek install --install-hooks
-postStartCommand:   make hooks
+postCreateCommand:  sudo chown -R … && make install && make codacy-install && prek install --install-hooks
 ```
 
+*Revised during implementation.* This section originally also carried a
+`postStartCommand: make hooks`. That was redundant and has been removed:
+`prek install` inside `postCreateCommand` already writes the git shims, and it
+writes them with **this container's** prek path, which is the only thing the
+separate step was going to achieve.
+
 - `postCreateCommand` uses the **string** form, not the object form. Object-form entries
-  run **in parallel**, and `install` must not race the rest. The spec is explicit that
+  run **in parallel**, and the steps here are ordered. The spec is explicit that
   the string form runs in `/bin/sh` and the object form runs entries in parallel.
+- The `chown` is not defensive padding. Docker creates a named volume root-owned
+  whenever the mount point does not already exist in the image, and these two paths
+  are inside a bind mount, so they cannot be pre-declared in the image. Verified:
+  a fresh volume came out `root:root` and `uv sync` could not write into it.
 - `prek install --install-hooks` prepares every hook environment up front. Three hooks
-  are `language: golang` and must compile on first run, which is the difference between
-  a usable first minute and a long cold start.
-- `make hooks` is in `postStartCommand` because the git shims hardcode the absolute path
-  of the `prek` that ran the install. The shim written on macOS contains
-  `PREK="/opt/homebrew/bin/prek"`, which is not executable in the container — so the
-  shim falls back to `prek` on `PATH` and degrades correctly. Re-running `make hooks`
-  guarantees both hook types are installed on a fresh clone regardless.
-  **Caveat, recorded:** `.git/` is shared with the host, so the shim is rewritten on
-  each switch. Both shim forms fall back to `PATH`, so this is safe in both directions.
+  are `language: golang` and must compile on first run. **Measured: 26 min 29 s cold
+  with no volumes at all, and under a minute once they exist.** That gap is the whole
+  reason the `prek` volume in §4.4 is there.
 - The spec's rule that a failed lifecycle script stops every later one is why the `&&`
   chain matters: a failed `make install` must not be followed by a
   misleadingly successful `make codacy-install`.
@@ -387,7 +390,29 @@ erroring; this affects only the `devcontainer` CLI paths that pass `undefined`, 
 `up` or `build`.
 
 The prek volume is the largest cold-start win: without it, every rebuild re-downloads the
-Go toolchain and recompiles three Go hook environments.
+Go toolchain and recompiles three Go hook environments. **Measured: 26 min 29 s cold, under
+a minute warm.**
+
+The prek volume also forced one non-obvious change to `Dockerfile`. Mounting a volume at
+`/home/vscode/.cache/prek` makes Docker create **any missing parent directory** as
+`root:root 0755`, and `/home/vscode/.cache` does not exist in the base image. That locked
+`vscode` out of the whole subtree, including codacy's own cache directory sitting beside
+prek's, and `make codacy-install` failed with
+`mkdir /home/vscode/.cache/codacy: permission denied`. The fix is to declare the directory
+in the image with the right owner, because a volume initialised over a path that *does*
+exist inherits its ownership:
+
+```dockerfile
+RUN mkdir -p /home/vscode/.cache/prek && chown -R vscode:vscode /home/vscode/.cache
+```
+
+`updateRemoteUserUID: true` is also stated explicitly. The reference documents the default
+as true, but the CLI only applies it on Linux unless the extension's
+`updateRemoteUserUIDOnMacOS` setting says otherwise — and this project is developed on
+macOS. Without it the bind-mounted workspace is owned by host uid 501 while the session
+runs as 1000, and git refuses outright with `detected dubious ownership in repository`,
+which takes down every git-touching hook including gitleaks. An explicit boolean is honoured
+on both platforms.
 
 ## 5. Files
 
@@ -427,21 +452,73 @@ written.
 **Cleanup, as requested:** after verification, remove every image and container created
 during this work, and report what was removed.
 
+### 6.1 Results
+
+Steps 1–5 and 7 passed. The build resolved every tool on the first attempt, and because
+this machine is arm64 the run exercised the **arm64** checksum paths — which incidentally
+upgraded §3.4's arm64 `codacy-cli` value from "read from the published checksums file" to
+verified. `make verify` exited 0 with all 29 hooks passing.
+
+**But step 5 needs a caveat, and it is the most important thing in this document.**
+
+Two of Codacy's three analyzers cannot be installed at all, on any architecture, and the
+gate is green anyway. `.codacy/codacy.yaml` declares `python@3.12`, which `codacy-cli`
+resolves to a pinned `python-build-standalone` release `20250317`. That release still
+exists but now contains **zero** 3.12 assets, on every platform and both architectures, so
+the download 404s:
+
+```
+https://github.com/astral-sh/python-build-standalone/releases/download/20250317/
+  cpython-3.12+20250317-aarch64-unknown-linux-gnu-install_only.tar.gz   → 404
+```
+
+The 404 leaves a zero-byte file behind, and `pylint` and `lizard` — both Python tools that
+reuse that runtime — then fail extracting it with `EOF`. Only `opengrep`, a bare binary
+download, installs. An already-warm host keeps working because Codacy's installer keys on
+the extracted `runtimes/python` path rather than the requested version: the host's pylint
+venv is built on `python3.11.11` from a cache populated before the assets were removed.
+That is why this is invisible on a used machine and fatal on a fresh one.
+
+Worse, and this is a bug in this repository rather than in the devcontainer:
+`codacy-cli analyze` exits 0 and writes a well-formed SARIF even when every tool fails to
+start. With an empty analyzer cache the report is 149 bytes and contains `runs: 0`.
+`codacy_gate.py` verifies the report is *readable* and that the `codacy-cli` binary is
+*present*, but never that any analyzer actually ran — so it reports
+`codacy: clean, 0 findings (analyze exit 0)` whether three analyzers ran, one ran, or none
+did. Its own error message states the principle it does not enforce: "a gate that silently
+does not run is indistinguishable from a gate that found nothing."
+
+So the green `security codacy` line inside the container is **not** evidence of SAST
+coverage. The honest statement is: 28 of 29 hooks provide full coverage, and the 29th
+covers `opengrep` only while reporting success. The fix belongs at the boundary — treat a
+SARIF with no `runs` as an unknown result, the way the gate already treats an unreadable
+report — and that is a change to `scripts/`, so it is deliberately not made here.
+
 ## 7. Risks
 
 | Risk | Severity | Handling |
 |---|---|---|
 | `codacy-cli`'s analyzers are fetched without integrity verification | medium | §3.4; upstream behaviour, unfixable here, recorded in the README |
+| Codacy's pinned `python@3.12` runtime 404s, so 2 of 3 analyzers cannot install | **high** | §6.1; upstream breakage, no newer `codacy-cli` exists, nothing here can fix it. Documented in the README so it is not re-diagnosed |
+| The codacy gate reports success when no analyzer ran | **high** | §6.1; a real hole in `codacy_gate.py`, deliberately not patched here. Until it is, the container's codacy line is weaker than the host's |
 | `shellcheck` 0.9.0 on bookworm vs 0.11.0 upstream | low | accepted; `make workflows` only needs it to *exist*, and CI installs no shellcheck at all |
 | Digest pins drift from the ecosystem Dependabot raises | low | intended; a PR proposes the change and this repo's gates run on it |
 | Dependabot cooldown fails open on MCR | low | §3.1; recorded, not mitigated |
-| `prek install --install-hooks` needs egress on first run | low | the prek volume makes it a once-per-workspace cost |
-| Codacy's `analyze` may make a network call in local mode | low | checked in verification step 5; `analyze.go:240` looks like dead code, unconfirmed |
+| `prek install --install-hooks` needs egress on first run | low | the prek volume makes it a once-per-workspace cost; 26 min 29 s measured |
+| Docker creates named volumes root-owned, breaking `uv sync` and codacy's cache | low | handled; `chown` in `postCreateCommand` and the `mkdir` in `Dockerfile` §4.4. Both were hit for real |
 | The devcontainer is macOS/Docker Desktop-tuned (`consistency=cached`) | low | the CLI omits `consistency` on Linux; Docker-only either way |
 
 ## 8. Out of scope
 
-- **No `my_pylint` fix.** `Makefile:151` and `codacy_gate.py:376` both tell the user to
+- **No fix for the `python@3.12` runtime pin.** It lives in `.codacy/codacy.yaml` and in
+  Codacy's own hardcoded release, and the release it names no longer carries 3.12. Editing
+  the version locally would paper over a third-party outage with an unverified pin, which
+  is the symptom-patch pattern `AGENTS.md` warns about. §6.1.
+- **No fix for the gate hole.** `codacy_gate.py` should treat a SARIF with no `runs` as an
+  unknown result, exactly as it already treats an unreadable report. That is a change to
+  `scripts/` with its own test and its own change, and one logical change per change
+  applies. Recorded in §6.1 and in the README so it is not lost.
+- **No fix for the broken Homebrew advice.** `Makefile:151` and `codacy_gate.py:376` both tell the user to
   run `brew install codacy-cli`, which **fails** — nothing by that name is in
   homebrew-core. The real command needs the tap prefix
   (`brew install codacy/codacy-cli-v2/codacy-cli-v2`). This is a genuine documentation
@@ -451,6 +528,10 @@ during this work, and report what was removed.
   base image's layers (§4.1).
 - **No `devcontainer-lock.json`.** It would pin the Features, and this design declares
   none.
+- **No `hostRequirements`.** The CLI parses and merges `cpus`, `memory` and `storage` but
+  never checks them, so they are advisory metadata for cloud instance sizing, and this
+  repository is not on a cloud dev platform. Shipping a property nothing reads is the same
+  shape as a gate over an empty input set.
 - **No compose file, no Docker-outside-of-docker.** The repository ships no container
   build beyond this devcontainer, and `ci.yml` has no service containers.
 - **No `docs/research/README.md` entry.** That file states at `:444-446` that "the
