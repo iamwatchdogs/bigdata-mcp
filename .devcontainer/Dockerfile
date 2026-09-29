@@ -57,15 +57,14 @@ RUN set -eux; \
     esac; \
     base="https://github.com/j178/prek/releases/download/${PREK_VERSION}"; \
     file="prek-${arch}-unknown-linux-gnu.tar.gz"; \
-    cd /tmp; \
-    curl -fsSLO "$base/$file"; \
-    got="$(sha256sum "$file" | cut -d' ' -f1)"; \
+    curl -fsSLo "/tmp/$file" "$base/$file"; \
+    got="$(sha256sum "/tmp/$file" | cut -d' ' -f1)"; \
     if [ "$got" != "$want" ]; then \
       echo "prek: sha256 mismatch for $file: got $got, want $want" >&2; exit 1; \
     fi; \
-    tar -xzf "$file" --strip-components=1; \
-    install -m 0755 prek /usr/local/bin/prek; \
-    rm -f "$file" prek
+    tar -xzf "/tmp/$file" -C /tmp --strip-components=1; \
+    install -m 0755 /tmp/prek /usr/local/bin/prek; \
+    rm -f "/tmp/$file" /tmp/prek
 
 # codacy-cli is not optional either, and it is the hardest of the three to
 # install honestly.
@@ -101,15 +100,14 @@ RUN set -eux; \
     esac; \
     base="https://github.com/codacy/codacy-cli-v2/releases/download/${CODACY_CLI_VERSION}"; \
     file="codacy-cli-v2_${CODACY_CLI_VERSION}_linux_$(dpkg --print-architecture).tar.gz"; \
-    cd /tmp; \
-    curl -fsSLO "$base/$file"; \
-    got="$(sha256sum "$file" | cut -d' ' -f1)"; \
+    curl -fsSLo "/tmp/$file" "$base/$file"; \
+    got="$(sha256sum "/tmp/$file" | cut -d' ' -f1)"; \
     if [ "$got" != "$want" ]; then \
       echo "codacy-cli: sha256 mismatch for $file: got $got, want $want" >&2; exit 1; \
     fi; \
-    tar -xzf "$file" codacy-cli-v2; \
-    install -m 0755 codacy-cli-v2 /usr/local/bin/codacy-cli; \
-    rm -f "$file" codacy-cli-v2
+    tar -xzf "/tmp/$file" -C /tmp codacy-cli-v2; \
+    install -m 0755 /tmp/codacy-cli-v2 /usr/local/bin/codacy-cli; \
+    rm -f "/tmp/$file" /tmp/codacy-cli-v2
 
 # Fail the build here rather than at the first `make verify`, by asserting the
 # two conditions the gates actually test. codacy_gate.py:374 looks the command up
