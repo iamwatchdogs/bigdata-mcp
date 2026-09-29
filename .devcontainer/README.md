@@ -15,7 +15,21 @@ make codacy-install       # fetch Codacy's analyzers
 prek install --install-hooks
 ```
 
-Expect roughly **25 minutes on a cold start and under a minute afterwards**.
+The third step is wrapped as `{ make codacy-install || echo '...'; }` rather
+than chained with `&&`, which is the one place where that command list is not a
+straight sequence. `codacy-cli install` currently exits 0 even when every
+analyzer fails to download, so the `&&` does not actually cost anything today —
+measured across a cold cache, a missing config, a malformed config and an
+unknown runtime, all four exit 0. The wrapper is there because that is a
+property of a third-party binary rather than a guarantee, and because the two
+steps are not otherwise coupled: `prek install --install-hooks` only writes the
+git shims, and the `codacy` hook it installs is `language: system`, so it needs
+no environment prepared for it. Losing the hook install to an unrelated failure
+would leave a container whose own acceptance criterion, `make verify`, cannot
+pass. The `echo` keeps the failure visible rather than swallowing it, and
+`make install` still gates everything after it.
+
+Expect roughly **25 minutes on a cold start and under a minute afterward**.
 The first run downloads a Go toolchain and compiles three hook environments
 from source; the `prek` volume is what keeps that from being paid again.
 

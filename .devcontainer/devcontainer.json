@@ -21,5 +21,5 @@
     "source=venv-${devcontainerId},target=${containerWorkspaceFolder}/.devcontainer/.venv,type=volume",
     "source=prek-${devcontainerId},target=/home/vscode/.cache/prek,type=volume"
   ],
-  "postCreateCommand": "sudo chown -R \"$(whoami)\" \"${containerWorkspaceFolder}/.devcontainer/.venv\" \"${containerWorkspaceFolder}/.devcontainer/.uv_cache\" && make install && make codacy-install && prek install --install-hooks"
+  "postCreateCommand": "sudo chown -R \"$(whoami)\" \"${containerWorkspaceFolder}/.devcontainer/.venv\" \"${containerWorkspaceFolder}/.devcontainer/.uv_cache\" && make install && { make codacy-install || echo 'warning: make codacy-install failed, so the Codacy analyzers are absent; see .devcontainer/README.md'; } && prek install --install-hooks"
 }
