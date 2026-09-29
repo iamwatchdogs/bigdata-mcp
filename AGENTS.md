@@ -110,7 +110,8 @@ claim rather than re-deriving it.
   and wedges every merge. `iamwatchdogs/learning-hog` carries
   exactly that defect. CodeQL is gated by the `code_scanning` rule instead.
 - **`.github/dependabot.yml` is not an Actions workflow.** actionlint rejects its
-  top-level `updates:` key. It is covered by `check-yaml` and the contract tests.
+  top-level `updates:` key. It is covered by `check-yaml`, which parses every
+  YAML file in the repository at commit stage.
 - **actionlint's shellcheck covers workflow `run:` bodies, not files.** It shells
   out to shellcheck only for the `run:` blocks inside a workflow, so a standalone
   `*.sh` in this repo is linted by nothing. The shellcheck hook and the

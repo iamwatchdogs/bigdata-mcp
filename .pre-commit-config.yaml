@@ -125,10 +125,15 @@ repos:
         # into a target that runs nothing and reports success.
         #
         # The skip list lives in `[tool.bandit]` in pyproject.toml, where each
-        # entry carries its own justification, and
-        # `test_bandit_skip_list_is_exactly_the_reviewed_set` asserts the list
-        # has not grown. Scoped to the first-party trees: `.venv` is excluded
-        # because `-r` is given explicit roots rather than a bare directory.
+        # entry carries its own justification, and `B602` (`shell=True`) is
+        # deliberately absent so the dangerous neighbour of `B603` is still a
+        # hard failure. Nothing parses that file to prove the list has not
+        # grown: a test asserting something about pyproject.toml is a contract
+        # test, and a contract test in tests/ is a test suite coupled to CI
+        # wiring. Reading the file is how a reviewer sees a new entry, because
+        # the justification sits beside it. Scoped to the first-party trees:
+        # `.venv` is excluded because `-r` is given explicit roots rather than a
+        # bare directory.
         #
         # Bandit is installed HERE, in the hook's own environment, rather than
         # as a project dev-dependency. That is not a packaging preference: as a
