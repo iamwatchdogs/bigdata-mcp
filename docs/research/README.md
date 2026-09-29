@@ -210,12 +210,13 @@ their next *real* finding fails closed:
 
 - **Bandit is now a commit-time gate** (`make bandit`), configured from
   `[tool.bandit]` in `pyproject.toml`. The skip list is exactly `B101`, `B404`,
-  `B603`, `B608`, each justified beside it, and `B602` (`shell=True`) is
-  deliberately left off the list, since `B602` is the check standing in for the
-  `B603` skips. A `test_bandit_skip_list_is_exactly_the_reviewed_set` case was
-  written to pin the list, and it was later removed with the rest of
-  `tests/test_repo_contracts.py` without this sentence being updated, so for a
-  while this entry described a guard that no longer existed. The list is
+  `B603`, `B607`, `B608`, each justified beside it, and `B602` (`shell=True`) is
+  deliberately left off the list, so a call the `B603` skip tolerates is still
+  caught if it is ever given a shell. A
+  `test_bandit_skip_list_is_exactly_the_reviewed_set` case was written to pin the
+  list, and it was later removed with the rest of `tests/test_repo_contracts.py`
+  without this sentence being updated, so for a while this entry described a
+  guard that no longer existed. The list is
   unpinned now, and that is the correct end state: a test that reads
   `pyproject.toml` is a contract test, and a contract test in `tests/` couples
   the product suite to CI wiring. The gate is not
