@@ -175,6 +175,15 @@ claim rather than re-deriving it.
   the staged copy still had them. `git add` before `prek run` when iterating on
   a hook, and read `Unstaged changes detected` as the explanation when a
   finding will not go away.
+- **`prek` on commit is not `make verify`.** The commit stage does not run the
+  pre-push gates, so a commit can be made with `make verify` red — which is how
+  `scripts/bandit_gate.py` landed at 52 lines in one function and was rejected
+  by Codacy's Lizard, whose per-function nloc limit is **50**, not the 15 that
+  `make complexity` enforces. Two different tools, two different metrics, and
+  only one of them runs at commit time. Run `make verify` before committing, not
+  only before pushing. Note the mismatch is real in both directions: ruff's
+  `C901` ceiling is 10 and its `PY` is `src tests`, so `make lint-check` never
+  looks at `scripts/` at all while the `ruff-check` pre-commit hook does.
 
 ## Testing instructions
 

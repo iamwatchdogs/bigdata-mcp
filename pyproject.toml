@@ -114,15 +114,6 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["unused-import", "undocumented-public-package"]
 "tests/**/*.py" = ["assert", "D", "ANN", "ARG"]
-# SLF001 (private-member-access) is only ignored for the one test file that
-# imports a module out of `scripts/` and asserts on its internals. That module
-# is a fail-closed gate rather than a library, and the two behaviours under
-# test -- mapping a SARIF report to a finding list, and rendering a finding --
-# are exactly the helpers whose private names are the seam. Promoting them to a
-# public API purely to satisfy a linter would be the wrong trade. Scoped to the
-# file rather than to `tests/**` so the next test to reach for a private
-# member has to come back and justify it.
-"tests/test_codacy_gate.py" = ["SLF001"]
 # Executable tooling, not a library: it is invoked by `make` and by the
 # pre-commit hook, so a __main__ guard and a `print`-based usage message are
 # correct here rather than violations. T20 (no print) and INP (no implicit
