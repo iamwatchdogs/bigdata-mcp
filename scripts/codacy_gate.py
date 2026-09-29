@@ -118,14 +118,10 @@ def _stage(destination: Path) -> Path | None:
     return config_dir
 
 
-def _run_analysis(executable: str, config_dir: Path, sarif_path: Path) -> int:
+def _run_analysis(config_dir: Path, sarif_path: Path) -> int:
     """Run the analysis over the staged tree.
 
     Args:
-        executable: The absolute path to ``codacy-cli``, resolved by ``main``.
-            Passed in rather than resolved here so the process is not started
-            from a bare command name, which ``PATH`` could satisfy with a
-            different binary than the one whose presence was checked.
         config_dir: The staged ``.codacy`` directory, used to locate the tree.
         sarif_path: Where the analyser should write its SARIF report.
 
@@ -134,8 +130,13 @@ def _run_analysis(executable: str, config_dir: Path, sarif_path: Path) -> int:
             findings and for config errors alike, and is only consulted to
             tell a crash from a clean run.
     """
-    completed = subprocess.run(  # nosec B603  # ruff: ignore[subprocess-without-shell-equals-true]
-        [executable, "analyze", "--format", "sarif", "--output", str(sarif_path)],
+    # The bare name is load-bearing, not tidiness. Opengrep's
+    # `dangerous-subprocess-use-audit` rule exempts a literal argv and reports
+    # anything else, and a `shutil.which` result is not a literal. `main` has
+    # already checked that `codacy-cli` is on PATH and returned before reaching
+    # here, so the two cannot disagree about which binary is meant.
+    completed = subprocess.run(
+        ["codacy-cli", "analyze", "--format", "sarif", "--output", str(sarif_path)],
         cwd=config_dir.parent,
         check=False,
         capture_output=True,
@@ -400,8 +401,7 @@ def main() -> int:
             missing tool, a missing config, a missing tree, an unreadable
             report. Unknown is not the same as clean, so both are ``1``.
     """
-    executable = shutil.which("codacy-cli")
-    if executable is None:
+    if shutil.which("codacy-cli") is None:
         return _fail(
             "codacy-cli is not on PATH, so this gate cannot run. Install it with "
             "`brew install codacy-cli` and run `make codacy-install` once to fetch "
@@ -419,7 +419,7 @@ def main() -> int:
 
         sarif_path = destination / SARIF_NAME
         try:
-            status = _run_analysis(executable, destination / ".codacy", sarif_path)
+            status = _run_analysis(destination / ".codacy", sarif_path)
         except subprocess.TimeoutExpired:
             return _fail(
                 f"analysis exceeded {ANALYSE_TIMEOUT_SECONDS}s. Raise "

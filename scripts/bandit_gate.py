@@ -37,12 +37,18 @@ exits 1 for any nonzero number of findings, so its exit status is not a count an
 must never be printed as one. The scan takes about 0.1s over `src scripts tests`
 here, so the pair costs about 0.25s.
 
-Bandit is invoked as `sys.executable -m bandit`, which reaches the copy installed
-into this hook's own environment rather than whatever is on `PATH`. That is also
-why an absent `bandit` cannot raise here: the import happens in a child process,
-so a missing module is that child's nonzero exit and an empty report, which is
-read as unknown. `PATH` is still checked, so the most common cause is named
-rather than inferred.
+Bandit is invoked as a bare name rather than as `sys.executable -m bandit`. That
+is not a style preference: Opengrep's `dangerous-subprocess-use-audit` rule
+exempts a literal argv and reports anything else, and the `sys.executable` form
+is not exempt either. The hook's venv `bin` is prepended to `PATH` by
+pre-commit's own `get_env_patch`, so the bare name and the `shutil.which` above
+resolve to the same copy of bandit that `additional_dependencies` installed, and
+the check and the call cannot disagree about which binary is meant.
+
+That is also why an absent `bandit` cannot raise here: `which` reports it as a
+stated failure first, and if it were somehow reached anyway the failure is a
+child's nonzero exit and an empty report, which is read as unknown. `PATH` is
+still checked so the most common cause is named rather than inferred.
 
 **What this does not cover.** `errors` is initialised as `[]` and filled in a
 separate loop, so an upstream refactor that stopped populating it would look
@@ -82,7 +88,15 @@ def _fail(message: str) -> int:
 
 
 def _run(extra: tuple[str, ...]) -> subprocess.CompletedProcess[str] | None:
-    """Run Bandit once through this interpreter's copy of the package.
+    """Run Bandit once through the copy this hook's environment installed.
+
+    The argv's first element is a bare literal for the same reason
+    `scripts/coderabbit_advisory.py` spells its own out: Opengrep's
+    `dangerous-subprocess-use-audit` rule exempts a literal argv and reports
+    anything else, and a `sys.executable`-relative one is not exempt either --
+    measured, both shapes are reported. `shutil.which` above resolved the same
+    name through the same PATH, since the hook's venv `bin` is prepended to it,
+    so the check and the call cannot disagree about which binary is meant.
 
     Args:
         extra: Additional arguments for this run, such as ``-f json``.
@@ -92,10 +106,9 @@ def _run(extra: tuple[str, ...]) -> subprocess.CompletedProcess[str] | None:
             reason has already been printed; a caller only needs to know that the
             result is unknown.
     """
-    command = [sys.executable, "-m", "bandit", *extra, "-r", *ROOTS, "-c", CONFIG]
     try:
-        return subprocess.run(  # nosec B603  # ruff: ignore[subprocess-without-shell-equals-true]
-            command,
+        return subprocess.run(
+            ["bandit", *extra, "-r", *ROOTS, "-c", CONFIG],
             check=False,
             capture_output=True,
             text=True,

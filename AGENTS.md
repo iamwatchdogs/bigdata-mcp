@@ -181,9 +181,9 @@ claim rather than re-deriving it.
   by Codacy's Lizard, whose per-function nloc limit is **50**, not the 15 that
   `make complexity` enforces. Two different tools, two different metrics, and
   only one of them runs at commit time. Run `make verify` before committing, not
-  only before pushing. Note the mismatch is real in both directions: ruff's
-  `C901` ceiling is 10 and its `PY` is `src tests`, so `make lint-check` never
-  looks at `scripts/` at all while the `ruff-check` pre-commit hook does.
+  only before pushing. The mismatch is real in both directions: ruff's `C901`
+  ceiling is 10 and its `PY` is `src tests`, so `make lint-check` does not
+  cover `scripts/`, while the `ruff-check` pre-commit hook does.
 
 ## Testing instructions
 
