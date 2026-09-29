@@ -154,6 +154,17 @@ repos:
         # fails on it. Shell syntax cannot do that here: prek splits `entry` with
         # `shlex` and execs the argv, so `|| exit 1` arrives as two arguments.
         #
+        # `types: [file]`, not `[python]`. The two are ANDed, not ORed: pre-commit
+        # runs the `files` regex first and then requires the file's identify tags
+        # to be a superset of `types`. `pyproject.toml` tags as
+        # {file, non-executable, pyproject, text, toml} and carries no `python`
+        # tag, so `types: [python]` made the `|^pyproject\.toml$` branch above
+        # unreachable. The hook then did not run when `[tool.bandit]` changed,
+        # even though that file is the config it passes as `-c` -- the edit most
+        # able to weaken the gate was the one edit that could not trigger it.
+        # `file` is the tag identify puts on every path, so the `files` regex
+        # becomes the sole filter and selects exactly what it already said.
+        #
         # The wrapper invokes `sys.executable -m bandit`, which is this hook
         # environment's own interpreter and therefore the copy of bandit that
         # `additional_dependencies` installed. The `bandit` on PATH is checked
@@ -163,7 +174,7 @@ repos:
         language: python
         additional_dependencies: ["bandit==1.9.4"]
         files: ^(src|tests|scripts)/.*\.py$|^pyproject\.toml$
-        types: [python]
+        types: [file]
         pass_filenames: false
 
   # ---------------------------------------------------------------------------
