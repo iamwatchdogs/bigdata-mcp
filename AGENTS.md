@@ -184,6 +184,17 @@ claim rather than re-deriving it.
   only before pushing. The mismatch is real in both directions: ruff's `C901`
   ceiling is 10 and its `PY` is `src tests`, so `make lint-check` does not
   cover `scripts/`, while the `ruff-check` pre-commit hook does.
+- **Three callers, three different `ty` scopes, and the narrowest one is CI.**
+  The Makefile ran a bare `uv run ty check` (whole project), the prek hook
+  fired on `files: ^(src|tests)/` with `pass_filenames: false`, and CI ran
+  `uv run ty check src` — a literal path. So a commit touching only
+  `scripts/*.py` skipped the type check entirely, and CI never looked at
+  `scripts/` at all, which is where both commit-stage gates live. Same shape as
+  the two-owners-one-check entry above: the entry takes no path, so the trigger
+  is the only thing deciding whether `scripts/` is ever seen, and nothing fails
+  when it isn't. `[tool.ty.src] include` in `pyproject.toml` now owns the scope
+  and all three callers invoke it without a path. Pinning it in one place is the
+  fix; a fourth caller must not re-derive the list.
 - **`isinstance` narrows `Any` to `list[Unknown]`, and `Unknown` is contagious.**
   Pylance reported 14 `reportUnknown*` diagnostics in `scripts/codacy_gate.py`
   and none of them named a real defect. Every value out of a `json.loads`
@@ -197,12 +208,40 @@ claim rather than re-deriving it.
   have `_as_array` and `_as_object`, and a returned expression is not narrowed to
   the implementation, so the annotation holds. It is the same trap in the same
   shape in the same pair of files, so expect it in any new gate that parses
-  JSON rather than reading it as a special case. `ty` reports none of this: it is
-  not Pylance, and
-  `make typecheck` was green throughout, so the 14 diagnostics had exactly one
-  checker that could see them and one that could not. Verify with
+  JSON rather than reading it as a special case. Verify with
   `uvx pyright@1.1.414` over the file with the `reportUnknown*` rules set to
   `warning`; the CLI does not reproduce the editor's configuration otherwise.
+- **`ty` has no `reportUnknown*` rule, so the annotation is `object`, not `Any`.**
+  Cross-checked: pyright strict sets 70 of its 81 rules to `error` and five of
+  them are the `reportUnknown{Argument,Lambda,Member,Parameter,Variable}Type`
+  family, all `none` under `standard`. `ty`'s 139 rules contain **zero**
+  gradual-typing rules — the one match for `/unknown/` is `unknown-argument`,
+  which means an unrecognised *keyword argument*. So `rules = { all = "error" }`
+  is already the ceiling and no config value can reach the same ground. The
+  compensating control is that `Any` is compatible in both directions and so
+  suppresses the finding in *both* checkers: declared `Any`, a
+  `list[Unknown]` return is sound and silent; declared `object`, the same return
+  is `unsound-return-statement` / `invalid-return-type` from rules that are
+  already armed. Measured on the pre-fix `bandit_gate.py`, `object` moved ty from
+  "All checks passed" to two errors *at lines 140 and 158* — the same lines
+  Pylance reported. Two consequences: a JSON boundary here is `object`, and
+  `object` is load-bearing rather than pedantic, so do not "simplify" it back.
+  Nothing enforces the return-type half — ruff's `ANN401` covers `Any` in
+  *argument* position only, so the `object` parameters are tool-checked and the
+  `dict[str, object]` returns are convention. Reverting a signature to `Any`
+  turns this gate off silently and nothing will say so. `ty` also lacks
+  `reportMissingTypeStubs` and the `strictListInference` family, so
+  `typeCheckingMode: strict` is a target, not a mode.
+- **`respect-type-ignore-comments = false` is stricter than pyright strict.**
+  Pylance caught these diagnostics in one developer's editor because the repo
+  pins no Pylance configuration at all — no `pyrightconfig.json`, no
+  `[tool.pyright]`, no `.vscode/`, and no reference in any hook, target, or
+  workflow. So the check existed in exactly one place and no CI run reproduced
+  it. That gap is now closed from the `ty` side, and the `type: ignore` escape
+  hatch is closed with it: a `# type: ignore` is written to silence some *other*
+  checker and is routinely wrong about this one, so `ty: ignore` is the only way
+  to suppress here. Pyright leaves `enableTypeIgnoreComments` on in all four
+  modes, so this one is deliberately past strict rather than at it.
 - **A type checker reading `src/` cannot tell whether the package ships its
   types.** `src/bigdata_mcp/` is annotated and `make typecheck` is strict, but
   nothing in the local gates asks whether a *consumer* would see those

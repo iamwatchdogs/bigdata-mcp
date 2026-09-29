@@ -30,7 +30,12 @@ repos:
         entry: uv run ty check
         language: system
         pass_filenames: false
-        files: ^(src|tests)/
+        # `scripts/` is in the trigger set because `[tool.ty.src] include` checks
+        # it. Without this a commit touching only `scripts/*.py` skipped the hook
+        # entirely -- the entry takes no path, so the trigger is the only thing
+        # deciding whether `scripts/` is ever looked at. Matches the `bandit`
+        # hook's pattern below for the same reason.
+        files: ^(src|tests|scripts)/
 
       - id: complexipy
         name: "complexipy complexity gate"

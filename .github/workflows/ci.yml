@@ -183,7 +183,10 @@ jobs:
         run: uv run ruff check src tests
 
       - name: Run type checking
-        run: uv run ty check src
+        # No path argument: `[tool.ty.src] include` in pyproject.toml owns the
+        # scope. Passing `src` here checked only `src/`, so `scripts/` -- where
+        # both commit-stage gates live -- was never type checked in CI.
+        run: uv run ty check
 
       - name: Run precommit hooks
         uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0

@@ -52,7 +52,6 @@ import subprocess  # ruff: ignore[suspicious-subprocess-import]
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
 from typing import cast
 
 # The trees that ship, mapped to the name each is staged under. `.venv` is
@@ -84,15 +83,17 @@ def _reject(message: str) -> None:
     print(f"codacy: {message}", file=sys.stderr)
 
 
-def _as_array(value: object) -> list[Any] | None:
+def _as_array(value: object) -> list[object] | None:
     """Narrow a value to a JSON array.
 
-    This gate reads a document ``json.loads`` produced, so every value out of it
-    is ``Any``, and ``isinstance(value, list)`` narrows ``Any`` to
-    ``list[Unknown]`` -- an element read back out is unknown, and every use of it
-    is then a ``reportUnknownVariableType``. The element type is therefore
-    asserted rather than inferred: a SARIF array holds whatever the document
-    held, and each caller checks the shape of the element it needs.
+    The annotation is ``object`` and not ``Any``, and that is load-bearing rather
+    than pedantic. ``json.loads`` returns ``Any``, and ``isinstance(value, list)``
+    narrows it to ``list[Unknown]``; returning that where ``list[Any]`` is
+    declared is sound, because ``Any`` is compatible in both directions, so
+    neither ty nor Pyright has anything to report. Declared ``object``, the same
+    return is an ``unsound-return-statement``. The narrowing is therefore the one
+    place a shape is asserted instead of inferred, and each caller checks the
+    shape of the element it needs.
 
     Args:
         value: The value to narrow.
@@ -102,18 +103,18 @@ def _as_array(value: object) -> list[Any] | None:
     """
     if not isinstance(value, list):
         return None
-    return cast("list[Any]", value)
+    return cast("list[object]", value)
 
 
-def _as_object(value: object) -> dict[str, Any] | None:
+def _as_object(value: object) -> dict[str, object] | None:
     """Narrow a value to a JSON object.
 
     The same narrowing problem as :func:`_as_array`, and the same answer:
     ``isinstance(value, dict)`` on an unannotated value gives
-    ``dict[Unknown, Unknown]``, whose ``get`` is a partially unknown member
-    type. ``dict`` is invariant in its first parameter, so the key type cannot
-    be widened to ``str`` by narrowing alone either -- the annotation is
-    asserted, and :func:`_as_array` says why asserting is sound here.
+    ``dict[Unknown, Unknown]``, whose ``get`` is a partially unknown member type.
+    ``dict`` is invariant in its first parameter, so the key type cannot be
+    widened to ``str`` by narrowing alone either -- the annotation is asserted,
+    and :func:`_as_array` says why asserting is sound here and why it has to be.
 
     Args:
         value: The value to narrow.
@@ -123,7 +124,7 @@ def _as_object(value: object) -> dict[str, Any] | None:
     """
     if not isinstance(value, dict):
         return None
-    return cast("dict[str, Any]", value)
+    return cast("dict[str, object]", value)
 
 
 def _stage(destination: Path) -> Path | None:
@@ -183,7 +184,7 @@ def _run_analysis(config_dir: Path, sarif_path: Path) -> int:
     return completed.returncode
 
 
-def _notification_error(invocation: dict[str, Any], run_index: int) -> str | None:
+def _notification_error(invocation: dict[str, object], run_index: int) -> str | None:
     """Report an error-level notification on one invocation.
 
     Args:
@@ -217,7 +218,7 @@ def _notification_error(invocation: dict[str, Any], run_index: int) -> str | Non
     return None
 
 
-def _incomplete(run: dict[str, Any], run_index: int) -> str | None:
+def _incomplete(run: dict[str, object], run_index: int) -> str | None:
     """Report why a run says its own result set cannot be trusted.
 
     Appendix I's three signals, all checked because a well-formed report saying
@@ -261,7 +262,7 @@ def _incomplete(run: dict[str, Any], run_index: int) -> str | None:
     return None
 
 
-def _results_of(run: dict[str, Any]) -> list[dict[str, Any]] | None:
+def _results_of(run: dict[str, object]) -> list[dict[str, object]] | None:
     """Extract one run's result objects, rejecting anything that is not one.
 
     A ``result`` is an object carrying a ``message``: the schema marks
@@ -281,14 +282,21 @@ def _results_of(run: dict[str, Any]) -> list[dict[str, Any]] | None:
     results = _as_array(run["results"])
     if results is None:
         return None
+    # The narrowed objects are collected rather than re-read from `results`.
+    # Returning the input list would be sound under `Any` -- `Any` is compatible
+    # in both directions -- but it is `list[object]` here, and the elements were
+    # checked one at a time, so the list the caller receives is built from the
+    # elements that passed rather than from the array that happened to be there.
+    accepted: list[dict[str, object]] = []
     for item in results:
         result = _as_object(item)
         if result is None or "message" not in result:
             return None
-    return results
+        accepted.append(result)
+    return accepted
 
 
-def _log(sarif_path: Path) -> dict[str, Any] | None:
+def _log(sarif_path: Path) -> dict[str, object] | None:
     """Read a SARIF file and confirm it is a log object at all.
 
     Args:
@@ -311,10 +319,13 @@ def _log(sarif_path: Path) -> dict[str, Any] | None:
             "not a SARIF log object"
         )
         return None
-    return cast("dict[str, Any]", document)
+    return cast("dict[str, object]", document)
 
 
-def _run_results(run: dict[str, Any], run_index: int) -> list[dict[str, Any]] | None:
+def _run_results(
+    run: dict[str, object],
+    run_index: int,
+) -> list[dict[str, object]] | None:
     """Validate one run and hand back its results.
 
     Args:
@@ -344,7 +355,7 @@ def _run_results(run: dict[str, Any], run_index: int) -> list[dict[str, Any]] | 
     return results
 
 
-def _findings(sarif_path: Path) -> list[dict[str, Any]] | None:
+def _findings(sarif_path: Path) -> list[dict[str, object]] | None:
     """Read every result out of a SARIF file.
 
     Returns:
@@ -377,7 +388,7 @@ def _findings(sarif_path: Path) -> list[dict[str, Any]] | None:
         )
         return None
 
-    findings: list[dict[str, Any]] = []
+    findings: list[dict[str, object]] = []
     for run_index, raw_run in enumerate(runs):
         run = _as_object(raw_run)
         if run is None:
@@ -409,7 +420,7 @@ def _field(value: object, *names: str) -> object:
     return value
 
 
-def _describe(result: dict[str, Any]) -> str:
+def _describe(result: dict[str, object]) -> str:
     """Render a finding with the three facts needed to act on it.
 
     Args:

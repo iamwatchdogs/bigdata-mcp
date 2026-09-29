@@ -33,15 +33,33 @@ dev = [
     "ty>=0.0.84",
 ]
 
+# `all = "error"` is the ceiling over ty's own 139 rules -- there is no stricter
+# setting. What ty has no equivalent for is pyright strict's `reportUnknown*`
+# family, so the JSON boundaries in `scripts/` are annotated `object` rather than
+# `Any`: `Any` is compatible with everything in both directions and so suppresses
+# the finding, while `object` lets the already-armed `unsound-return-statement`
+# and `invalid-return-type` rules report it. See the failure ledger in AGENTS.md.
 [tool.ty]
 rules = { all = "error" }
 
 [tool.ty.analysis]
 strict-equality-semantics = true
 strict-generic-narrowing = true
+# A `# type: ignore` is written to silence *another* checker and is routinely
+# wrong about this one. Closing it means `ty: ignore` is the only escape, and
+# `# type: ignore` can no longer hide a defect from CI. Stricter than pyright
+# strict, which leaves `enableTypeIgnoreComments` on in all four modes.
+respect-type-ignore-comments = false
 
 [tool.ty.environment]
 python-version = "3.14"
+
+# Pinned rather than left to ty's project auto-detection, because three callers
+# disagreed about the scope: the Makefile ran a bare `ty check`, CI ran
+# `ty check src`, and the prek hook fired on `^(src|tests)/`. Two of the three
+# never looked at `scripts/`, which is where both gates live.
+[tool.ty.src]
+include = ["src", "scripts", "tests"]
 
 [tool.ty.terminal]
 error-on-warning = true

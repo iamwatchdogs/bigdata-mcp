@@ -49,7 +49,6 @@ import json
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import]
 import sys
-from typing import Any
 from typing import cast
 
 # Explicit roots rather than a bare directory: that is Bandit's only exclusion
@@ -68,15 +67,17 @@ def _fail(message: str) -> int:
     return 1
 
 
-def _as_array(value: object) -> list[Any] | None:
+def _as_array(value: object) -> list[object] | None:
     """Narrow a value to a JSON array.
 
-    This gate reads a document ``json.loads`` produced, so every value out of it
-    is ``Any``, and ``isinstance(value, list)`` narrows ``Any`` to
-    ``list[Unknown]`` -- an element read back out is unknown, and every use of it
-    is then a ``reportUnknownVariableType``. The element type is therefore
-    asserted rather than inferred: the report's arrays hold whatever the document
-    held, and each caller checks the shape of the element it needs.
+    The annotation is ``object`` and not ``Any``, and that is load-bearing rather
+    than pedantic. ``json.loads`` returns ``Any``, and ``isinstance(value, list)``
+    narrows it to ``list[Unknown]``; returning that where ``list[Any]`` is
+    declared is sound, because ``Any`` is compatible in both directions, so
+    neither ty nor Pyright has anything to report. Declared ``object``, the same
+    return is an ``unsound-return-statement``. The narrowing is therefore the one
+    place a shape is asserted instead of inferred, and each caller checks the
+    shape of the element it needs.
 
     Args:
         value: The value to narrow.
@@ -86,18 +87,18 @@ def _as_array(value: object) -> list[Any] | None:
     """
     if not isinstance(value, list):
         return None
-    return cast("list[Any]", value)
+    return cast("list[object]", value)
 
 
-def _as_object(value: object) -> dict[str, Any] | None:
+def _as_object(value: object) -> dict[str, object] | None:
     """Narrow a value to a JSON object.
 
     The same narrowing problem as :func:`_as_array`, and the same answer:
     ``isinstance(value, dict)`` on an unannotated value gives
-    ``dict[Unknown, Unknown]``, whose ``get`` is a partially unknown member
-    type. ``dict`` is invariant in its first parameter, so the key type cannot
-    be widened to ``str`` by narrowing alone either -- the annotation is
-    asserted, and :func:`_as_array` says why asserting is sound here.
+    ``dict[Unknown, Unknown]``, whose ``get`` is a partially unknown member type.
+    ``dict`` is invariant in its first parameter, so the key type cannot be
+    widened to ``str`` by narrowing alone either -- the annotation is asserted,
+    and :func:`_as_array` says why asserting is sound here and why it has to be.
 
     Args:
         value: The value to narrow.
@@ -107,7 +108,7 @@ def _as_object(value: object) -> dict[str, Any] | None:
     """
     if not isinstance(value, dict):
         return None
-    return cast("dict[str, Any]", value)
+    return cast("dict[str, object]", value)
 
 
 def _run(extra: tuple[str, ...]) -> subprocess.CompletedProcess[str] | None:
@@ -158,7 +159,7 @@ Scan = tuple[list[str], int] | None
 
 def _document(
     machine: subprocess.CompletedProcess[str] | None,
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     """Read a JSON scan's report, or say why it cannot be read.
 
     Args:
@@ -180,10 +181,10 @@ def _document(
     if not isinstance(document, dict):
         _fail(f"the JSON report holds a {type(document).__name__}, not an object")
         return None
-    return cast("dict[str, Any]", document)
+    return cast("dict[str, object]", document)
 
 
-def _array(document: dict[str, Any], key: str, subject: str) -> list[Any] | None:
+def _array(document: dict[str, object], key: str, subject: str) -> list[object] | None:
     """Read one of the report's arrays, rejecting anything that is not one.
 
     Args:
@@ -201,7 +202,7 @@ def _array(document: dict[str, Any], key: str, subject: str) -> list[Any] | None
     return value
 
 
-def _lines(errors: list[Any]) -> list[str] | None:
+def _lines(errors: list[object]) -> list[str] | None:
     """Render the report's skip list, rejecting an entry that is not an object.
 
     Args:
