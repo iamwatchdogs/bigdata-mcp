@@ -193,9 +193,12 @@ claim rather than re-deriving it.
   type, the argument passed on, and the return type. Annotating the loop
   variable does not help, because a declared variable is narrowed to its
   assigned type. The fix is to move the narrowing into a function whose return
-  type is declared — `scripts/codacy_gate.py` now has `_as_array` and
-  `_as_object`, and a returned expression is not narrowed to the implementation,
-  so the annotation holds. `ty` reports none of this: it is not Pylance, and
+  type is declared — `scripts/codacy_gate.py` and `scripts/bandit_gate.py` each
+  have `_as_array` and `_as_object`, and a returned expression is not narrowed to
+  the implementation, so the annotation holds. It is the same trap in the same
+  shape in the same pair of files, so expect it in any new gate that parses
+  JSON rather than reading it as a special case. `ty` reports none of this: it is
+  not Pylance, and
   `make typecheck` was green throughout, so the 14 diagnostics had exactly one
   checker that could see them and one that could not. Verify with
   `uvx pyright@1.1.414` over the file with the `reportUnknown*` rules set to

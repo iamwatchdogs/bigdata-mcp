@@ -50,6 +50,7 @@ import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import]
 import sys
 from typing import Any
+from typing import cast
 
 # Explicit roots rather than a bare directory: that is Bandit's only exclusion
 # lever, and every finding inside `.venv` is about a third-party package.
@@ -65,6 +66,48 @@ TIMEOUT_SECONDS = 300
 def _fail(message: str) -> int:
     print(f"bandit: {message}", file=sys.stderr)
     return 1
+
+
+def _as_array(value: object) -> list[Any] | None:
+    """Narrow a value to a JSON array.
+
+    This gate reads a document ``json.loads`` produced, so every value out of it
+    is ``Any``, and ``isinstance(value, list)`` narrows ``Any`` to
+    ``list[Unknown]`` -- an element read back out is unknown, and every use of it
+    is then a ``reportUnknownVariableType``. The element type is therefore
+    asserted rather than inferred: the report's arrays hold whatever the document
+    held, and each caller checks the shape of the element it needs.
+
+    Args:
+        value: The value to narrow.
+
+    Returns:
+        ``value`` as an array, or ``None`` if it is not one.
+    """
+    if not isinstance(value, list):
+        return None
+    return cast("list[Any]", value)
+
+
+def _as_object(value: object) -> dict[str, Any] | None:
+    """Narrow a value to a JSON object.
+
+    The same narrowing problem as :func:`_as_array`, and the same answer:
+    ``isinstance(value, dict)`` on an unannotated value gives
+    ``dict[Unknown, Unknown]``, whose ``get`` is a partially unknown member
+    type. ``dict`` is invariant in its first parameter, so the key type cannot
+    be widened to ``str`` by narrowing alone either -- the annotation is
+    asserted, and :func:`_as_array` says why asserting is sound here.
+
+    Args:
+        value: The value to narrow.
+
+    Returns:
+        ``value`` as an object, or ``None`` if it is not one.
+    """
+    if not isinstance(value, dict):
+        return None
+    return cast("dict[str, Any]", value)
 
 
 def _run(extra: tuple[str, ...]) -> subprocess.CompletedProcess[str] | None:
@@ -137,7 +180,7 @@ def _document(
     if not isinstance(document, dict):
         _fail(f"the JSON report holds a {type(document).__name__}, not an object")
         return None
-    return document
+    return cast("dict[str, Any]", document)
 
 
 def _array(document: dict[str, Any], key: str, subject: str) -> list[Any] | None:
@@ -151,8 +194,8 @@ def _array(document: dict[str, Any], key: str, subject: str) -> list[Any] | None
     Returns:
         The array, or ``None`` if the key is absent or is not an array.
     """
-    value = document.get(key)
-    if not isinstance(value, list):
+    value = _as_array(document.get(key))
+    if value is None:
         _fail(f"the JSON report has no `{key}` array, so {subject} is unknown")
         return None
     return value
@@ -170,11 +213,12 @@ def _lines(errors: list[Any]) -> list[str] | None:
     """
     rendered: list[str] = []
     for entry in errors:
-        if not isinstance(entry, dict):
+        record = _as_object(entry)
+        if record is None:
             _fail("the JSON report's `errors` array holds a non-object entry")
             return None
-        name = entry.get("filename", "<unnamed>")
-        reason = entry.get("reason", "no reason given")
+        name = record.get("filename", "<unnamed>")
+        reason = record.get("reason", "no reason given")
         rendered.append(f"  {name}: {reason}")
     return rendered
 
