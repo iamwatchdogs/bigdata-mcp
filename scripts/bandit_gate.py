@@ -62,6 +62,7 @@ import json
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import]
 import sys
+from typing import Any
 
 # The trees this repository owns. `.venv` is deliberately absent: `-r` is given
 # explicit roots rather than a bare directory, which is the only exclusion lever
@@ -122,6 +123,72 @@ def _echo(completed: subprocess.CompletedProcess[str]) -> None:
 Scan = tuple[list[str], int] | None
 
 
+def _document(
+    machine: subprocess.CompletedProcess[str] | None,
+) -> dict[str, Any] | None:
+    """Read a JSON scan's report, or say why it cannot be read.
+
+    Args:
+        machine: The completed process from the ``-f json`` run, or ``None`` if
+            that run could not be started.
+
+    Returns:
+        The parsed report, or ``None`` if there is no readable report. The reason
+            has already been printed.
+    """
+    if machine is None or machine.returncode == 2 or not machine.stdout.strip():
+        _fail("the JSON scan produced no readable report, so its result is unknown")
+        return None
+    try:
+        document = json.loads(machine.stdout)
+    except json.JSONDecodeError as error:
+        _fail(f"the JSON report is not valid JSON: {error}")
+        return None
+    if not isinstance(document, dict):
+        _fail(f"the JSON report holds a {type(document).__name__}, not an object")
+        return None
+    return document
+
+
+def _array(document: dict[str, Any], key: str, subject: str) -> list[Any] | None:
+    """Read one of the report's arrays, rejecting anything that is not one.
+
+    Args:
+        document: The parsed JSON report.
+        key: The array to read.
+        subject: What the array is about, phrased to read after "so the".
+
+    Returns:
+        The array, or ``None`` if the key is absent or is not an array.
+    """
+    value = document.get(key)
+    if not isinstance(value, list):
+        _fail(f"the JSON report has no `{key}` array, so {subject} is unknown")
+        return None
+    return value
+
+
+def _lines(errors: list[Any]) -> list[str] | None:
+    """Render the report's skip list, rejecting an entry that is not an object.
+
+    Args:
+        errors: The report's ``errors`` array.
+
+    Returns:
+        One ``  filename: reason`` line per skipped file, or ``None`` if an entry
+            is not an object.
+    """
+    rendered: list[str] = []
+    for entry in errors:
+        if not isinstance(entry, dict):
+            _fail("the JSON report's `errors` array holds a non-object entry")
+            return None
+        name = entry.get("filename", "<unnamed>")
+        reason = entry.get("reason", "no reason given")
+        rendered.append(f"  {name}: {reason}")
+    return rendered
+
+
 def _read(machine: subprocess.CompletedProcess[str] | None) -> Scan:
     """Read what a JSON scan skipped and how many findings it reported.
 
@@ -132,53 +199,26 @@ def _read(machine: subprocess.CompletedProcess[str] | None) -> Scan:
     number of findings, so printing the status as a count would be wrong on
     every run that found more than one.
 
-    A report that cannot be read is returned as ``None``: a malformed document
-    means both numbers are unknown, which is not the same as zero.
-
     Args:
-        machine: The completed process from the ``-f json`` run, or ``None`` if
-            that run could not be started.
+        machine: The completed process from the ``-f json`` run.
 
     Returns:
         The skipped files as ``filename: reason`` lines and the number of
-            findings, or ``None`` if the report could not be read.
+            findings, or ``None`` if either could not be read.
     """
-    if machine is None or machine.returncode == 2 or not machine.stdout.strip():
-        _fail("the JSON scan produced no readable report, so its result is unknown")
+    document = _document(machine)
+    if document is None:
         return None
-
-    try:
-        document = json.loads(machine.stdout)
-    except json.JSONDecodeError as error:
-        _fail(f"the JSON report is not valid JSON: {error}")
+    errors = _array(document, "errors", "the list of files this scan skipped")
+    if errors is None:
         return None
-
-    if not isinstance(document, dict):
-        _fail(f"the JSON report holds a {type(document).__name__}, not an object")
+    results = _array(document, "results", "the finding count")
+    if results is None:
         return None
-
-    errors = document.get("errors")
-    if not isinstance(errors, list):
-        _fail(
-            "the JSON report has no `errors` array, so the list of files this "
-            "scan skipped is unknown. Refusing to read that as none."
-        )
+    skipped = _lines(errors)
+    if skipped is None:
         return None
-
-    results = document.get("results")
-    if not isinstance(results, list):
-        _fail("the JSON report has no `results` array, so the finding count is unknown")
-        return None
-
-    lines: list[str] = []
-    for entry in errors:
-        if not isinstance(entry, dict):
-            _fail("the JSON report's `errors` array holds a non-object entry")
-            return None
-        name = entry.get("filename", "<unnamed>")
-        reason = entry.get("reason", "no reason given")
-        lines.append(f"  {name}: {reason}")
-    return lines, len(results)
+    return skipped, len(results)
 
 
 def main() -> int:
