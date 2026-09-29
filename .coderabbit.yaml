@@ -32,12 +32,24 @@ reviews:
     # The commit format is documented in .agents/instructions/commit.instruction.md
     # and the branch naming in AGENTS.md, so the check can restate them rather
     # than inventing a rule.
+    #
+    # The subject case here was wrong until 2026-09-29 and is recorded because
+    # the correction is a case change that looks arbitrary without it. This check
+    # asked for a lowercase subject while claiming to restate
+    # commit.instruction.md, whose only good example is
+    # `fix(tooling): Add properly error handling for 403 errors` -- capitalized.
+    # Measured over this branch's last 35 commits at the time, 32 were
+    # capitalized and 3 were not, so the requirement did not describe this
+    # repository's convention and could not be satisfied by following it. The
+    # rest of the check is unchanged: the type(scope): prefix, the imperative
+    # mood, the length limit and the one-logical-change rule are all accurate
+    # against the same source and stay.
     title:
       mode: error
       requirements: >-
         Conventional Commits format: `type(scope): subject`, where type is one
         of feat, fix, docs, style, refactor, perf, test, build, ci, chore, or
-        revert. Subject in the imperative mood, lowercase, no trailing period.
+        revert. Subject in the imperative mood, capitalized, no trailing period.
         Under 72 characters. Exactly one logical change per pull request.
 
     # A PR that changes behaviour without saying why is the reviewer's first
