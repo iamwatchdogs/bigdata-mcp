@@ -67,9 +67,16 @@ jobs:
             reason="pre-commit hooks are not fully exercised by required CI"
 
           elif [ "$PACKAGE_ECOSYSTEM" = "docker" ]; then
-            # This repository ships no container build, so a docker pull
-            # request would signal an unexpected new dependency.
-            reason="docker ecosystem is not used by this repository"
+            # The devcontainer base image, pinned by digest in
+            # .devcontainer/Dockerfile. This branch used to read "this
+            # repository ships no container build", which stopped being true
+            # when the devcontainer landed; the reason is now the real one.
+            # A digest bump also arrives with no update-type, so it would fall
+            # through to the fail-closed branch regardless, but naming it keeps
+            # the log legible. Nothing in CI builds the image, so a green
+            # pipeline says nothing about whether a new base still works. Every
+            # base-image change gets a human.
+            reason="docker base image bumps are not exercised by CI and need review"
 
           elif [ "$UPDATE_TYPE" = "version-update:semver-patch" ]; then
             # The only eligible class: a patch is the one change that is
