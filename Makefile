@@ -130,7 +130,7 @@ checks: ## Full pre-commit stage on all files (skips branch guard)
 security: ## Pre-push gate: zizmor + osv-scanner + gitleaks + codacy + coderabbit (advisory)
 	$(PREK) run --all-files --stage pre-push
 
-bandit: ## Python security analysis (pre-push hook)
+bandit: ## Python security analysis (commit-time gate)
 	$(PREK) run bandit --all-files
 
 zizmor: ## GitHub Actions SAST, medium+ severity (pre-push hook)

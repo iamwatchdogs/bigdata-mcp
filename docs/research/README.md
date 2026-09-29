@@ -208,7 +208,7 @@ Every annotation was checked against the code rather than dismissed by category:
 therefore not to change code, but to make both analyzers enforceable locally so
 their next *real* finding fails closed:
 
-- **Bandit is now a pre-push gate** (`make bandit`), configured from
+- **Bandit is now a commit-time gate** (`make bandit`), configured from
   `[tool.bandit]` in `pyproject.toml`. The skip list is exactly `B101`, `B404`,
   `B603`, `B608`, each justified beside it, and
   `test_bandit_skip_list_is_exactly_the_reviewed_set` pins the list so it cannot

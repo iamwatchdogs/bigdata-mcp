@@ -114,7 +114,15 @@ repos:
         # Codacy reported Bandit on every pull request as an advisory finding
         # that nothing failed on, and its config has since been removed from
         # this repository. This makes the same class of finding fail closed
-        # locally and in the pre-push stage.
+        # locally, at commit time.
+        #
+        # This hook has no `stages:` key, so `default_stages: [pre-commit]`
+        # applies and it runs on every commit, not on push. That is deliberate
+        # and is the stronger position: a commit-time gate catches the finding
+        # while it is still one keystroke from being undone. Do not add
+        # `stages: [pre-push]` here without also adding `--stage pre-push` to
+        # the `bandit` target in the Makefile. Either half on its own turns this
+        # into a target that runs nothing and reports success.
         #
         # The skip list lives in `[tool.bandit]` in pyproject.toml, where each
         # entry carries its own justification, and
