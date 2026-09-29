@@ -84,6 +84,48 @@ def _reject(message: str) -> None:
     print(f"codacy: {message}", file=sys.stderr)
 
 
+def _as_array(value: object) -> list[Any] | None:
+    """Narrow a value to a JSON array.
+
+    This gate reads a document ``json.loads`` produced, so every value out of it
+    is ``Any``, and ``isinstance(value, list)`` narrows ``Any`` to
+    ``list[Unknown]`` -- an element read back out is unknown, and every use of it
+    is then a ``reportUnknownVariableType``. The element type is therefore
+    asserted rather than inferred: a SARIF array holds whatever the document
+    held, and each caller checks the shape of the element it needs.
+
+    Args:
+        value: The value to narrow.
+
+    Returns:
+        ``value`` as an array, or ``None`` if it is not one.
+    """
+    if not isinstance(value, list):
+        return None
+    return cast("list[Any]", value)
+
+
+def _as_object(value: object) -> dict[str, Any] | None:
+    """Narrow a value to a JSON object.
+
+    The same narrowing problem as :func:`_as_array`, and the same answer:
+    ``isinstance(value, dict)`` on an unannotated value gives
+    ``dict[Unknown, Unknown]``, whose ``get`` is a partially unknown member
+    type. ``dict`` is invariant in its first parameter, so the key type cannot
+    be widened to ``str`` by narrowing alone either -- the annotation is
+    asserted, and :func:`_as_array` says why asserting is sound here.
+
+    Args:
+        value: The value to narrow.
+
+    Returns:
+        ``value`` as an object, or ``None`` if it is not one.
+    """
+    if not isinstance(value, dict):
+        return None
+    return cast("dict[str, Any]", value)
+
+
 def _stage(destination: Path) -> Path | None:
     """Build a working directory holding only the trees worth analysing.
 
@@ -154,15 +196,16 @@ def _notification_error(invocation: dict[str, Any], run_index: int) -> str | Non
             error and the arrays are well-formed.
     """
     for field in ("toolExecutionNotifications", "toolConfigurationNotifications"):
-        notifications = invocation.get(field, [])
-        if not isinstance(notifications, list):
+        notifications = _as_array(invocation.get(field, []))
+        if notifications is None:
             print(
                 f"codacy: runs[{run_index}].invocations[].{field} is not an array",
                 file=sys.stderr,
             )
             return f"{field} is not an array"
-        for notification in notifications:
-            if not isinstance(notification, dict):
+        for item in notifications:
+            notification = _as_object(item)
+            if notification is None:
                 print(
                     f"codacy: runs[{run_index}].invocations[].{field} holds a "
                     "non-object",
@@ -191,13 +234,14 @@ def _incomplete(run: dict[str, Any], run_index: int) -> str | None:
         A human-readable reason the run is untrustworthy, or ``None`` if the run
             reports a complete analysis.
     """
-    invocations = run.get("invocations", [])
-    if not isinstance(invocations, list):
+    invocations = _as_array(run.get("invocations", []))
+    if invocations is None:
         print(f"codacy: runs[{run_index}].invocations is not an array", file=sys.stderr)
         return "invocations is not an array"
 
-    for invocation in invocations:
-        if not isinstance(invocation, dict):
+    for item in invocations:
+        invocation = _as_object(item)
+        if invocation is None:
             print(
                 f"codacy: runs[{run_index}].invocations[] is not an object",
                 file=sys.stderr,
@@ -234,11 +278,13 @@ def _results_of(run: dict[str, Any]) -> list[dict[str, Any]] | None:
     """
     if "results" not in run:
         return []
-    results = run["results"]
-    if not isinstance(results, list):
+    results = _as_array(run["results"])
+    if results is None:
         return None
-    if not all(isinstance(result, dict) and "message" in result for result in results):
-        return None
+    for item in results:
+        result = _as_object(item)
+        if result is None or "message" not in result:
+            return None
     return results
 
 
@@ -312,8 +358,8 @@ def _findings(sarif_path: Path) -> list[dict[str, Any]] | None:
     if document is None:
         return None
 
-    runs = document.get("runs")
-    if not isinstance(runs, list):
+    runs = _as_array(document.get("runs"))
+    if runs is None:
         _reject(f"{sarif_path} has no `runs` array")
         return None
     if not runs:
@@ -333,13 +379,11 @@ def _findings(sarif_path: Path) -> list[dict[str, Any]] | None:
 
     findings: list[dict[str, Any]] = []
     for run_index, raw_run in enumerate(runs):
-        if not isinstance(raw_run, dict):
+        run = _as_object(raw_run)
+        if run is None:
             _reject(f"{sarif_path} runs[{run_index}] is not an object")
             return None
-        # `isinstance` narrows to `dict[Unknown, Unknown]`, and `dict` is
-        # invariant in its first parameter, so the annotation is asserted, not
-        # narrowed.
-        results = _run_results(cast("dict[str, Any]", raw_run), run_index)
+        results = _run_results(run, run_index)
         if results is None:
             return None
         findings.extend(results)
@@ -358,9 +402,10 @@ def _field(value: object, *names: str) -> object:
             not an object or the final key is missing.
     """
     for name in names:
-        if not isinstance(value, dict):
+        entry = _as_object(value)
+        if entry is None:
             return None
-        value = value.get(name)
+        value = entry.get(name)
     return value
 
 
@@ -374,7 +419,8 @@ def _describe(result: dict[str, Any]) -> str:
         One line naming the rule and the file:line, and one carrying the message.
     """
     location = ""
-    for entry in result.get("locations", []) or []:
+    locations = _as_array(result.get("locations")) or []
+    for entry in locations:
         physical = _field(entry, "physicalLocation")
         uri = _field(physical, "artifactLocation", "uri")
         if not uri:

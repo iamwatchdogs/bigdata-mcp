@@ -184,6 +184,22 @@ claim rather than re-deriving it.
   only before pushing. The mismatch is real in both directions: ruff's `C901`
   ceiling is 10 and its `PY` is `src tests`, so `make lint-check` does not
   cover `scripts/`, while the `ruff-check` pre-commit hook does.
+- **`isinstance` narrows `Any` to `list[Unknown]`, and `Unknown` is contagious.**
+  Pylance reported 14 `reportUnknown*` diagnostics in `scripts/codacy_gate.py`
+  and none of them named a real defect. Every value out of a `json.loads`
+  document is `Any`, and `isinstance(value, list)` turns that into
+  `list[Unknown]` — so each *element* read back is unknown, and one bad
+  narrowing colours a whole call chain: the loop variable, the `get` member
+  type, the argument passed on, and the return type. Annotating the loop
+  variable does not help, because a declared variable is narrowed to its
+  assigned type. The fix is to move the narrowing into a function whose return
+  type is declared — `scripts/codacy_gate.py` now has `_as_array` and
+  `_as_object`, and a returned expression is not narrowed to the implementation,
+  so the annotation holds. `ty` reports none of this: it is not Pylance, and
+  `make typecheck` was green throughout, so the 14 diagnostics had exactly one
+  checker that could see them and one that could not. Verify with
+  `uvx pyright@1.1.414` over the file with the `reportUnknown*` rules set to
+  `warning`; the CLI does not reproduce the editor's configuration otherwise.
 
 ## Testing instructions
 
