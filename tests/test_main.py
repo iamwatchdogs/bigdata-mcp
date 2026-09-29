@@ -3,33 +3,26 @@
 Two properties, both of which failed in this repository at least once.
 
 **1. The console-script target resolves to the function.** ``pyproject.toml``
-binds ``bigdata-mcp`` to ``bigdata_mcp:main``, which the generated shim resolves
-as ``from bigdata_mcp import main`` -- the name on the **package**, not the name
-inside the module ``bigdata_mcp.main``.
-
-While ``src/bigdata_mcp/__init__.py`` was empty, that import fell through to its
-submodule fallback and bound the *module object* to ``main``, so the console
-script died on its first statement with
-``TypeError: 'module' object is not callable``. Nothing caught it: the build
-never imports the target, and ``ruff`` and ``ty`` read source rather than the
+binds ``bigdata-mcp`` to ``bigdata_mcp:main``, and the generated shim resolves
+that as ``from bigdata_mcp import main`` -- the name on the **package**. While
+``__init__.py`` was empty that fell through to the submodule fallback and bound
+the *module object* to ``main``, so the console script died on its first
+statement with ``TypeError: 'module' object is not callable``. Nothing caught it:
+the build never imports the target, and ruff and ty read source rather than the
 bound attribute.
 
-**2. The ``__main__`` guard fires.** PyInstaller freezes this file, and the
-release pipeline's smoke test runs it. ``runpy`` returns a namespace containing a
-callable ``main`` whether or not the guard exists, so a namespace-only check
-passes with the guard deleted -- the module would define a function and exit
-without running it.
+**2. The ``__main__`` guard fires.** PyInstaller freezes this file and the
+release smoke test runs it. ``runpy`` returns a namespace containing a callable
+``main`` whether or not the guard exists, so a namespace-only check passes with
+it deleted.
 
-These run in-process on purpose. A subprocess probe was the obvious way to
-reproduce the real resolution order, and it was what caught bug 1 originally,
-but ``subprocess.run`` with a non-literal argv is itself the thing static
-analysers flag as a command-injection risk (Bandit ``B603``, and the
-``dangerous-subprocess-use-audit`` rule). The argv here is three fixed elements
-and ``shell`` is never used, so there is nothing to inject -- but a test suite
-should not need that argument to be made. ``inspect.isfunction`` on the bound
-package attribute distinguishes a function from a module just as sharply, with
-no process spawn at all. Both properties are verified by mutation: emptying
-``__init__.py`` fails the first, deleting the guard fails the second.
+These run in-process on purpose. A subprocess probe would have reproduced the
+real resolution order, and did catch bug 1 originally, but a non-literal argv is
+itself what static analysers flag as a command-injection risk (Bandit ``B603``,
+Opengrep's ``dangerous-subprocess-use-audit``), and a test suite should not need
+that argument to be made. ``inspect.isfunction`` on the bound package attribute
+is just as sharp. Both are mutation-verified: emptying ``__init__.py`` fails the
+first, deleting the guard fails the second.
 """
 
 from __future__ import annotations
@@ -59,9 +52,9 @@ def test_console_script_target_resolves_to_the_function() -> None:
     """Assert ``bigdata_mcp.main`` is the entry-point function, not a module.
 
     The submodule is imported first so the two can be compared: with nothing
-    re-exporting it, importing the submodule is precisely what left the module
-    object bound to the name, so this assertion degrades into a clean failure
-    rather than an ``AttributeError`` when the re-export is removed again.
+    re-exporting it, importing it is precisely what left the module object bound
+    to the name, so this degrades into a clean failure rather than an
+    ``AttributeError`` when the re-export is removed again.
     """
     module = importlib.import_module(ENTRY_POINT_MODULE)
 
@@ -91,8 +84,8 @@ def test_entry_point_module_executes_as_a_script() -> None:
     calls: list[tuple[str, int]] = []
     previous_tracer = sys.gettrace()
 
-    # Parameter and return types are `Any` deliberately: typeshed models
-    # TraceFunction as a recursive alias a narrower annotation cannot satisfy.
+    # `Any` deliberately: typeshed models TraceFunction as a recursive alias a
+    # narrower annotation cannot satisfy.
     def tracer(frame: Any, event: Any, arg: Any) -> Any:
         if event == "call" and frame.f_code.co_name == "main":
             calls.append((frame.f_code.co_filename, frame.f_code.co_firstlineno))

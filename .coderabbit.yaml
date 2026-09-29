@@ -1,33 +1,21 @@
-# CodeRabbit configuration for iamwatchdogs/bigdata-mcp.
+# Configures the GitHub App, not the `coderabbit` CLI's `review` command, which
+# sends the diff to CodeRabbit's servers and answers with model output. That is
+# deliberate: an LLM verdict is non-deterministic and billable, so it does not
+# belong in a pre-push gate. The strictness that can be deterministic lives here,
+# on the PR, where the ruleset already requires `CI Status` before a merge.
 #
-# Maximum strictness, and the reasoning behind each non-obvious choice. Read
-# against the v2 schema at https://www.coderabbit.ai/integrations/schema.v2.json.
-#
-# This file configures the GitHub App. It is not read by the `coderabbit` CLI's
-# `review` command, which sends the diff to CodeRabbit's servers and answers
-# with model output. That is deliberate: an LLM verdict is non-deterministic
-# and billable, so it does not belong in a pre-push gate. The strictness that
-# can be deterministic lives here, on the PR, where the ruleset already requires
-# `CI Status` before a merge.
-#
-# Defaults are stated where they are being changed, so a future reader can see
-# what this file actually buys rather than inferring it from the absence of a
-# line.
-
-# en-US is the default; stated so the file is self-describing. This
-# repository's code, comments, and docs are English.
+# Defaults are stated where they are changed, so a reader can see what this file
+# buys rather than inferring it from the absence of a line.
 language: en-US
 
 reviews:
-  # `assertive` is the strictest of the three. `chill` is the default and
-  # `quiet` reviews less. Assertive may feel nitpicky, which is the intent.
+  # The strictest of the three. May feel nitpicky, which is the intent.
   profile: assertive
 
   # Every pre-merge check in `error` mode requires resolution before merging.
   # The default for each is `warning`, which posts a comment and lets the PR
   # through. `error` only blocks if the platform enforces the check, so each one
-  # is paired with a threshold or a requirement below -- a check in `error`
-  # mode with nothing to assert would block everything or nothing.
+  # is paired with a threshold or a requirement below.
   pre_merge_checks:
     # The PR author cannot override or silence a failing check. Without this an
     # author can dismiss the checks this file turns into errors, which would
@@ -57,18 +45,13 @@ reviews:
     description:
       mode: error
 
-    # The linked-issue assessment is the check that a fix actually addresses
-    # the issue it claims to close, rather than a drive-by.
     issue_assessment:
       mode: error
 
     custom_checks:
-      # Not in the schema's examples, and deliberately so: these encode rules
-      # this repository actually enforces elsewhere, and a check that merely
-      # restates a tool already running in CI is a comment, not a gate.
-      #
-      # What belongs here is what no other gate covers -- decisions a reviewer
-      # would otherwise have to make from memory every time.
+      # Deliberately not in the schema's examples: these encode rules enforced
+      # elsewhere in this repository, and a check that merely restates a tool
+      # already running in CI is a comment, not a gate.
       - name: tests live in tests and cover src
         mode: error
         instructions: >-
@@ -99,11 +82,10 @@ reviews:
           and a commit whose subject does not state the why. Never commit
           directly to main. Never force-push or amend a pushed commit.
 
-  # Do not auto-approve when comments are resolved. The default is false, and
-  # it stays false: the ruleset requires a `CI Status` check, and the
-  # auto-merge workflow is restricted to Dependabot semver-patch updates by its
-  # own allow-list. Granting blanket approval on comment resolution would give
-  # that workflow a second, unlogged path to a merge.
+  # Stays false: the ruleset requires a `CI Status` check, and the auto-merge
+  # workflow is restricted to Dependabot semver-patch updates by its own
+  # allow-list. Blanket approval on comment resolution would give that workflow
+  # a second, unlogged path to a merge. Default is false.
   request_changes_workflow: false
 
   # Fail the outward-facing review status when a review errors, rather than
@@ -111,7 +93,6 @@ reviews:
   # is false.
   fail_commit_status: true
 
-  # The extra context a strict review needs to be useful rather than noisy.
   high_level_summary: true
   review_status: true
   review_details: true
@@ -122,22 +103,16 @@ reviews:
   related_issues: true
   related_prs: true
 
-  # `in_progress_fortune` defaults to true and prints a fortune while the
-  # review runs. Off, because it is noise in a security-sensitive repository.
+  # Off because it is noise in a security-sensitive repository. Default is true.
   in_progress_fortune: false
 
   auto_review:
-    # Review every PR, not just the labelled ones. The default is true, and
-    # pinning it means a future change to the default cannot quietly narrow
+    # Pinned to the default so a future change to it cannot quietly narrow
     # coverage to PRs that happen to carry a label.
     enabled: true
-    # Re-review on every push rather than only the first. Default is true.
     auto_incremental_review: true
-    # Drafts included, so review starts before the PR is marked ready.
-    # Default is false.
     drafts: true
-    # 0 disables the pause, which is the default 5's neighbour. A review that
-    # stops after five commits is a review that stops before the PR is done.
+    # 0 disables the pause; the default 5 stops a review before the PR is done.
     auto_pause_after_reviewed_commits: 0
     # No keyword escape hatches. A skip list is a list of pull requests that
     # will not be reviewed, and every entry is a hole.
@@ -145,17 +120,12 @@ reviews:
     labels: []
     ignore_usernames: []
 
-  # No author is exempt. The default empty list already achieves this; it is
-  # stated under auto_review above rather than duplicated.
-
   finishing_touches:
     # Everything that can write to the repository is off. A model editing the
     # branch under review, opening a follow-up PR, or committing a merge
     # resolution is a second writer on a repository whose ruleset requires an
-    # attested artifact traced to a commit.
-    #
-    # autofix defaults to true and is the one most likely to be turned on by
-    # muscle memory, so it is pinned false here.
+    # attested artifact traced to a commit. `autofix` defaults to true and is
+    # the one most likely to be re-enabled by muscle memory, so it is pinned.
     autofix:
       enabled: false
     simplify:
@@ -169,19 +139,15 @@ reviews:
     unit_tests:
       enabled: false
 
-  # Labels are suggestions, never applied. `auto_apply_labels` defaults to
-  # false; `auto_assign_reviewers` defaults to false. Both stay false, and
-  # `auto_apply_labels` specifically because labelling a PR is a write.
+  # Both default to false and stay false; `auto_apply_labels` specifically
+  # because labelling a PR is a write.
   auto_apply_labels: false
   auto_assign_reviewers: false
   suggested_reviewers: true
 
-  # Review everything, including generated and vendored paths, rather than
-  # trusting a filter nobody has re-examined. The default is an empty list,
-  # which reviews all paths; stated explicitly because a path filter is where
-  # "maximum strictness" is usually quietly reduced to "whatever was excluded
-  # last time". If a path must be excluded later, it should be a deliberate
-  # commit that says why, not a default that crept in.
+  # Stated explicitly as empty rather than left to the default: a path filter is
+  # where "maximum strictness" quietly becomes "whatever was excluded last
+  # time". Excluding a path later should be a commit that says why.
   path_filters: []
 
   path_instructions:
@@ -220,24 +186,19 @@ reviews:
 
   # The hosted tool integrations are on by default; they are not off because
   # this key is absent. Every tool entry in the schema documents
-  # `enabled: true` as its own default, and the tools guide says almost all
-  # tools are enabled out of the box with CodeRabbit picking the relevant ones
-  # per repository -- so omitting `reviews.tools` adds a second copy of each
-  # tool below to every pull request rather than suppressing one.
+  # `enabled: true` as its own default, so omitting `reviews.tools` would add a
+  # second copy of each tool below to every pull request rather than suppress
+  # one. `profile` does not stand in for this -- the only thing the schema
+  # derives from a profile is a *level* knob, and only on phpstan.
   #
-  # `profile` does not stand in for this. The only place the schema derives
-  # anything from a profile is a *level* knob, and only on phpstan, which this
-  # repository has no equivalent of. Tool enablement is its own key.
-  #
-  # Each of these already runs here and is enforced rather than advisory:
-  # ruff through the `ruff lint` and `ruff format` hooks; actionlint and zizmor
+  # Each of these already runs here and is enforced rather than advisory: ruff
+  # through the `ruff lint` and `ruff format` hooks; actionlint and zizmor
   # through their own hooks; gitleaks across the whole history; osv-scanner over
-  # the dependency graph; opengrep through the fail-closed Codacy gate, which
-  # is the only place that reads its findings and exits nonzero on them. Bandit
-  # is absent from this list because it is not a CodeRabbit tool -- the schema
-  # and the tools list have no entry for it -- so there is nothing to disable.
+  # the dependency graph; opengrep through the fail-closed Codacy gate, the
+  # only place that reads its findings and exits nonzero on them. Bandit is
+  # absent because it is not a CodeRabbit tool, so there is nothing to disable.
   #
-  # This is a deny list with no wildcard, and it will rot: the schema has no
+  # This deny list has no wildcard and will rot: the schema has no
   # `disable_all` and no catch-all, so a tool CodeRabbit adds later defaults to
   # enabled again. Widening it is a deliberate edit, not a default.
   tools:

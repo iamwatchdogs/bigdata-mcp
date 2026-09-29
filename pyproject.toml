@@ -8,10 +8,9 @@ license-files = ["LICENSE"]
 authors = [
     { name = "iamwatchdogs", email = "shamith301102@gmail.com" }
 ]
-# Keep this floor in step with .python-version, [tool.ty.environment]
-# python-version, and [tool.ruff] target-version. A floor below the version the
-# tools are pinned to advertises support that lint and type checking never
-# verified, and the CI matrix only tests 3.14.
+# Keep in step with .python-version, [tool.ty.environment] python-version and
+# [tool.ruff] target-version: a lower floor claims support lint and type
+# checking never verified, and the CI matrix only tests 3.14.
 requires-python = ">=3.14"
 dependencies = []
 
@@ -34,9 +33,6 @@ dev = [
     "ty>=0.0.84",
 ]
 
-# ---------------------------------------------------------------------------
-# ty — strict type checking
-# ---------------------------------------------------------------------------
 [tool.ty]
 rules = { all = "error" }
 
@@ -50,9 +46,6 @@ python-version = "3.14"
 [tool.ty.terminal]
 error-on-warning = true
 
-# ---------------------------------------------------------------------------
-# ruff — strict linting + Google docstrings
-# ---------------------------------------------------------------------------
 [tool.ruff]
 line-length = 88
 target-version = "py314"
@@ -63,48 +56,48 @@ docstring-code-format = true
 
 [tool.ruff.lint]
 select = [
-    "E",      # pycodestyle errors
-    "W",      # pycodestyle warnings
-    "F",      # pyflakes
-    "I",      # isort
-    "UP",     # pyupgrade
-    "B",      # flake8-bugbear
-    "A",      # flake8-builtins
-    "ANN",    # flake8-annotations
-    "S",      # flake8-bandit (security)
-    "BLE",    # flake8-blind-except
-    "FBT",    # flake8-boolean-trap
-    "C4",     # flake8-comprehensions
-    "C90",    # mccabe
-    "DTZ",    # flake8-datetimez
-    "T10",    # flake8-debugger
-    "EM",     # flake8-errmsg
-    "FA",     # flake8-future-annotations
-    "ICN",    # flake8-import-conventions
-    "INP",    # flake8-no-pep420
+    "E",
+    "W",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "A",
+    "ANN",
+    "S",
+    "BLE",
+    "FBT",
+    "C4",
+    "C90",
+    "DTZ",
+    "T10",
+    "EM",
+    "FA",
+    "ICN",
+    "INP",
     "LOG",    # flake8-logging
     "G",      # flake8-logging-format
-    "PIE",    # flake8-pie
-    "T20",    # flake8-print
-    "PT",     # flake8-pytest-style
-    "PYI",    # flake8-pyi
-    "Q",      # flake8-quotes
-    "RSE",    # flake8-raise
-    "RET",    # flake8-return
-    "SLF",    # flake8-self
-    "SIM",    # flake8-simplify
-    "SLOT",   # flake8-slots
+    "PIE",
+    "T20",
+    "PT",
+    "PYI",
+    "Q",
+    "RSE",
+    "RET",
+    "SLF",
+    "SIM",
+    "SLOT",
     "TID",    # flake8-tidy-imports
-    "TC",     # flake8-type-checking
-    "ARG",    # flake8-unused-arguments
-    "PTH",    # flake8-use-pathlib
+    "TC",
+    "ARG",
+    "PTH",
     "TD",     # flake8-todos
-    "TRY",    # tryceratops
-    "PERF",   # perflint
-    "FURB",   # refurb
-    "RUF",    # ruff-specific rules
-    "D",      # pydocstyle
-    "DOC",    # pydoclint (args/returns match signatures)
+    "TRY",
+    "PERF",
+    "FURB",
+    "RUF",
+    "D",
+    "DOC",    # pydoclint: args/returns must match the signature
 ]
 ignore = [
     "missing-trailing-comma",
@@ -114,22 +107,19 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["unused-import", "undocumented-public-package"]
 "tests/**/*.py" = ["assert", "D", "ANN", "ARG"]
-# Executable tooling, not a library: it is invoked by `make` and by the
-# pre-commit hook, so a __main__ guard and a `print`-based usage message are
-# correct here rather than violations. T20 (no print) and INP (no implicit
-# namespace package) do not apply to a script run directly by path.
-# S404/S603 are suppressed at the call site, where the argument list is fixed.
+# Executable tooling, not a library: run by `make` and by the pre-commit hook,
+# so a `__main__` guard and a `print`-based usage message are correct rather
+# than violations. S404/S603 are suppressed at the call site, where the argv is
+# fixed.
 "scripts/**/*.py" = ["T20", "INP"]
-# S607 (start-process-with-a-partial-path) applies to exactly three call sites:
-# scripts/coderabbit_advisory.py, scripts/bandit_gate.py and
-# scripts/codacy_gate.py, all of which spell their argv inline so Opengrep's
-# `dangerous-subprocess-use-audit` rule sees a literal and stops reporting it. The bare name is deliberate in both: a
-# `sys.executable`-relative argv is not exempt either, and an absolute path would
-# silence this check by hardcoding one machine's install prefix. Each call is
-# preceded by a `shutil.which` existence check, and the hook's venv `bin` is
-# prepended to `PATH` by pre-commit itself, so the check and the call resolve to
-# the same binary. B607 carries the same justification below. Scoped to the two
-# files so the next script that spawns a bare name has to come back and say why.
+# S607 (partial-path argv) applies to exactly three call sites, all in the
+# repository's own gates, which spell their argv inline so Opengrep's
+# `dangerous-subprocess-use-audit` sees a literal. The bare name is deliberate:
+# a `sys.executable`-relative argv is not exempt either, and an absolute path
+# would silence the check by hardcoding one machine's install prefix. Each call
+# is preceded by a `shutil.which` check, and pre-commit prepends the hook's venv
+# `bin` to `PATH`, so check and call resolve to the same binary. Scoped per file
+# so the next script spawning a bare name has to come back and say why.
 "scripts/coderabbit_advisory.py" = ["S607"]
 "scripts/bandit_gate.py" = ["S603", "S607"]
 "scripts/codacy_gate.py" = ["S603", "S607"]
@@ -147,75 +137,53 @@ max-branches = 12
 max-returns = 6
 max-statements = 50
 
-# ---------------------------------------------------------------------------
-# pytest
-# ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "--cov=bigdata_mcp --cov-report=term-missing -v -n auto"
 
-# ---------------------------------------------------------------------------
-# coverage
-# ---------------------------------------------------------------------------
 [tool.coverage.run]
-# Branch coverage, not just line coverage. A function whose every line runs but
-# whose only `if` is never taken reports as fully covered while the untaken
-# path is entirely unverified.
+# Branch coverage, not just line: a function whose every line runs but whose
+# only `if` is never taken reports as fully covered.
 branch = true
 
 [tool.coverage.report]
-# Floor, not a target. Set once the entry point is genuinely covered so the
-# gate is live from day one rather than rubber-stamped at 0%.
-# Ratchet policy: raise toward 90 as the MCP server implementation lands, and
-# never lower this to make a failing run pass — fix the missing test instead.
+# A floor, not a target, and never lower it to make a failing run pass -- fix
+# the missing test instead. Raise toward 90 as the server implementation lands.
 fail_under = 80
 show_missing = true
-# `src` is on sys.path via pytest's `pythonpath`, and the `__main__` guard is
-# exercised by runpy in tests/test_main.py, so nothing needs excluding to make
-# the numbers honest.
+# Nothing to exclude: `src` is on sys.path via pytest's `pythonpath` and the
+# `__main__` guard is exercised by runpy in tests/test_main.py.
 
 [tool.bandit]
-# Bandit is the Python security analyser. Codacy reported it on every pull
-# request as an advisory finding that nothing failed on, and its configuration
-# has since been removed from this repository, so the signal is third-party
-# again. This gate makes the same class of finding local and fail-closed.
-#
-# Each skip is here because it fires on correct code in THIS repository, and
-# each carries its own justification below, so widening this list is a
-# deliberate edit rather than a quiet one.
+# Codacy reported Bandit on every PR as an advisory finding that nothing failed
+# on, and its config has since been removed from this repository, so the signal
+# is third-party again. This gate makes the same class of finding local and
+# fail-closed. Each skip fires on correct code in THIS repository and carries
+# its own justification below, so widening the list is a deliberate edit rather
+# than a quiet one.
 #
 # B101 assert_used — a pytest suite is built from `assert`. The ruff equivalent
-#   (S101) is already suppressed for `tests/**` in this file for the same
-#   reason. Suppressing B101 does not weaken the suite: `make test` runs pytest,
-#   which is what evaluates those asserts.
+#   (S101) is suppressed for `tests/**` above for the same reason, and `make
+#   test` runs pytest, which is what evaluates those asserts.
 #
-# B404 import_subprocess — an advisory notice that fires on ANY import of
-#   `subprocess`. `scripts/with_testmon_lock.py` exists to run a command while
-#   holding a lock, and two test modules spawn interpreters, so it can never be
-#   clean here.
+# B404 import_subprocess — fires on ANY import of `subprocess`.
+#   with_testmon_lock.py exists to run a command under a lock and two test
+#   modules spawn interpreters, so it can never be clean here.
 #
 # B603 subprocess_without_shell_equals_true — fires on a non-literal argv, which
-#   is the SAFE form: it is the caller that is flagged, not the command. The
-#   dangerous neighbour B602 (shell=True) is NOT skipped, so command injection
-#   through a shell is still a hard failure. What is given up is the ability to
-#   tell a good argv from a bad one by inspection, which is not a distinction a
-#   linter can make anyway.
+#   is the SAFE form: it flags the caller, not the command. Its dangerous
+#   neighbour B602 (`shell=True`) is NOT skipped, so shell injection stays a
+#   hard failure. What is given up is telling a good argv from a bad one by
+#   inspection, which is not a distinction a linter can make anyway.
 #
-# B607 start_process_with_partial_path — fires on a bare command name, i.e. one
-#   resolved through PATH. There are exactly two such calls, both in the
-#   pre-push/pre-commit gates, and both are there on purpose: Opengrep's
-#   `dangerous-subprocess-use-audit` rule exempts only an argv literal, so a
-#   `shutil.which` result is reported, a `sys.executable`-relative argv is
-#   reported, and a hardcoded absolute path would silence this check by binding
-#   one machine's install prefix. There are exactly three such calls, all in the
-#   repository's own gates. The trade is deliberate — the rule being
-#   satisfied is the one that flags a non-literal argv, and the one being given
-#   up asks for a literal path this repository cannot write down. Each call is
-#   preceded by a `shutil.which` existence check and its failure modes are each
-#   reported by name.
+# B607 start_process_with_partial_path — fires on a bare command name. The three
+#   such calls are the gates' own, and deliberate: Opengrep exempts only an argv
+#   literal, so a `shutil.which` result and a `sys.executable`-relative argv are
+#   both reported, while an absolute path would silence the check by binding one
+#   machine's install prefix. Same trade as the S607 ignores above.
 #
-# B608 hardcoded_sql_expressions — this repository has no database and no SQL.
-#   The single hit is a false positive on the word "update" inside an assertion
-#   message that reads "create-versus-update".
+# B608 hardcoded_sql_expressions — no database and no SQL here. The single hit
+#   is a false positive on the word "update" inside a create-versus-update
+#   assertion message.
 skips = ["B101", "B404", "B603", "B607", "B608"]

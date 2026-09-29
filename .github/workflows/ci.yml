@@ -6,11 +6,6 @@ on:
     branches:
       - main
   pull_request:
-  # A manual dispatch runs every job. Path filters decide scope from the files
-  # changed in the last commit, so a dispatch of a docs-only commit would skip
-  # the Python jobs entirely -- and `CI Status` accepts a skipped job only when
-  # detect-changes reported its filter as false, so the run would still report
-  # success having checked almost nothing. "Run the checks now" has to mean that.
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -33,15 +28,14 @@ concurrency:
 jobs:
   detect-changes:
     name: Detect changes
-    # Skipped when a caller forces the full matrix, and on a manual dispatch.
-    # A dispatch means "run the checks now", so letting path filters decide
-    # scope from the last commit could run nothing while still reporting a
-    # green `CI Status`.
+    # A dispatch means "run the checks now", and path filters decide scope from
+    # the last commit, so letting them run would report a green `CI Status`
+    # having checked almost nothing.
     if: ${{ !inputs.run-all && github.event_name != 'workflow_dispatch' }}
 
     runs-on: ubuntu-latest
     permissions:
-      contents: read      # checkout on push / workflow_dispatch / workflow_call
+      contents: read
       pull-requests: read # dorny/paths-filter lists PR files over the REST API
 
     outputs:
@@ -217,21 +211,15 @@ jobs:
       contents: read
 
     env:
-      # Coverage is GENERATED on the canonical cell for every event that runs
-      # the Python jobs: the push to main, the pull request, the reusable
-      # release call, and a manual dispatch. `fail_under = 80` therefore
-      # applies on a pull request too, which is the point of having a floor.
+      # Generated on the canonical cell for every event that runs the Python
+      # jobs, so `fail_under = 80` applies on a pull request too.
       #
-      # This is the merge gate. A run below the floor exits 1, failing this
-      # cell, failing `CI Status`, and the ruleset requires `CI Status` -- so
-      # the floor blocks the merge without any GitHub-side coverage product.
-      # That matters because this repository cannot use one: GitHub's
-      # code-coverage API answers 404 here, so a `code_coverage` ruleset rule
-      # would enforce nothing. Codecov below is also a CI gate, but a different
-      # kind: it fails this job when the UPLOAD fails. It says nothing about the
-      # coverage number, which is what `fail_under` is for -- Codecov's own
-      # project status is what would gate on a coverage delta, and no status
-      # check from it is required by the ruleset.
+      # This is the merge gate: a run below the floor exits 1, failing this cell
+      # and `CI Status`, which the ruleset requires. A GitHub-side coverage
+      # product cannot do this job here -- the code-coverage API answers 404 on
+      # this repository, so a `code_coverage` ruleset rule would enforce
+      # nothing. Codecov below is a different kind of gate: it fails this job
+      # when the UPLOAD fails, and says nothing about the coverage number.
       IS_COVERAGE_RUN: >-
         ${{ matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14' }}
       # secrets.CODECOV_TOKEN is not exposed to forks, so a fork's report cannot

@@ -1,47 +1,34 @@
 """Fail-closed Codacy static-analysis gate for the pre-push stage.
 
-Why this is a wrapper rather than a hook entry of ``codacy-cli analyze``
-directly, and why the analysis is staged into a temporary directory. Both are
-consequences of measured behaviour, not preference.
+A wrapper rather than a bare `codacy-cli analyze` hook entry, staged into a
+temporary directory, for three measured reasons.
 
-**`analyze` always exits 0.** It reported 0 on a clean tree, 0 on a tree with a
-confirmed `subprocess(..., shell=True)` finding, 0 on a missing config file, and
-0 on a malformed config. Its exit status carries no information, so a hook whose
-entry is that command reports green no matter what it finds. The finding count
-is read from SARIF here instead, and a missing or unparseable SARIF file is
-treated as a failure rather than as "no findings".
+**`analyze` always exits 0** -- on a clean tree, on a confirmed
+`subprocess(..., shell=True)`, on a missing config, on a malformed one. Its exit
+status carries no information, so the finding count is read from SARIF instead,
+and a missing or unparseable SARIF file is a failure rather than "no findings".
 
-**A report that cannot be counted is not a clean report.** `analyze` does not
-currently fail in a way that produces a malformed report -- every one of its own
-failure modes writes no file at all, which is already handled. The gap this
-closes is one malformed-content change away: a comprehension that iterated
-`run.get("results", []) or []` returned `[]` for `"results": {"error": "analyzer
-failed"}`, for `"results": "boom"`, and for `"results": null`, and `main()`
-exited successfully on all three. Section 3.14.23 of the specification reserves a
-`null` `results` for a tool that *failed to start*, so that `or []` mapped the
-standard's own failure sentinel onto "clean". Appendix I names the three signals
-of an incomplete result set, and all three are now checked: a false
-`executionSuccessful`, an error-level notification, and a `null` `results`.
-Absent `invocations` is not one of them, and two of the three runs this analyser
-emits have none.
+**A report that cannot be counted is not a clean report.** An `or []` default on
+`results` returns `[]` for a dict, for a string and for a `null`, and exits
+successfully on all three -- and SARIF 3.14.23 reserves a `null` `results` for a
+tool that *failed to start*, so `or []` maps the standard's own failure sentinel
+onto "clean". Appendix I names the three signals of an incomplete result set and
+all three are checked: a false `executionSuccessful`, an error-level
+notification, a `null` `results`. Absent `invocations` is not one of them, and
+two of the three runs this analyser emits have none.
 
-**`analyze` has no exclusion mechanism and no path argument.** It walks the
-current directory, and `exclude_paths` in `.codacy/codacy.yaml` is silently
-ignored: adding it left a run that was still analysing `.venv` when it was
-killed at six minutes forty. Measured on this repository, the same config
-produced 860 findings in 9m11s, and all 860 were inside `.venv`; the identical
-config over `src/` and `tests/` alone produced 0 findings in 1m12s. So the
-workable lever is the working directory, and staging the analysable trees into
-a temporary one both excludes `.venv` and makes the gate fast enough to sit in
-a pre-push hook at all. A 9-minute gate does not get run.
+**No exclusion mechanism and no path argument.** It walks the current directory
+and `exclude_paths` in `.codacy/codacy.yaml` is silently ignored. Staging is
+therefore the only lever that drops `.venv`, and it is what makes the gate fast
+enough to sit in a pre-push hook: 9m11s over the working tree versus 1m12s
+staged. See the failure ledger in AGENTS.md for the measurements.
 
-Refusing to run is a failure, not a pass. A hook that cannot find its tools
-would otherwise be indistinguishable from a hook that found nothing, which is
-the same green line that means two different things.
+Refusing to run is a failure, not a pass: a hook that cannot find its tools would
+be indistinguishable from one that found nothing.
 
 Findings are reported with file, line, rule and message. Every finding fails the
-gate: this repository has no baseline to diff against, and a suppression list
-is how the previous attempt at silencing this tool went wrong.
+gate -- there is no baseline to diff against, and a suppression list is how the
+previous attempt at silencing this tool went wrong.
 """
 
 from __future__ import annotations
@@ -57,17 +44,12 @@ from typing import Any
 from typing import cast
 
 # The trees that ship, mapped to the name each is staged under. `.venv` is
-# deliberately absent: it is the only thing the analysis would otherwise spend
-# its time on, and every finding it produces there is about a third-party
-# package rather than about this repository.
+# absent because it is what the analysis would otherwise spend its time on, and
+# every finding it produces there is about a third-party package.
 #
-# `tests` is staged as `_tests`. The analyser skips a directory literally named
-# `tests`, and it does so silently: a `subprocess(..., shell=True)` planted in
-# `tests/` produced no finding while the identical file in `scripts/` was
-# reported, and renaming `tests/` to `teststuff/` made the same file appear
-# again. Nothing in the CLI's output says a tree was skipped. Since `tests/` is
-# half the first-party Python in this repository, staging under a neutral name
-# is what keeps it analysed at all.
+# `tests` is staged as `_tests`: the analyser silently skips a directory named
+# `tests`, and `tests/` is half the first-party Python here, so a neutral name is
+# what keeps it analysed at all.
 STAGED_TREES = {"src": "src", "tests": "_tests", "scripts": "scripts"}
 
 CONFIG_SOURCE = Path(".codacy/codacy.yaml")
@@ -133,8 +115,7 @@ def _run_analysis(config_dir: Path, sarif_path: Path) -> int:
     # The bare name is load-bearing, not tidiness. Opengrep's
     # `dangerous-subprocess-use-audit` rule exempts a literal argv and reports
     # anything else, and a `shutil.which` result is not a literal. `main` has
-    # already checked that `codacy-cli` is on PATH and returned before reaching
-    # here, so the two cannot disagree about which binary is meant.
+    # already checked `codacy-cli` is on PATH, so the two cannot disagree.
     completed = subprocess.run(
         ["codacy-cli", "analyze", "--format", "sarif", "--output", str(sarif_path)],
         cwd=config_dir.parent,
@@ -184,18 +165,11 @@ def _notification_error(invocation: dict[str, Any], run_index: int) -> str | Non
 def _incomplete(run: dict[str, Any], run_index: int) -> str | None:
     """Report why a run says its own result set cannot be trusted.
 
-    Appendix I of the specification gathers the conditions that tell a consumer
-    the tool failed to produce a comprehensive set of results, and states that
-    they apply separately to each run. They are: an invocation reporting
-    ``executionSuccessful`` false; a notification at level ``error``; and a
-    ``results`` property whose value is ``null``. All three are checked, because
-    a well-formed report that says the analysis was incomplete is not a report of
-    zero findings.
-
-    ``invocations`` and ``results`` are both optional properties, so a run that
-    omits one makes no such claim and is not rejected for omitting it. That is
-    not hypothetical: of the three runs this analyser emits, two carry no
-    ``invocations`` at all.
+    Appendix I's three signals, all checked because a well-formed report saying
+    the analysis was incomplete is not a report of zero findings. ``invocations``
+    and ``results`` are both optional, so a run omitting one claims nothing and
+    is not rejected for it -- not hypothetical: two of the three runs this
+    analyser emits carry no ``invocations``.
 
     Args:
         run: A single ``run`` object from the ``runs`` array.
@@ -224,11 +198,9 @@ def _incomplete(run: dict[str, Any], run_index: int) -> str | None:
             return reason
 
     if "results" in run and run["results"] is None:
-        # Redundant for the verdict -- `_results_of` rejects a `null` results on
-        # its own, and a mutation that deletes this branch changes no probe's
-        # outcome. It is kept because it is the condition the specification
-        # names, and because the message it produces says what happened ("did
-        # not complete its analysis") rather than what the shape was.
+        # Redundant for the verdict -- `_results_of` rejects a `null` on its own
+        # -- but kept because it is the condition the specification names, and
+        # because its message says what happened, not what the shape was.
         return "results is null"
     return None
 
@@ -237,11 +209,10 @@ def _results_of(run: dict[str, Any]) -> list[dict[str, Any]] | None:
     """Extract one run's result objects, rejecting anything that is not one.
 
     A ``result`` is an object carrying a ``message``: the schema marks
-    ``message`` as required and ``locations`` as optional, so a result with no
-    location is valid and must still be counted. A missing ``results`` property
-    is an empty list -- the property is optional -- but a ``results`` that is
-    present and is not an array of result objects means no finding count can be
-    read at all.
+    ``message`` as required and ``locations`` optional, so a locationless result
+    is valid and must still be counted. A missing ``results`` is an empty list
+    (the property is optional), but a present one that is not an array of result
+    objects means no finding count can be read at all.
 
     Args:
         run: A single ``run`` object, already accepted by :func:`_incomplete`.
@@ -323,8 +294,7 @@ def _findings(sarif_path: Path) -> list[dict[str, Any]] | None:
             a SARIF log object, or is a report whose finding count cannot be
             trusted. That last case is why a malformed report is rejected rather
             than skipped: a consumer that silently ignores what it cannot parse
-            reports a failed analysis as a clean one, which is the failure this
-            function exists to prevent.
+            reports a failed analysis as a clean one.
     """
     document = _log(sarif_path)
     if document is None:
@@ -341,8 +311,8 @@ def _findings(sarif_path: Path) -> list[dict[str, Any]] | None:
             _reject(f"{sarif_path} runs[{run_index}] is not an object")
             return None
         # `isinstance` narrows to `dict[Unknown, Unknown]`, and `dict` is
-        # invariant in its first parameter, so the annotation has to be asserted
-        # rather than narrowed.
+        # invariant in its first parameter, so the annotation is asserted, not
+        # narrowed.
         results = _run_results(cast("dict[str, Any]", raw_run), run_index)
         if results is None:
             return None
@@ -447,8 +417,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # `python3 scripts/codacy_gate.py` and `python scripts/codacy_gate.py` are
-    # both valid invocations, so the shebang is not load-bearing here. Kept for
-    # consistency with the other script in this directory.
     os.environ.setdefault("PYTHONHASHSEED", "0")
     sys.exit(main())

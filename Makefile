@@ -1,7 +1,5 @@
-# BigData MCP — task runner
-#
 # Every quality and security gate mirrors .pre-commit-config.yaml so `make`
-# and `prek` can never drift. `make` with no target shows the command list.
+# and `prek` can never drift.
 
 .DEFAULT_GOAL := help
 
@@ -12,7 +10,6 @@ PREK   := prek
 RUFF   := $(RUN) ruff
 PY     := src tests
 
-# Commit-time hygiene hooks from .pre-commit-config.yaml (pre-commit-hooks).
 # no-commit-to-branch is excluded: it guards `git commit`, not code quality.
 HYGIENE := trailing-whitespace end-of-file-fixer mixed-line-ending \
            check-yaml check-toml check-json check-ast debug-statements \
@@ -94,23 +91,11 @@ testmon: ## pytest-testmon on changed files (mirrors pytest-testmon hook)
 	@# `--dist=loadfile`: keeps every test from one file on one worker, so a
 	@# worker never has to aggregate another worker's data.
 	@#
-	@# with_testmon_lock.py is a correctness guard, not decoration. The
-	@# pytest-testmon DB layer (testmon/db.py) decides whether its datafile
-	@# exists BEFORE it may delete and recreate that file to reset a stale
-	@# schema version. Two processes starting cold therefore both believe they
-	@# are the first and both run init_tables() against the same sqlite file.
-	@# The loser dies with "table metadata already exists", or with "disk I/O
-	@# error" while the winner holds an exclusive WAL lock.
-	@#
-	@# That was not hypothetical: `prek run --all-files` dispatches this hook
-	@# concurrently (measured: two invocations ~4ms apart), and a cold start
-	@# failed 8/8 before the lock existed, while a single `uv run pytest
-	@# --testmon` never failed. `make clean` removes .testmondata, which
-	@# reproduces it on demand.
-	@#
-	@# The lock must be held for the WHOLE run and acquired before the first
-	@# sqlite connection. Locking only around the pytest call is not enough --
-	@# both processes had already opened the database by that point.
+	@# with_testmon_lock.py serialises against a real cold-start race in
+	@# pytest-testmon's own DB layer, not decoration -- see its module docstring
+	@# and the failure ledger in AGENTS.md. The lock has to cover process
+	@# start-up and the first sqlite connection, so it cannot be moved inside
+	@# the pytest call. `make clean` reproduces the failure on demand.
 	@$(RUN) python scripts/with_testmon_lock.py $(RUN) pytest --testmon --no-cov --dist=loadfile
 
 coverage: ## Print terminal coverage report from last test run
@@ -137,28 +122,16 @@ zizmor: ## GitHub Actions SAST, medium+ severity (pre-push hook)
 	$(PREK) run zizmor --all-files --stage pre-push
 
 workflows: ## Validate every workflow: actionlint syntax + shellcheck on every run: body
-	@# actionlint shells out to shellcheck to lint every `run:` body. When
-	@# shellcheck is not on PATH, actionlint drops that rule and EXITS 0 --
-	@# its "Rule \"shellcheck\" was disabled" notice goes to the verbose log
-	@# (rhysd/actionlint linter.go: `log` returns early below LogLevelVerbose),
-	@# and the hook here does not pass -verbose. So on a machine without
-	@# shellcheck this target reports success having checked no shell at all.
-	@# Silent, green, and coverage-free is the exact shape of bug this repo
-	@# fails closed against, so the dependency is asserted instead of assumed.
+	@# actionlint shells out to shellcheck for every `run:` body, and without
+	@# shellcheck on PATH it drops that rule and EXITS 0 -- the notice only goes
+	@# to the verbose log, which this hook does not enable. So the dependency is
+	@# asserted below rather than assumed: a gate that cannot run must not be
+	@# able to report success.
 	@#
-	@# There is no separate YAML parse here, and there never should be. This
-	@# target used to run `uv run python -c "import yaml; ..."` before
-	@# actionlint, which made it fail on every invocation: pyyaml is in neither
-	@# pyproject.toml nor uv.lock, so the import raised ModuleNotFoundError and
-	@# make exited 2. The documented gate was unrunnable and nothing called it,
-	@# which is how it stayed that way. See the failure ledger in AGENTS.md.
-	@#
-	@# The parse is also redundant, which is the part worth recording. actionlint
-	@# parses each workflow before linting it and exits 1 on a syntax error
-	@# (verified against a bad block indent and an unclosed flow sequence), and
-	@# the check-yaml hygiene hook already parses every YAML file in the
-	@# repository at commit stage, workflows included. Two owners for one check
-	@# is how a check drifts out of sync with the tool that actually runs it.
+	@# There is no separate YAML parse here, and there never should be:
+	@# actionlint parses each workflow and exits 1 on a syntax error, and the
+	@# check-yaml hook already parses every YAML file at commit stage. Two owners
+	@# for one check is how a check drifts. See the failure ledger in AGENTS.md.
 	@command -v shellcheck >/dev/null 2>&1 || { \
 		echo "error: shellcheck not found on PATH; 'make workflows' would pass without linting any run: body"; \
 		echo "       install it (macOS: brew install shellcheck) or let CI be the gate"; \
@@ -212,10 +185,9 @@ build: ## Build wheel + sdist into dist/
 	$(UV) build
 
 binary: ## Build standalone binary with pyinstaller
-	@# Flags mirror the release pipeline in .github/workflows/cd.yml. `--clean`
-	@# and `--noconfirm` matter for correctness, not tidiness: without them a
-	@# stale build/ directory can be reused and silently produce a binary that
-	@# does not match the current source.
+	@# Flags mirror .github/workflows/cd.yml. `--clean`/`--noconfirm` are
+	@# correctness, not tidiness: without them a stale build/ can be reused and
+	@# silently produce a binary that does not match current source.
 	$(RUN) pyinstaller --onefile --clean --noconfirm \
 		--name bigdata-mcp --paths src src/bigdata_mcp/main.py
 	@./dist/bigdata-mcp && echo "binary built and smoke tested: dist/bigdata-mcp"
@@ -225,8 +197,8 @@ binary: ## Build standalone binary with pyinstaller
 clean: ## Remove caches, coverage data and build artifacts
 	rm -rf build dist .pytest_cache .ruff_cache .mypy_cache \
 	       .complexipy_cache htmlcov .coverage .testmondata *.egg-info
-	# The -wal and -shm sidecars must go with .testmondata. Leaving them behind
-	# makes sqlite replay them into a fresh db on the next run.
+	# The -wal and -shm sidecars must go with .testmondata: leaving them behind
+	# makes sqlite replay them into a fresh db.
 	rm -f .testmondata-wal .testmondata-shm
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
 

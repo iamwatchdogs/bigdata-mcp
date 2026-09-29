@@ -68,18 +68,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Page through every open unassigned alert. `--paginate` is required
-          # because the default page is 30 and a repository accumulates more
-          # than that; silently assigning only the first page would leave
-          # findings looking deliberately unowned.
+          # Page through every open unassigned alert: the default page is 30, and
+          # assigning only the first page would leave findings looking
+          # deliberately unowned.
           #
-          # No `--slurp`: `gh api` rejects `--slurp` together with `--jq`
-          # ("the `--slurp` option is not supported with `--jq` or
-          # `--template`") and exits non-zero, so with `set -e` the whole step
-          # aborted before assigning anything. It is not needed either --
-          # `--paginate` applies `--jq` to EACH page, and each page is already a
-          # top-level array, so the filter is a single `.[]` rather than
-          # `.[][]`.
+          # No `--slurp`: `gh api` rejects it together with `--jq` and exits
+          # nonzero, so with `set -e` the step aborted before assigning anything.
+          # It is not needed either -- `--paginate` applies `--jq` to EACH page,
+          # and each page is already a top-level array.
           alerts="$(
             gh api --paginate \
               "/repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=open&assignees=none&per_page=100" \
@@ -91,10 +87,10 @@ jobs:
             exit 0
           fi
 
-          # --silent keeps the full alert payloads, which include the matched
-          # source snippets, out of the workflow log. A code-scanning finding
-          # is a statement about a vulnerability, and routine CI logs are the
-          # wrong place to publish it.
+          # --silent keeps the alert payloads, which include the matched source
+          # snippets, out of the workflow log. A code-scanning finding is a
+          # statement about a vulnerability, and routine CI logs are the wrong
+          # place to publish it.
           while read -r number; do
             gh api \
               --method PATCH \

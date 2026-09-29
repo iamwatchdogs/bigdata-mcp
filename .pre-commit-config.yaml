@@ -1,12 +1,10 @@
 default_language_version:
   python: python3.14
 
-# Install shims for both stages: fast checks gate every commit, the security
-# gate (zizmor / osv-scanner / gitleaks) runs once per push.
 default_install_hook_types: [pre-commit, pre-push]
 
-# Hooks without an explicit `stages:` run at commit time only, so the security
-# hooks below never slow down routine commits.
+# Unstaged hooks run at commit time only, so the security hooks below never
+# slow down routine commits.
 default_stages: [pre-commit]
 
 exclude: ^(build|dist|\.eggs|\.git|\.hg|\.tox|\.venv|_build|buck-out)$
@@ -82,28 +80,17 @@ repos:
     hooks:
       - id: actionlint
         name: "lint github actions workflows"
-        # Default file set (.github/workflows/**) is correct. Do not broaden
-        # this to other YAML under .github/: dependabot.yml is not an Actions
-        # workflow, and actionlint's parser rejects its top-level `updates:`
-        # key as an unknown workflow section. dependabot.yml is validated by
-        # `check-yaml` (pre-commit-hooks) instead.
+        # The default file set is correct. Do not broaden it to other YAML under
+        # .github/: actionlint's parser rejects dependabot.yml's top-level
+        # `updates:` key. `check-yaml` validates that file instead.
 
   - repo: local
     hooks:
       - id: pytest-testmon
         name: pytest-testmon on changed Python files
-        # Routed through `make testmon` rather than inlining the command, so the
-        # hook and the Makefile can never drift — the same single-source rule
-        # the rest of this file and the Makefile are built around.
-        #
-        # The flags live in the Makefile target because `--no-cov` is
-        # load-bearing: testmon runs a *subset* of the suite, so a coverage
-        # percentage over that subset is not a meaningful number, and when
-        # testmon selects nothing at all coverage is 0%, which made
-        # `[tool.coverage.report] fail_under` fail the commit hook for a reason
-        # unrelated to the code under review. The floor is enforced by the full
-        # suite instead: `make test` locally, and the pytest invocation in the
-        # CI matrix.
+        # Routed through `make testmon` so the hook and the Makefile cannot
+        # drift. The flags, including the load-bearing `--no-cov`, are
+        # documented on that target.
         entry: make testmon
         language: system
         files: ^(tests|src)/.*\.py$
@@ -111,65 +98,42 @@ repos:
 
       - id: bandit
         name: "security bandit (python security analysis)"
-        # Codacy reported Bandit on every pull request as an advisory finding
-        # that nothing failed on, and its config has since been removed from
-        # this repository. This makes the same class of finding fail closed
-        # locally, at commit time.
+        # Codacy's bandit config was removed, so this makes the same class of
+        # finding fail closed locally. See `[tool.bandit]` in pyproject.toml.
         #
-        # This hook has no `stages:` key, so `default_stages: [pre-commit]`
-        # applies and it runs on every commit, not on push. That is deliberate
-        # and is the stronger position: a commit-time gate catches the finding
-        # while it is still one keystroke from being undone. Do not add
+        # No `stages:` key, so `default_stages` applies and it runs on every
+        # commit. That is the stronger position: a commit-time gate catches a
+        # finding while it is one keystroke from being undone. Do not add
         # `stages: [pre-push]` here without also adding `--stage pre-push` to
-        # the `bandit` target in the Makefile. Either half on its own turns this
-        # into a target that runs nothing and reports success.
+        # the `bandit` target -- either half alone runs nothing and reports
+        # success.
         #
-        # The skip list lives in `[tool.bandit]` in pyproject.toml, where each
-        # entry carries its own justification, and `B602` (`shell=True`) is
-        # deliberately absent so the dangerous neighbour of `B603` is still a
-        # hard failure. Nothing parses that file to prove the list has not
-        # grown: a test asserting something about pyproject.toml is a contract
-        # test, and a contract test in tests/ is a test suite coupled to CI
-        # wiring. Reading the file is how a reviewer sees a new entry, because
-        # the justification sits beside it. Scoped to the first-party trees:
-        # `.venv` is excluded because `-r` is given explicit roots rather than a
-        # bare directory.
+        # The skip list lives in `[tool.bandit]`, where each entry carries its
+        # own justification, and `B602` is deliberately absent so `shell=True`
+        # stays a hard failure. No test guards that list: a contract test in
+        # tests/ would couple the suite to CI wiring, so reading the file is
+        # how a reviewer sees a new entry.
         #
-        # Bandit is installed HERE, in the hook's own environment, rather than
-        # as a project dev-dependency. That is not a packaging preference: as a
-        # dev-dependency it lands in uv.lock, and uv writes each sdist and wheel
-        # record as a single line, so a package with a long name or URL pushes
-        # those lines past the line-length limit that the third-party analysers
-        # enforce on a file that must never be hand-edited to satisfy a linter.
-        # The gate is worth having and the lock file is worth not churning, so
-        # the tool goes where the tool belongs. Pinned to an exact version for
-        # the same reason every other hook revision in this file is.
+        # Bandit lives in the hook's own environment, not in the dev group, so
+        # adding it as a dependency would churn uv.lock's single-line sdist and
+        # wheel records past the length limit the third-party analysers enforce
+        # on a file nobody may hand-edit. Pinned for the same reason as every
+        # other revision here.
         #
-        # The entry is a wrapper, not `bandit ...`, because Bandit's exit status
-        # is not a gate. 1.9.4 decides with `results_count(...) > 0` alone, and a
-        # file it cannot open or parse goes into `manager.skipped` and is never
-        # counted: a tree whose only Python file has a syntax error exits 0, and
-        # under `-q` prints nothing at all. scripts/bandit_gate.py reads the
-        # `errors` key that `-f json` writes from `manager.get_skipped()` and
-        # fails on it. Shell syntax cannot do that here: prek splits `entry` with
-        # `shlex` and execs the argv, so `|| exit 1` arrives as two arguments.
+        # The entry is a wrapper, not `bandit ...`: 1.9.4 decides with
+        # `results_count(...) > 0` alone, so a file it cannot open or parse goes
+        # into `manager.skipped` and is never counted -- a tree whose only
+        # Python file has a syntax error exits 0. The wrapper reads the `errors`
+        # key that `-f json` writes from `manager.get_skipped()`. Shell syntax
+        # cannot do that: prek `shlex`-splits `entry`, so `|| exit 1` arrives as
+        # two arguments. See the script's docstring.
         #
-        # `types: [file]`, not `[python]`. The two are ANDed, not ORed: pre-commit
-        # runs the `files` regex first and then requires the file's identify tags
-        # to be a superset of `types`. `pyproject.toml` tags as
-        # {file, non-executable, pyproject, text, toml} and carries no `python`
-        # tag, so `types: [python]` made the `|^pyproject\.toml$` branch above
-        # unreachable. The hook then did not run when `[tool.bandit]` changed,
-        # even though that file is the config it passes as `-c` -- the edit most
-        # able to weaken the gate was the one edit that could not trigger it.
-        # `file` is the tag identify puts on every path, so the `files` regex
-        # becomes the sole filter and selects exactly what it already said.
-        #
-        # The wrapper invokes `sys.executable -m bandit`, which is this hook
-        # environment's own interpreter and therefore the copy of bandit that
-        # `additional_dependencies` installed. The `bandit` on PATH is checked
-        # separately only so its absence is a stated failure rather than a
-        # traceback.
+        # `types: [file]`, not `[python]`. The two are ANDed, not ORed, and
+        # `pyproject.toml` carries no `python` tag -- so `types: [python]` made
+        # the `|^pyproject\.toml$` branch unreachable, and the edit most able to
+        # weaken the gate was the one edit that could not trigger it. `file` is
+        # the tag identify puts on every path, so `files` becomes the sole
+        # filter.
         entry: python scripts/bandit_gate.py
         language: python
         additional_dependencies: ["bandit==1.9.4"]
@@ -177,10 +141,8 @@ repos:
         types: [file]
         pass_filenames: false
 
-  # ---------------------------------------------------------------------------
   # Security gate — pre-push stage. Local replicas of the CI security
-  # workflows so insecure code never leaves the machine
-  # ---------------------------------------------------------------------------
+  # workflows so insecure code never leaves the machine.
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
     rev: v1.30.1
     hooks:
@@ -211,23 +173,15 @@ repos:
         name: "security codacy (SAST + complexity)"
         # `codacy-cli analyze` exits 0 in every case that matters -- clean tree,
         # a confirmed finding, a missing config, a malformed one -- so its exit
-        # status cannot be the gate. scripts/codacy_gate.py reads the finding
-        # count out of SARIF instead, and treats an unreadable report as a
-        # failure rather than as zero findings.
+        # status cannot be the gate. The wrapper reads the finding count out of
+        # SARIF instead and treats an unreadable report as a failure, not as
+        # zero findings. It is also a wrapper for staging: the analyser has no
+        # exclusion mechanism and silently skips a directory named `tests`, so
+        # the gate copies the trees into a temp directory and renames `tests`.
         #
-        # It is a wrapper rather than a bare `codacy-cli analyze` for two
-        # measured reasons. The analyser walks the current directory with no
-        # exclusion mechanism -- `exclude_paths` in .codacy/codacy.yaml is
-        # ignored -- so it spent 9m11s producing 860 findings that were all
-        # inside .venv, against 1m12s and 0 findings for the same config over
-        # the source trees alone. And it skips a directory named `tests`
-        # silently, which is half the first-party Python here. The gate stages
-        # the trees into a temporary directory, renaming `tests` as it goes.
-        # Its reasoning, and the measurements behind it, are in the script.
-        #
-        # Every finding fails. There is no suppression list: a baseline is what
+        # Every finding fails. There is no baseline: a suppression list is what
         # makes a security gate report the same green line while the thing it
-        # guards has changed.
+        # guards has changed. See the script's docstring.
         entry: uv run python scripts/codacy_gate.py
         language: system
         pass_filenames: false
@@ -236,31 +190,17 @@ repos:
 
       - id: coderabbit-advisory
         name: "advisory coderabbit (stored findings, no cloud call)"
-        # Advisory only, and never blocking. It prints findings left by an
-        # earlier `coderabbit review` and always exits 0, for two measured
-        # reasons.
+        # Advisory only, and never blocking. `coderabbit review` is a cloud LLM
+        # call -- non-deterministic, billable, and quota'd to 3 per hour -- so
+        # it does not belong in a pre-push gate. `coderabbit review findings` is
+        # the local half: it reads ~/.coderabbit/ and was verified to work with
+        # the network blocked. The caveat is that its findings belong to the
+        # LAST review, not to the commits being pushed, so they can be stale --
+        # which is exactly why a stale advisory prints but never blocks.
         #
-        # `coderabbit review` is a cloud LLM call: `doctor` lists a reachable
-        # backend and WebSocket as prerequisites, `--remote` reviews "on the
-        # server without a local checkout", and the account has 3 reviews per
-        # hour. A non-deterministic, billable command does not belong in a
-        # pre-push gate, so it is not run here.
-        #
-        # `coderabbit review findings` is the local half. It reads
-        # ~/.coderabbit/ and was verified to work with the network blocked --
-        # every proxy pointed at a dead port -- while `coderabbit doctor` under
-        # those same conditions reports "Cannot reach https://app.coderabbit.ai"
-        # and exits nonzero. So this costs no credits and no inference.
-        #
-        # Its limit is stated here because it is the whole caveat: these are the
-        # findings of the LAST review, not of the commits being pushed, so they
-        # can be stale. A stale advisory is still worth printing; a stale one
-        # that blocks a push is not.
-        #
-        # A wrapper, not `coderabbit review findings || true`: prek does not run
-        # an entry through a shell, so that arrives as two literal CLI arguments
-        # and fails with "too many arguments for 'findings'". The script owns
-        # the exit status instead.
+        # A wrapper, not `coderabbit review findings || true`: prek does not
+        # shell out an `entry`, so that arrives as two literal CLI arguments.
+        # The script owns the exit status. See its docstring.
         entry: uv run python scripts/coderabbit_advisory.py
         language: system
         pass_filenames: false

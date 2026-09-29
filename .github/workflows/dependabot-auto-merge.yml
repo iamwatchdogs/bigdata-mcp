@@ -59,12 +59,11 @@ jobs:
             reason="github-actions ecosystem is never auto-merged"
 
           elif [ "$PACKAGE_ECOSYSTEM" = "pre-commit" ]; then
-            # Required CI does not exercise the full hook set. The prek-action
+            # Required CI does not exercise the full hook set: the prek-action
             # step in ci.yml skips actionlint, and the pre-push-only hooks
-            # (zizmor, osv-scanner, gitleaks) never run in CI at all, so a
-            # green pipeline is not evidence that a bumped hook still works.
-            # Excluded before the generic semver-patch branch, because patches
-            # have the same coverage hole as minors.
+            # (zizmor, osv-scanner, gitleaks) never run in CI at all. A green
+            # pipeline is not evidence that a bumped hook still works, and
+            # patches have the same hole as minors.
             reason="pre-commit hooks are not fully exercised by required CI"
 
           elif [ "$PACKAGE_ECOSYSTEM" = "docker" ]; then
@@ -73,9 +72,9 @@ jobs:
             reason="docker ecosystem is not used by this repository"
 
           elif [ "$UPDATE_TYPE" = "version-update:semver-patch" ]; then
-            # The only eligible class. A patch is the one change that is
-            # contractually behaviour-preserving, and it is gated further by
-            # the full CI suite before the merge is allowed to complete.
+            # The only eligible class: a patch is the one change that is
+            # contractually behaviour-preserving, and it is still gated by the
+            # full CI suite before the merge completes.
             eligible=true
             reason="semver-patch"
 
@@ -90,8 +89,8 @@ jobs:
             echo "eligible=$eligible"
             # A heredoc delimiter, not a bare `echo "reason=$reason"`, so a
             # reason containing `=` or a newline cannot corrupt the
-            # GITHUB_OUTPUT key=value parse. Reasons are currently
-            # script-controlled and single-line, so this is belt-and-braces.
+            # GITHUB_OUTPUT parse. Belt-and-braces: reasons are script-controlled
+            # and single-line today.
             echo "reason<<REASON_EOF"
             echo "$reason"
             echo "REASON_EOF"
@@ -111,5 +110,4 @@ jobs:
           # is satisfied, so the required `CI Status` check still has to pass.
           # --admin is never used: it bypasses exactly the protection this
           # workflow is designed to respect.
-          #   https://cli.github.com/manual/gh_pr_merge
           gh pr merge --auto --squash "$PR_URL"

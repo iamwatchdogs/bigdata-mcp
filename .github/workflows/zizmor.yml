@@ -22,9 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      security-events: write # upload findings to the Security tab
-      contents: read          # checkout
-      actions: read           # read workflow metadata for the SARIF upload
+      security-events: write
+      contents: read
+      actions: read # read workflow metadata for the SARIF upload
 
     steps:
       - name: Check out the repo

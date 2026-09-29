@@ -21,10 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      security-events: write # upload SARIF findings to the Security tab
-      packages: read         # fetch private or internal CodeQL packs
-      actions: read          # private repos: read workflow metadata for SARIF
-      contents: read         # checkout
+      security-events: write
+      packages: read # fetch private or internal CodeQL packs
+      actions: read  # private repos: read workflow metadata for SARIF
+      contents: read
 
     strategy:
       fail-fast: false

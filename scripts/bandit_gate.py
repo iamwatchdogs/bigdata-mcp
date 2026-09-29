@@ -1,65 +1,46 @@
 """Fail-closed Bandit gate for the commit stage.
 
 Bandit's exit status cannot be the gate, for the same reason Codacy's cannot.
-In 1.9.4 the CLI decides with `results_count(...) > 0` and nothing else, and a
+On 1.9.4 the CLI decides with `results_count(...) > 0` and nothing else, so a
 file it never managed to read contributes no result and no failure. Measured
-against this repository's own configuration, on 1.9.4:
+against this repository's own config: a tree whose only Python file has a syntax
+error exits **0**; a file at mode `000` exits **0**, and so does the same file at
+`644` once readable again; a non-UTF-8 file is skipped; a real
+`subprocess.run(..., shell=True)` gives a B602 finding at `644` and nothing at
+`000`. `-q` is not the cause -- without it Bandit prints `Files skipped (1):` at
+INFO and still exits 0.
 
-- a tree whose only Python file has a syntax error exits **0**
-- a file made unreadable with `chmod 000` exits **0**, and so does the same file
-  at mode `644` when it is made readable again -- the verdict flips on the
-  permission bits, not on the content
-- a file that is not valid UTF-8 is skipped as a syntax error rather than read
-- a file holding a real `subprocess.run(..., shell=True)` produces a B602
-  finding at mode `644` and nothing at all at mode `000`
+`check-ast` does not cover the gap: it sees only the files in the commit, while
+this scan has `pass_filenames: false` and covers all three roots at once, so a
+file broken by a merge -- syntax intact in every individual parent -- is exactly
+the case it misses.
 
-So the file is not scanned, and the finding it would have produced is invisible
-to the gate. `check-ast` does not cover the gap: it is a stock `pre-commit-hooks`
-hook that sees only the files in the commit, while this scan has
-`pass_filenames: false` and covers all three roots at once -- so a file broken by
-a merge, with its syntax intact in every individual parent, is exactly the case
-it misses.
+The skip list is not lost, only off the exit path. `-f json` writes every skipped
+file to the top-level `errors` key, which `bandit/formatters/json.py` fills
+directly from `manager.get_skipped()`; this reads it and fails on a non-empty
+list. Hence two runs: the bare command, so the report a developer reads is
+unchanged, and a second with `-f json` for the skip list and the finding count.
+Bandit exits 1 for any nonzero finding count, so its status is not a count and
+must never be printed as one. The pair costs about 0.25s.
 
-The `-q` in the command line is not the cause and is worth being precise about.
-Without it, Bandit prints `Files skipped (1):` at INFO -- and still exits 0. The
-exit status is 0 either way; `-q` only removes the one notice that said a file had
-gone unread. The status is decided by `results_count`.
+Bandit is called as a bare name rather than `sys.executable -m bandit` because
+Opengrep's `dangerous-subprocess-use-audit` rule exempts a literal argv and
+reports anything else -- the `sys.executable` form included. pre-commit prepends
+the hook's venv `bin` to `PATH` via its own `get_env_patch`, so the bare name and
+the `shutil.which` above resolve to the same copy and cannot disagree about which
+binary is meant. That is also why an absent `bandit` cannot raise here: `which`
+reports it as a stated failure first, and a child's nonzero exit plus an empty
+report is read as unknown.
 
-The skip list is not lost, it is just not on the exit path. `-f json` writes every
-skipped file to the top-level `errors` key, and `bandit/formatters/json.py` fills
-that key directly from `manager.get_skipped()`. This reads it and fails on a
-non-empty list.
-
-Two runs, not one. The first is the bare command the hook used before, so the
-report a developer reads on a finding is unchanged. The second adds `-f json`,
-which is where both the skip list and the real finding count come from: Bandit
-exits 1 for any nonzero number of findings, so its exit status is not a count and
-must never be printed as one. The scan takes about 0.1s over `src scripts tests`
-here, so the pair costs about 0.25s.
-
-Bandit is invoked as a bare name rather than as `sys.executable -m bandit`. That
-is not a style preference: Opengrep's `dangerous-subprocess-use-audit` rule
-exempts a literal argv and reports anything else, and the `sys.executable` form
-is not exempt either. The hook's venv `bin` is prepended to `PATH` by
-pre-commit's own `get_env_patch`, so the bare name and the `shutil.which` above
-resolve to the same copy of bandit that `additional_dependencies` installed, and
-the check and the call cannot disagree about which binary is meant.
-
-That is also why an absent `bandit` cannot raise here: `which` reports it as a
-stated failure first, and if it were somehow reached anyway the failure is a
-child's nonzero exit and an empty report, which is read as unknown. `PATH` is
-still checked so the most common cause is named rather than inferred.
-
-**What this does not cover.** `errors` is initialised as `[]` and filled in a
+**What this does not cover.** `errors` is initialised `[]` and filled in a
 separate loop, so an upstream refactor that stopped populating it would look
-exactly like a scan that skipped nothing. The missing-key case is rejected, the
+exactly like a scan that skipped nothing. The missing-key case is rejected; the
 starved-key case is indistinguishable from clean by any consumer of this format.
 That is a property of Bandit's report, not a choice here, and it is recorded so
 nobody reads a green line as stronger evidence than it is.
 
-Refusing to run is a failure, not a pass. Bandit exiting 2 -- an unreadable
-config, an empty profile -- or emitting JSON this cannot read means the skip list
-is unknown, and unknown is not the same as clean.
+Refusing to run is a failure, not a pass: Bandit exiting 2, or JSON this cannot
+read, means the skip list is unknown, and unknown is not clean.
 """
 
 from __future__ import annotations
@@ -70,13 +51,12 @@ import subprocess  # ruff: ignore[suspicious-subprocess-import]
 import sys
 from typing import Any
 
-# The trees this repository owns. `.venv` is deliberately absent: `-r` is given
-# explicit roots rather than a bare directory, which is the only exclusion lever
-# Bandit has, and every finding inside `.venv` is about a third-party package.
+# Explicit roots rather than a bare directory: that is Bandit's only exclusion
+# lever, and every finding inside `.venv` is about a third-party package.
 ROOTS = ["src", "scripts", "tests"]
 
-# Read from the same file the hook already lints, so the reviewed skip list in
-# `[tool.bandit]` and the gate can never describe different configurations.
+# Read from the same file the hook lints, so the reviewed skip list in
+# `[tool.bandit]` and this gate can never describe different configurations.
 CONFIG = "pyproject.toml"
 
 TIMEOUT_SECONDS = 300
@@ -90,13 +70,10 @@ def _fail(message: str) -> int:
 def _run(extra: tuple[str, ...]) -> subprocess.CompletedProcess[str] | None:
     """Run Bandit once through the copy this hook's environment installed.
 
-    The argv's first element is a bare literal for the same reason
-    `scripts/coderabbit_advisory.py` spells its own out: Opengrep's
-    `dangerous-subprocess-use-audit` rule exempts a literal argv and reports
-    anything else, and a `sys.executable`-relative one is not exempt either --
-    measured, both shapes are reported. `shutil.which` above resolved the same
-    name through the same PATH, since the hook's venv `bin` is prepended to it,
-    so the check and the call cannot disagree about which binary is meant.
+    The literal argv is for Opengrep's `dangerous-subprocess-use-audit` rule,
+    which exempts a literal argv and reports anything else -- the
+    `sys.executable` form included. `shutil.which` above resolved the same name
+    through the same PATH, so the check and the call cannot disagree.
 
     Args:
         extra: Additional arguments for this run, such as ``-f json``.
@@ -205,12 +182,11 @@ def _lines(errors: list[Any]) -> list[str] | None:
 def _read(machine: subprocess.CompletedProcess[str] | None) -> Scan:
     """Read what a JSON scan skipped and how many findings it reported.
 
-    The ``errors`` key is populated from ``manager.get_skipped()`` by the JSON
-    formatter, so the skip list is the analyser reporting its own blind spot
-    rather than this script inferring one. The finding count comes from
-    ``results`` for the same reason: Bandit's exit status is 1 for any nonzero
-    number of findings, so printing the status as a count would be wrong on
-    every run that found more than one.
+    The skip list is the analyser reporting its own blind spot, taken from
+    ``errors`` (populated from ``manager.get_skipped()``). The count comes from
+    ``results`` because Bandit's exit status is 1 for any nonzero number of
+    findings, so printing the status as a count would be wrong on every run that
+    found more than one.
 
     Args:
         machine: The completed process from the ``-f json`` run.
@@ -240,9 +216,9 @@ def main() -> int:
     Returns:
         ``0`` when Bandit read every file it was given and found nothing, and
             ``1`` in every other case -- a finding, a file the scan could not
-            read, Bandit unable to run, or a report this cannot read. There is no
-            third status: a non-zero result and an unknown result both fail the
-            commit, and the difference is in the message, not the exit code.
+            read, Bandit unable to run, or a report this cannot read. A non-zero
+            result and an unknown result both fail the commit; the difference is
+            in the message, not the exit code.
     """
     if shutil.which("bandit") is None:
         return _fail(
@@ -285,7 +261,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # `python3 scripts/bandit_gate.py` and `python scripts/bandit_gate.py` are
-    # both valid invocations, so the shebang is not load-bearing here. Kept for
-    # consistency with the other scripts in this directory.
     sys.exit(main())
