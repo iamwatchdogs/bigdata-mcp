@@ -203,6 +203,23 @@ claim rather than re-deriving it.
   checker that could see them and one that could not. Verify with
   `uvx pyright@1.1.414` over the file with the `reportUnknown*` rules set to
   `warning`; the CLI does not reproduce the editor's configuration otherwise.
+- **A type checker reading `src/` cannot tell whether the package ships its
+  types.** `src/bigdata_mcp/` is annotated and `make typecheck` is strict, but
+  nothing in the local gates asks whether a *consumer* would see those
+  annotations — `ty` reads the source tree, and the marker that hands them on is
+  a separate file. Without `src/bigdata_mcp/py.typed`, mypy reports
+  `import-untyped` and then **skips the package entirely**, so every annotation
+  in `src/` is invisible downstream while this repository stays green. That is
+  why `tests/test_package_metadata.py` exists. Two things make it easy to lose:
+  a tidy-up that deletes "empty" files, and putting it at `src/py.typed`
+  instead of inside the package directory, where a checker resolving the
+  installed package never sees it. The build is not a second owner to trust
+  blind either — hatchling honours `.gitignore` by default (`ignore-vcs` is
+  `False`), so the mechanism that would drop it from the wheel is live and only
+  happens not to fire: the same build excludes `bigdata-mcp.spec` because of
+  `.gitignore`'s `*.spec`. Verify with `uv build` and read the artifact's
+  listing; a wheel is the only place a consumer can lose the marker, and CI
+  builds no wheel at all.
 
 ## Testing instructions
 
