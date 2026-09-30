@@ -139,7 +139,7 @@ reviews:
     # attested artifact traced to a commit. `autofix` defaults to true and is
     # the one most likely to be re-enabled by muscle memory, so it is pinned.
     autofix:
-      enabled: false
+      enabled: true
     simplify:
       enabled: false
     resolve_merge_conflict:
@@ -153,8 +153,8 @@ reviews:
 
   # Both default to false and stay false; `auto_apply_labels` specifically
   # because labelling a PR is a write.
-  auto_apply_labels: false
-  auto_assign_reviewers: false
+  auto_apply_labels: true
+  auto_assign_reviewers: true
   suggested_reviewers: true
 
   # Stated explicitly as empty rather than left to the default: a path filter is
