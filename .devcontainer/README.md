@@ -168,12 +168,12 @@ fail the next run in a way that looks like a toolchain problem.
 
 The devcontainer suffixes each volume with a computed id, so the names an
 editor-created container uses are **not** the three below; they are the same
-three words plus a hyphen and an opaque hash, and `docker volume ls | grep -E
+three words plus a hyphen and an opaque hash, and `docker volume ls --format '{{.Name}}' | grep -E
 '^(venv|uv-cache|prek)-'` will list them. The volumes in the `docker run`
 command above have no such suffix and are safe to name directly.
 
 ```bash
-docker volume ls | grep -E '^(venv|uv-cache|prek)-|^Docker (volume )?(venv|uvcache|prek)$'
+docker volume ls --format '{{.Name}}' | grep -E '^(venv|uv-cache|prek)-|^Docker (volume )?(venv|uvcache|prek)$'
 docker volume rm venv uvcache prek                  # then: rebuild
 ```
 
