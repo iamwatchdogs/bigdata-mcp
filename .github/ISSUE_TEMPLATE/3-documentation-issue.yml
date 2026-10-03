@@ -1,0 +1,83 @@
+name: Documentation issue
+description: Something in the docs is missing, incorrect, or misleading.
+title: "[Docs]: "
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Thank you for improving the docs
+
+        Clear reports make fixes fast: point at the exact file or section, say
+        what is wrong, and paste the misleading text if you can.
+
+  - type: checkboxes
+    id: existing-issue
+    attributes:
+      label: Is there an existing issue for this?
+      options:
+        - label: I have searched the open and closed issues
+          required: true
+
+  - type: dropdown
+    id: issue-type
+    attributes:
+      label: What kind of issue is it?
+      multiple: true
+      options:
+        - Documentation is missing
+        - Documentation is incorrect
+        - Documentation is confusing
+        - Example or command does not work
+        - Something else
+
+  - type: textarea
+    id: what-is-the-issue
+    attributes:
+      label: What is the issue?
+      description: >
+        What is missing, wrong, or misleading? If a command or example does not
+        work, include what you ran and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: where-did-you-find-it
+    attributes:
+      label: Where did you find it?
+      description: >
+        File path, section heading, or page URL. Paste the text you expected to
+        be different.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ai-assistance
+    attributes:
+      label: AI assistance
+      description: >
+        Disclosure required: name the tool(s) used for this report, if any.
+        Undisclosed assistance may get the issue closed.
+      multiple: true
+      options:
+        - No AI assistance
+        - Claude Code
+        - GitHub Copilot
+        - Cursor
+        - Other (named below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Anything else we should know, including which tool you used if "Other" was selected.
+
+  - type: checkboxes
+    id: code-of-conduct
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow this project's Code of Conduct
+          required: true

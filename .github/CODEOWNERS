@@ -1,0 +1,9 @@
+# Every path requires @iamwatchdogs as an owner.
+#
+# The first non-comment line must be this whole-repo wildcard: a narrower first
+# line leaves the remaining paths with no required reviewer, and CODEOWNERS is
+# evaluated top-down. Locked by tests/test_repo_contracts.py.
+* @iamwatchdogs
+
+# The owners file gates itself, so an attacker cannot quietly reassign review.
+/.github/CODEOWNERS @iamwatchdogs

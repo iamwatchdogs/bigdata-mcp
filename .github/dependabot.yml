@@ -1,0 +1,75 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions-patch:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+      github-actions-minor-major:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - major
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    versioning-strategy: increase
+    cooldown:
+      default-days: 7
+    groups:
+      uv-patch:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+      uv-minor-major:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - major
+
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      pre-commit-patch:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+      pre-commit-minor-major:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - major
+
+  # The devcontainer's base image, pinned by tag and digest in
+  # .devcontainer/Dockerfile. Dependabot rewrites the digest in a pull request
+  # rather than moving the pin silently, so the build stays reproducible and the
+  # change stays reviewable.
+  #
+  # No `groups` here, unlike the three ecosystems above. Those split a batch of
+  # updates into patch and minor-major, which only earns its keep when several
+  # manifests are in play. This directory holds one FROM line, so there is
+  # nothing to group and the key would read as protection that is not there.
+  - package-ecosystem: docker
+    directory: /.devcontainer
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

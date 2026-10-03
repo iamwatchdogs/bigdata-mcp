@@ -1,0 +1,7 @@
+# Normalise line endings for every text file in the repository.
+#
+# Without this, the same file content checks out with CRLF on Windows and LF
+# everywhere else, so identical changes produce different diffs per machine.
+# `text=auto` lets git detect binary content, and `eol=lf` pins what lands in
+# the working tree. Locked by tests/test_repo_contracts.py.
+* text=auto eol=lf

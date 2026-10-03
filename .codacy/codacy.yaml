@@ -1,0 +1,6 @@
+runtimes:
+    - python@3.13.2
+tools:
+    - opengrep@1.16.4
+    - pylint@3.3.6
+    - lizard@1.17.31

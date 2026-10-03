@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and discussions
+    url: https://github.com/iamwatchdogs/bigdata-mcp/discussions
+    about: Ask questions and discuss ideas in GitHub Discussions.
+  - name: Security vulnerabilities
+    url: https://github.com/iamwatchdogs/bigdata-mcp/security/advisories/new
+    about: Report vulnerabilities privately. Please do not open a public issue.

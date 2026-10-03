@@ -1,0 +1,100 @@
+name: Feature request
+description: Suggest an improvement or new capability for bigdata-mcp.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Thank you for suggesting a feature
+
+        Lead with the problem you are trying to solve, not the solution you have
+        in mind. The clearest requests state the problem, the evidence that it
+        affects others, and what "done" would look like.
+
+  - type: checkboxes
+    id: existing-request
+    attributes:
+      label: Is there an existing request for this?
+      options:
+        - label: I have searched the open and closed issues
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem this feature would solve
+      description: >
+        Describe the problem or limitation, not the solution. A problem
+        statement is reusable even if the proposed approach is not.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence of the problem
+      description: >
+        How do you know this affects others? Real usage, a link to a
+        discussion, or concrete scenarios all count.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: What would you like to happen? Describe the outcome you expect.
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: >
+        What must be true when this is done? Write it so a coding agent or a
+        new contributor could verify it — specific commands that must succeed,
+        or behaviours that must hold.
+      placeholder: |
+        - [ ] `bigdata-mcp ...` does X
+        - [ ] Tests cover Y
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Willingness to contribute
+      description: Optional, but useful to know.
+      options:
+        - label: I am willing to help implement this feature
+
+  - type: dropdown
+    id: ai-assistance
+    attributes:
+      label: AI assistance
+      description: >
+        Disclosure required: name the tool(s) used for this request, if any.
+        Undisclosed assistance may get the issue closed.
+      multiple: true
+      options:
+        - No AI assistance
+        - Claude Code
+        - GitHub Copilot
+        - Cursor
+        - Other (named below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Anything else we should know, including which tool you used if "Other" was selected.
+
+  - type: checkboxes
+    id: code-of-conduct
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow this project's Code of Conduct
+          required: true

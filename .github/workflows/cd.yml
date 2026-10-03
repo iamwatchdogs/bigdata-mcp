@@ -1,0 +1,107 @@
+name: CD
+
+on:
+  push:
+    tags:
+      - "v*"
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: CI (reusable)
+    permissions:
+      contents: read
+    with:
+      run-all: true
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write     # OIDC, for signing the provenance attestation
+      attestations: write # publish the attestation
+
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: bigdata-mcp-linux
+          - os: windows-latest
+            asset: bigdata-mcp-windows.exe
+          - os: macos-latest
+            asset: bigdata-mcp-macos
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup uv with Python 3.14
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
+          cache-python: false
+
+      - name: Setup project
+        run: uv sync --locked
+
+      - name: Build onefile binary with PyInstaller
+        run: >
+          uv run pyinstaller --onefile --clean --noconfirm
+          --name "${{ matrix.asset }}"
+          --paths src
+          src/bigdata_mcp/main.py
+
+      - name: Smoke test the binary
+        shell: bash
+        run: |
+          ./dist/"${{ matrix.asset }}"
+          echo "smoke test passed: ${{ matrix.asset }}"
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/${{ matrix.asset }}
+
+      - name: Upload binary as workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    name: Publish to GitHub release
+    needs: [ci, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create or update release and upload assets
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ github.event.release.tag_name || github.ref_name }}
+          files: dist/*
+          generate_release_notes: true

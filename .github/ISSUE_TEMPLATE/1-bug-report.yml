@@ -1,0 +1,136 @@
+name: Bug report
+description: Something in bigdata-mcp is broken or behaves unexpectedly.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Thank you for reporting a bug
+
+        The more precise the report, the faster the fix. Two things help most:
+        paste the real output instead of describing it from memory, and confirm
+        the bug still happens on the latest `main` — it may already be fixed.
+
+  - type: checkboxes
+    id: existing-issue
+    attributes:
+      label: Is there an existing issue for this?
+      options:
+        - label: I have searched the open and closed issues
+          required: true
+
+  - type: checkboxes
+    id: reproducibility
+    attributes:
+      label: Reproducibility
+      description: >
+        Ticking this confirms you checked the bug yourself, which saves a
+        round-trip of questions. If you are reporting against a released
+        binary rather than the source, tick the second option instead.
+      options:
+        - label: I can reproduce this on the latest `main`
+        - label: I am reporting against a released binary, so this does not apply
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Walk through it step by step, with the exact commands or code.
+      placeholder: |
+        1. Run `...`
+        2. With this configuration `...`
+        3. See this error `...`
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: What did you expect to happen?
+      description: A concise description of the behaviour you expected instead.
+
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: What actually happened?
+      description: >
+        Paste the real error or output. Do not paraphrase it — the exact text is
+        usually the most useful part of the report.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: >
+        Copy the output of `bigdata-mcp --version`. If you ran from source,
+        mention the commit you are on.
+      placeholder: "e.g. bigdata-mcp 0.1.0, or main @ abc1234"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      description: Which system did this happen on? The CI matrix covers Linux, macOS, and Windows.
+      multiple: true
+      options:
+        - Linux
+        - macOS
+        - Windows
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      description: >
+        The output of `python --version`. Only 3.14+ is supported. Leave blank if
+        you are reporting against a released binary, since the interpreter is
+        baked in and there is no Python on your machine.
+      placeholder: "Python 3.14.7"
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: >
+        Copied into a code block automatically, so no backticks needed. Redact
+        credentials, connection strings, and hostnames first.
+      render: shell
+
+  - type: dropdown
+    id: ai-assistance
+    attributes:
+      label: AI assistance
+      description: >
+        Disclosure required: name the tool(s) used for this report, if any.
+        AI-assisted content must be reviewed and edited by a human before
+        submission. Undisclosed assistance may get the issue closed.
+      multiple: true
+      options:
+        - No AI assistance
+        - Claude Code
+        - GitHub Copilot
+        - Cursor
+        - Other (named below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Anything else we should know, including which tool you used if "Other" was selected.
+
+  - type: checkboxes
+    id: code-of-conduct
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow this project's Code of Conduct
+          required: true
