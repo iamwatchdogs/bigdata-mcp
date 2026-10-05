@@ -3,8 +3,12 @@
 - **Spec ID:** `offline-first-foundation`
 - **Date:** 2026-10-06
 - **Author:** iamwatchdogs
-- **Status:** DRAFT — awaiting review
-- **Target branch:** new branch from `docs/spec-v2-scope-realignment`
+- **Status:** APPROVED 2026-10-06
+- **Target branch:** `feat/offline-first-foundation` (branched from `main`; the
+  stated `docs/spec-v2-scope-realignment` parent is merged, so its tip is `main`)
+- **Change IDs:** `C3`–`C8` below collide with the predecessor spec's `C1`–`C4`
+  (different work). This file's numbering is the live one for commits and PRs; the
+  predecessor's is closed.
 - **Follows:** [`scope-realignment-mcp-server-v2_20261005_124933.spec.md`](scope-realignment-mcp-server-v2_20261005_124933.spec.md) (D6, `SPEC.md` v2)
 
 ---

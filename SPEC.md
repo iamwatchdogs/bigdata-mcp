@@ -155,6 +155,7 @@ each one is a design input, not a preference.
 | **MCP clients sanitise the environment to ~6 variables** | `SSH_AUTH_SOCK`, `JAVA_HOME`, `HADOOP_CONF_DIR` etc. are dropped unless explicitly configured. `env:` is therefore an unreliable secret source. |
 | **MCP client `SIGTERM`s then `SIGKILL`s after ~4 s** | No in-memory credential refresh can span sessions. **This is what forces the Tier 0 CLI (§15.2) and the cross-process refresh lock (§15.7).** |
 | Default client request timeout is **60 s** | Every backend call must have a shorter internal timeout so we return a clean error instead of being severed. |
+| **Development has no access to the target estate.** It is built on a personal laptop that cannot reach HDFS, YARN, Solr, the corporate IdP, any portal, or the Kerberos realm | Every §18 item is the owner's to resolve. No test may require estate access — §17.2 gates this. The §4.3 golden corpus is captured **by the owner** and committed. Native SPNEGO stays unvalidated (§18.12); the `curl` path (§15.9) is the only one proven on the estate |
 
 ---
 
@@ -319,7 +320,9 @@ and are the highest-leverage work in the project.
    into a mechanical operation.
 5. **Build the golden fixture corpus in v1.** The native-vs-SSH differential test
    is only possible in v2 while both paths are reachable. This is not throwaway
-   work.
+   work. The corpus is produced by `bigdata-mcp capture-fixtures` against the real
+   estate, and its **schema** is built and versioned before its **contents** exist
+   (§17.2) — the format cannot move once captured fixtures are committed.
 6. **Semantic JSON Schema comparison, not byte golden files.** Pydantic and Go's
    generators will not emit identical bytes for the same logical model.
 
@@ -1899,6 +1902,16 @@ environment variable, and why §16 has no plaintext `env:` credential tier.
 | Cluster responses | golden fixtures | Captured from the real cluster. **Doubles as the v2 differential-test oracle.** |
 | stdout purity | CI integration test | Assert raw stdout is exactly one JSON object. |
 | Static | `ty` strict + `ruff` | Closes most of the Go gap. |
+
+**No test may require estate access.** The server is built on a personal laptop with
+no route to HDFS, YARN, Solr, the IdP, or any portal (§3). The substitute for the
+cluster is a **real local HTTP server bound to `localhost`** — §4.2's own instruction
+is that no third-party mock works on Python 3.14 for any candidate, so the tests run
+against an actual socket rather than a patched one. Fixtures are **owner-captured**:
+the implementer defines the format, the loader, and the capture tooling; only the
+owner supplies the bytes, from the estate, on their machine. A committed synthetic
+fixture is labelled `source = "synthetic"` and **does not validate a parser** — a
+parser proven only against synthetic data has not been proven.
 
 **Failpoint and negative tests — mandatory, and v1 had none.**
 

@@ -3,8 +3,13 @@
 - **Spec ID:** `scope-realignment-mcp-server-v2`
 - **Date:** 2026-10-05
 - **Author:** iamwatchdogs
-- **Status:** DRAFT — awaiting review
-- **Target branch:** `docs/spec-v2-scope-realignment` (branched from `main` at `a1adc9e`)
+- **Status:** APPROVED 2026-10-05 — delivered; `C1`, `C2` and `C1-test`, `C2-test`
+  landed in `f8756e5`/`dd747d7`, `C3` skipped (conditional, "if the repo wants one"),
+  and `C4+` deferred to
+  [`offline-first-foundation_20261006_015402.spec.md`](offline-first-foundation_20261006_015402.spec.md)
+- **Target branch:** `docs/spec-v2-scope-realignment` (branched from `main` at `a1adc9e`; merged in `c2d54b8`)
+- **Change IDs:** `C1`–`C4` here are **closed**. The successor spec reuses `C3`–`C8`
+  for different work; a bare "C4" in this repository's history means *this* file.
 - **Supersedes:** `SPEC.md` v1 (commit `baaa11b`), which remains readable at that commit
 
 ---
