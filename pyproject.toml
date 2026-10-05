@@ -36,6 +36,7 @@ dev = [
     "pytest-testmon>=2.2.0",
     "pytest-xdist>=3.8.0",
     "ruff>=0.16.9",
+    "time-machine>=2.19.0",
     "ty>=0.0.84",
 ]
 
