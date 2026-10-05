@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from typing import TypeVar
 
 from bigdata_mcp.engine.clock import Clock
 from bigdata_mcp.engine.clock import SystemClock
@@ -50,6 +51,10 @@ if TYPE_CHECKING:
 
     from bigdata_mcp.executor import ExecResult
     from bigdata_mcp.executor import Executor
+
+#: Only `gather_bounded` is generic, and it is generic because the stress tests use
+#: it to return whatever their factory returns. Nothing else in the engine is.
+T = TypeVar("T")
 
 #: The §16 default. Must undercut the client's 60 s so a clean error is returned
 #: rather than the connection being severed (§3).
@@ -277,7 +282,10 @@ class Probe:
         self.last_at = self._clock.now()
 
 
-async def gather_bounded[T](
+# `T = TypeVar("T")` rather than PEP 695's `def gather_bounded[T]`: Codacy's SAST
+# parser predates PEP 695, so the newer syntax is a file it cannot read at all.
+# See engine/singleflight.py.
+async def gather_bounded(  # ruff: ignore[non-pep695-generic-function] -- see engine/singleflight.py
     factory: Callable[[], Awaitable[T]],
     count: int,
 ) -> list[T]:

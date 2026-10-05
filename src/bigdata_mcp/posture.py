@@ -143,13 +143,11 @@ def portal_schema(
 
     This is §2.1's capability vocabulary and the reason the module exists: under
     `READ_ONLY` the returned schema has **no `method` key**, so no caller value can
-    express a write. Supplying `headers` under `READ_ONLY` is refused for the same
-    reason §14.2 refuses it -- a credential smuggled through a per-call field
-    bypasses the store that redacts it.
-
-    The portal's base URL is deliberately *not* a parameter. A base URL is session
-    state belonging to `session.py`, and a schema that carried one would invite a
-    caller to point the request somewhere the redirect allowlist never saw.
+    express a write, and per-call `headers` are refused for the same reason §14.2
+    refuses them -- a credential smuggled through a per-call field bypasses the
+    store that redacts it. The base URL is deliberately not a parameter: it is
+    session state belonging to `session.py`, and a schema carrying one would invite
+    a caller to point the request somewhere the redirect allowlist never saw.
 
     Args:
         name: Tool name. Under `READ_ONLY` it must not itself read as a write.
