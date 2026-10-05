@@ -1,0 +1,19 @@
+{
+  "comment": "SPEC.md \u00a713.1.1: Solr reports a field's type as a set of literals ('int', 'long', 'string', ...). This fixture pins two int fields so a parser mapping them to str would be caught.",
+  "exit_code": 200,
+  "operation": "GET /solr/warehouse/select?q=*:*&rows=0",
+  "request": {
+    "method": "GET",
+    "params": {
+      "q": "*:*",
+      "rows": "0"
+    },
+    "path": "/solr/warehouse/select"
+  },
+  "schema_version": "bigdata-mcp/fixture@1",
+  "source": "synthetic",
+  "source_id": "solr_query",
+  "stderr": "",
+  "stdout": "{\"responseHeader\": {\"status\": 0, \"QTime\": 7}, \"response\": {\"numFound\": 0, \"start\": 0, \"docs\": []}}",
+  "transport": "https_api"
+}

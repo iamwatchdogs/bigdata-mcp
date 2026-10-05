@@ -1,0 +1,18 @@
+{
+  "comment": "SPEC.md \u00a712: an empty YARN application list carries `apps: []`, NOT `apps: null`. A parser written against a JSON decoder that defaults a missing key to null will iterate `None`; this fixture is the counterexample.",
+  "exit_code": 200,
+  "operation": "GET /ws/v1/cluster/apps?states=RUNNING",
+  "request": {
+    "method": "GET",
+    "params": {
+      "states": "RUNNING"
+    },
+    "path": "/ws/v1/cluster/apps"
+  },
+  "schema_version": "bigdata-mcp/fixture@1",
+  "source": "synthetic",
+  "source_id": "yarn_rm",
+  "stderr": "",
+  "stdout": "{\"apps\": [], \"appTypes\": [], \"totalApps\": 0}",
+  "transport": "https_api"
+}

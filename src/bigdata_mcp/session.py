@@ -163,9 +163,11 @@ class Session:
         timeout_s: float = 20.0,
         max_output_bytes: int = 98304,
         allow_http: bool = False,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         """Store the policy. Nothing is opened until `__aenter__`."""
         self._allowlist = allowlist
+        self._headers = dict(headers or {})
         self._timeout_s = timeout_s
         self._max_output_bytes = max_output_bytes
         self._allow_http = allow_http
@@ -221,11 +223,14 @@ class Session:
             return LIMIT_PER_HOST
         return int(session.connector.limit_per_host)
 
-    async def get(self, url: str) -> Response:
+    async def get(
+        self, url: str, *, headers: Mapping[str, str] | None = None
+    ) -> Response:
         """GET `url`, following redirects only within the policy.
 
         Args:
             url: The absolute URL to fetch.
+            headers: Per-request headers, merged over the session defaults.
 
         Returns:
             The response, with `url` set to where the body actually came from.
@@ -244,7 +249,10 @@ class Session:
         while True:
             self._check_initial_scheme(current)
             try:
-                async with self._raw().get(current, allow_redirects=False) as raw:
+                merged = {**self._headers, **(headers or {})}
+                async with self._raw().get(
+                    current, headers=merged, allow_redirects=False
+                ) as raw:
                     if raw.status not in REDIRECT_STATUSES:
                         return await self._read(raw, current)
                     if hops >= MAX_REDIRECTS:

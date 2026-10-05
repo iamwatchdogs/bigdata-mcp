@@ -136,6 +136,13 @@ ignore = [
 # than violations. S404/S603 are suppressed at the call site, where the argv is
 # fixed.
 "scripts/**/*.py" = ["T20", "INP"]
+# The capture CLI is the one library module whose job is to talk to a human: its
+# output *is* the deliverable, because an ssh_cli capture cannot be taken
+# programmatically and the manual recipe is the fallback the spec requires be
+# printed rather than discovered. Scoped to the single module so T20 stays live
+# everywhere else -- a stray print in the engine is a stdout-purity failure, and
+# SPEC.md §6.2 requires stdout to be exactly one JSON object.
+"src/bigdata_mcp/capture.py" = ["T20"]
 # S607 (partial-path argv) applies to exactly three call sites, all in the
 # repository's own gates, which spell their argv inline so Opengrep's
 # `dangerous-subprocess-use-audit` sees a literal. The bare name is deliberate:

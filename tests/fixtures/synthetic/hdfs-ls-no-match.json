@@ -1,0 +1,19 @@
+{
+  "comment": "SPEC.md \u00a711.1.1: `hdfs dfs -ls` on a prefix with no matches prints the 'Found 0 items' line and nothing else. A parser that treats an empty stdout as a failure is wrong; this fixture is how that gets caught.",
+  "exit_code": 0,
+  "operation": "hdfs dfs -ls /warehouse/nothing/",
+  "request": {
+    "argv": [
+      "hdfs",
+      "dfs",
+      "-ls",
+      "/warehouse/nothing/"
+    ]
+  },
+  "schema_version": "bigdata-mcp/fixture@1",
+  "source": "synthetic",
+  "source_id": "hdfs",
+  "stderr": "",
+  "stdout": "Found 0 items\n",
+  "transport": "ssh_cli"
+}
