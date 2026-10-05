@@ -19,8 +19,8 @@ HYGIENE := trailing-whitespace end-of-file-fixer mixed-line-ending \
 .PHONY: help install update lock hooks uninstall hooks-update hooks-list \
         hooks-validate lint lint-check format format-check fmt fix typecheck \
         complexity actionlint workflows test testmon coverage coverage-html \
-        hygiene checks security zizmor osv gitleaks bandit codacy codacy-install \
-        coderabbit \
+        hygiene checks security zizmor osv gitleaks bandit redirect-gate \
+        codacy codacy-install coderabbit \
         verify ci run build binary \
         remote clean clean-all
 
@@ -114,6 +114,9 @@ checks: ## Full pre-commit stage on all files (skips branch guard)
 
 security: ## Pre-push gate: zizmor + osv-scanner + gitleaks + codacy + coderabbit (advisory)
 	$(PREK) run --all-files --stage pre-push
+
+redirect-gate: ## Assert only session.py may construct an HTTP client (§4.2 item 2)
+	uv run python scripts/redirect_gate.py
 
 bandit: ## Python security analysis (commit-time gate)
 	$(PREK) run bandit --all-files

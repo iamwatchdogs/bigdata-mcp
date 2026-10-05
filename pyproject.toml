@@ -13,6 +13,7 @@ authors = [
 # checking never verified, and the CI matrix only tests 3.14.
 requires-python = ">=3.14"
 dependencies = [
+    "aiohttp>=3.13.3",
     # C4 (§14.3): the strict load validates the PARSED TOML against
     # schemas/config.schema.json with additionalProperties:false. Hand-rolling
     # that would put a second, divergent definition of the rules in the tree.

@@ -91,6 +91,16 @@ repos:
 
   - repo: local
     hooks:
+      - id: redirect-gate
+        name: "http seam: only session.py may build a client"
+        # SPEC.md §4.2 item 2 promised this rule in v1 and never wrote it.
+        # Fails at commit time rather than at review; the same rule is asserted in
+        # tests/test_session.py so it also runs in CI on every matrix platform.
+        entry: uv run python scripts/redirect_gate.py
+        language: system
+        pass_filenames: false
+        files: ^(src|tests)/.*\.py$
+
       - id: pytest-testmon
         name: pytest-testmon on changed Python files
         # Routed through `make testmon` so the hook and the Makefile cannot
