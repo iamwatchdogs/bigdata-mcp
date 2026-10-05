@@ -275,7 +275,15 @@ def _try_read(reader: Callable[[str], str], path: str) -> str | None:
     """
     try:
         return reader(path)
-    except OSError, UnicodeDecodeError:
+    except OSError:
+        # Two handlers rather than `except (OSError, UnicodeDecodeError):` on
+        # purpose. PEP 758 lets 3.14 drop the parentheses and this repo's formatter
+        # does exactly that under `target-version = "py314"` -- and the parentheses
+        # are the only thing Codacy's parser can read. Two clauses survive both.
+        return None
+    except UnicodeDecodeError:
+        # A file that exists but is not text is as unmeasurable as one that is
+        # absent, and for the same reason: no reading, never a fabricated zero.
         return None
 
 
