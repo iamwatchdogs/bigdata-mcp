@@ -184,7 +184,7 @@ class _Handler(BaseHTTPRequestHandler):
     # violation even though the base class only ever passes it positionally. That
     # leaves Codacy's `redefined-builtin` with no honest way to be satisfied by the
     # code, so the finding is suppressed here rather than by weakening the gate.
-    # codacy-disable-next-line:opengrep:redefined-builtin
+    # pylint: disable=redefined-builtin
     def log_message(self, format: str, *args: Any) -> None:
         """Silence the default stderr access log.
 
