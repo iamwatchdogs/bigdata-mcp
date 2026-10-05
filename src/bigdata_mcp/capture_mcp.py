@@ -36,6 +36,7 @@ import json
 import shlex
 from collections.abc import Callable
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
@@ -157,40 +158,45 @@ def capture(
 
     text, structured, is_error = asyncio.run(call())
     return _fixture(
-        tool=tool,
-        arguments=arguments,
-        argv=argv,
-        source_id=source_id,
-        operation=operation,
-        provenance=provenance,
-        text=text,
-        structured=structured,
+        _Call(
+            tool=tool,
+            arguments=arguments,
+            argv=argv,
+            source_id=source_id,
+            operation=operation,
+            provenance=provenance,
+        ),
+        text,
+        structured,
         is_error=is_error,
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _Call:
+    """What was asked for, as distinct from what came back.
+
+    A dataclass rather than seven parameters because the split is real: the request
+    is what the operator typed, the result is what the server said, and conflating
+    them is how a capture ends up describing a request it never made.
+    """
+
+    tool: str
+    arguments: dict[str, Any]
+    argv: Sequence[str]
+    source_id: str
+    operation: str
+    provenance: str | None
+
+
 def _fixture(
-    *,
-    tool: str,
-    arguments: dict[str, Any],
-    argv: Sequence[str],
-    source_id: str,
-    operation: str,
-    provenance: str | None,
-    text: str,
-    structured: str | None,
-    is_error: bool,
+    call: _Call, text: str, structured: str | None, *, is_error: bool
 ) -> Fixture:
     """Build the fixture from a relayed call and its result.
 
     Args:
-        tool: The tool that was called.
-        arguments: The arguments it was called with.
-        argv: The command the server was launched with.
-        source_id: The upstream server this relay belongs to.
-        operation: The call, as a label.
-        provenance: Where this was captured, or `None` to describe the call itself.
-        text: The text blocks, joined.
+        call: What was asked for.
+        text: The result's text blocks, joined.
         structured: The rendered `structured_content`, or `None`.
         is_error: Whether the server marked the result an error.
 
@@ -201,14 +207,18 @@ def _fixture(
         schema_version=FIXTURE_SCHEMA_VERSION,
         source=Source.OBSERVED,
         transport=Transport.MCP_CLIENT,
-        source_id=source_id,
-        operation=operation,
-        request={"tool": tool, "arguments": arguments, "argv": list(argv)},
+        source_id=call.source_id,
+        operation=call.operation,
+        request={
+            "tool": call.tool,
+            "arguments": call.arguments,
+            "argv": list(call.argv),
+        },
         stdout=text,
         stderr=_with_status(structured or "", "isError" if is_error else "ok"),
         exit_code=1 if is_error else 0,
         captured_at=now(),
-        provenance=provenance or f"mcp_client {shlex.join(argv)} {tool}",
+        provenance=call.provenance or f"mcp_client {shlex.join(call.argv)} {call.tool}",
     )
 
 
