@@ -12,7 +12,12 @@ authors = [
 # [tool.ruff] target-version: a lower floor claims support lint and type
 # checking never verified, and the CI matrix only tests 3.14.
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    # C4 (§14.3): the strict load validates the PARSED TOML against
+    # schemas/config.schema.json with additionalProperties:false. Hand-rolling
+    # that would put a second, divergent definition of the rules in the tree.
+    "jsonschema>=4.25.1",
+]
 
 [project.scripts]
 bigdata-mcp = "bigdata_mcp:main"
