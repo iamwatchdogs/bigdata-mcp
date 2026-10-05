@@ -26,9 +26,9 @@ from dataclasses import field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from bigdata_mcp.fixtures.fields import load_fixture
 from bigdata_mcp.fixtures.schema import Fixture
 from bigdata_mcp.fixtures.schema import Source
-from bigdata_mcp.fixtures.schema import load_fixture
 
 if TYPE_CHECKING:
     from collections.abc import Iterable

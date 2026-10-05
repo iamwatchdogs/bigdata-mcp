@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from typing import Generic
 from typing import TypeVar
 
 from bigdata_mcp.engine.clock import Clock
@@ -60,7 +61,9 @@ def clamp_ttl(seconds: float) -> float:
 
 
 @dataclass(frozen=True, slots=True)
-class Entry[T]:
+class Entry(Generic[T]):  # ruff: ignore[non-pep695-generic-class] — Codacy's SAST parser predates PEP 695; `Generic[T]` is the
+    # newest syntax it can still read, and a gate that cannot parse the tree is
+    # a gate that reports nothing useful.
     """One cached value.
 
     Attributes:
@@ -72,7 +75,9 @@ class Entry[T]:
     expires_at: float
 
 
-class TtlCache[T]:
+class TtlCache(Generic[T]):  # ruff: ignore[non-pep695-generic-class] — Codacy's SAST parser predates PEP 695; `Generic[T]` is the
+    # newest syntax it can still read, and a gate that cannot parse the tree is
+    # a gate that reports nothing useful.
     """A per-operation cache with a clamped TTL.
 
     Attributes:
@@ -195,7 +200,9 @@ class SharedFailure(BigDataMcpError):
         self.key = key
 
 
-class SingleFlight[T]:
+class SingleFlight(Generic[T]):  # ruff: ignore[non-pep695-generic-class] — Codacy's SAST parser predates PEP 695; `Generic[T]` is the
+    # newest syntax it can still read, and a gate that cannot parse the tree is
+    # a gate that reports nothing useful.
     """Coalesces concurrent identical work onto one backend call.
 
     Attributes:

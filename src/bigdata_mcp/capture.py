@@ -78,6 +78,22 @@ Run this on the edge host, then wrap the two files as a fixture:
 """
 
 
+#: `--help` text. It lives in a constant rather than inline because it is prose, and
+#: prose buried in a call is prose nobody proofreads when the transport list changes.
+_TRANSPORT_EPILOG = (
+    "TRANSPORT SUPPORT IS NOT UNIFORM, and that is deliberate:\n"
+    "  https_api   captured here, through the same session seam a live\n"
+    "              request uses, so TLS trust and redirect policy match.\n"
+    "  web_session captured here, same seam.\n"
+    "  mcp_client  captured here, over a real stdio tools/call.\n"
+    "  ssh_cli     NOT capturable from here: it needs an SSH session, and\n"
+    "              shelling out would put an SSH client on a capture\n"
+    "              tool's request path where §11.1's allowlist cannot\n"
+    "              reach it. Use `wrap-ssh` on the operator's copy.\n\n"
+    f"{SSH_CLI_RECIPE}"
+)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser.
 
@@ -93,18 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
             "The corpus is captured by the operator on the machine that reaches "
             "the estate; this server never reaches it (SPEC.md §3)."
         ),
-        epilog=(
-            "TRANSPORT SUPPORT IS NOT UNIFORM, and that is deliberate:\n"
-            "  https_api   captured here, through the same session seam a live\n"
-            "              request uses, so TLS trust and redirect policy match.\n"
-            "  web_session captured here, same seam.\n"
-            "  mcp_client  captured here, over a real stdio tools/call.\n"
-            "  ssh_cli     NOT capturable from here: it needs an SSH session, and\n"
-            "              shelling out would put an SSH client on a capture\n"
-            "              tool's request path where §11.1's allowlist cannot\n"
-            "              reach it. Use `wrap-ssh` on the operator's copy.\n\n"
-            f"{SSH_CLI_RECIPE}"
-        ),
+        epilog=_TRANSPORT_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     commands = parser.add_subparsers(dest="command", required=True)

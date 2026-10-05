@@ -23,6 +23,7 @@ import asyncio
 from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
+from typing import Generic
 from typing import TypeVar
 
 from bigdata_mcp.errors import QueueFull
@@ -68,7 +69,9 @@ class Admission:
         )
 
 
-class BoundedQueue[T]:
+class BoundedQueue(Generic[T]):  # ruff: ignore[non-pep695-generic-class] — Codacy's SAST parser predates PEP 695; `Generic[T]` is the
+    # newest syntax it can still read, and a gate that cannot parse the tree is
+    # a gate that reports nothing useful.
     """Admission control with a hard depth cap.
 
     Attributes:

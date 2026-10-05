@@ -29,8 +29,6 @@ test names below, not a paraphrase of them.
 
 from __future__ import annotations
 
-import tempfile
-import textwrap
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
@@ -47,9 +45,10 @@ from bigdata_mcp.config import validate
 from bigdata_mcp.errors import ConfigError
 from bigdata_mcp.posture import Posture
 from bigdata_mcp.posture import portal_schema
+from tests.support.config_files import KNOWN_HOSTS
+from tests.support.config_files import fresh_dir as _fresh_dir
+from tests.support.config_files import write_config
 
-KNOWN_HOSTS = "~/.ssh/known_hosts"
-REF_KEYCHAIN = "keychain:bigdata-edge"
 #: A value that is deliberately not a credential, so the refusal it provokes is
 #: about the *form* of the value rather than about anything it might contain.
 _LITERAL = "not-a-credential"
@@ -61,21 +60,6 @@ VALID_TOML = """
 [server]
 mode = "read_only"
 """
-
-
-def _fresh_dir() -> Path:
-    """Return a unique empty directory.
-
-    Returns:
-        A fresh directory, so one test's config file cannot reach the next.
-    """
-    return Path(tempfile.mkdtemp(prefix="bigdata-mcp-config-"))
-
-
-def write_config(tmp_path: Path, body: str, name: str = "config.toml") -> Path:
-    path = tmp_path / name
-    path.write_text(textwrap.dedent(body).lstrip(), encoding="utf-8")
-    return path
 
 
 # --------------------------------------------------------------------------
@@ -220,111 +204,6 @@ def test_no_config_path_returns_defaults() -> None:
     config = load_config()
     assert config.posture is Posture.READ_ONLY
     assert config.source_path is None
-
-
-# --------------------------------------------------------------------------
-# Secrets are references only (§15.8)
-# --------------------------------------------------------------------------
-
-
-def test_literal_secret_is_refused() -> None:
-    with pytest.raises(ConfigError, match="no plaintext credential tier"):
-        load_config(
-            write_config(
-                _fresh_dir(),
-                """
-                [hdfs]
-                enabled = true
-                known_hosts = "~/.ssh/known_hosts"
-                password_ref = "hunter2"
-                """,
-            )
-        )
-
-
-def test_keychain_reference_is_accepted() -> None:
-    config = load_config(
-        write_config(
-            _fresh_dir(),
-            """
-            [hdfs]
-            enabled = true
-            known_hosts = "~/.ssh/known_hosts"
-            password_ref = "keychain:bigdata-edge"
-            """,
-        )
-    )
-    assert config.hdfs is not None
-    assert config.hdfs.password_ref == REF_KEYCHAIN
-
-
-@pytest.mark.parametrize("prefix", ["keychain:", "exec:", "file:"])
-def test_every_resolver_prefix_is_accepted(prefix: str) -> None:
-    config = load_config(
-        write_config(
-            _fresh_dir(),
-            f"[hdfs]\nenabled = true\nknown_hosts = {KNOWN_HOSTS!r}\n"
-            f'password_ref = "{prefix}thing"\n',
-        )
-    )
-    assert config.hdfs is not None
-
-
-def test_env_prefix_is_not_a_credential_tier() -> None:
-    """§15.8 deprioritises `env:`; the resolver order has no env member."""
-    with pytest.raises(ConfigError):
-        load_config(
-            write_config(
-                _fresh_dir(),
-                f"[hdfs]\nenabled = true\nknown_hosts = {KNOWN_HOSTS!r}\n"
-                'password_ref = "env:HOME"\n',
-            )
-        )
-
-
-def test_literal_credential_hidden_in_a_map_is_refused() -> None:
-    """The second load pass, for the keys the schema's `$ref`s do not cover.
-
-    `auth.custom.extra_headers` is intentionally an open map, because a Tier 3
-    IdP names its headers however it likes. That openness must not become a way
-    to write a literal token into a file.
-    """
-    with pytest.raises(ConfigError, match="no plaintext credential tier"):
-        load_config(
-            write_config(
-                _fresh_dir(),
-                """
-                [server]
-                mode = "read_only"
-
-                [auth]
-                tier = "custom"
-
-                [auth.custom]
-                extra_headers = { token = "hunter2" }
-                """,
-            )
-        )
-
-
-def test_a_credential_reference_inside_an_open_map_is_accepted() -> None:
-    """The pass refuses literals, not the practice of sending a header."""
-    config = load_config(
-        write_config(
-            _fresh_dir(),
-            """
-            [server]
-            mode = "read_only"
-
-            [auth]
-            tier = "custom"
-
-            [auth.custom]
-            extra_headers = { Authorization = "keychain:bigdata-mcp" }
-            """,
-        )
-    )
-    assert config.posture is Posture.READ_ONLY
 
 
 # --------------------------------------------------------------------------
@@ -644,7 +523,7 @@ def test_unparseable_schema_file_is_reported_as_a_packaging_fault(
 ) -> None:
     import bigdata_mcp.config as config_module
 
-    scratch = Path(tempfile.mkdtemp(prefix="schema-"))
+    scratch = _fresh_dir()
     broken = scratch / "config.schema.json"
     broken.write_text("{not json", encoding="utf-8")
     good = write_config(_fresh_dir(), VALID_TOML)

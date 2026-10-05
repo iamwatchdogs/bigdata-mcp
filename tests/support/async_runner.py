@@ -12,12 +12,17 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 from typing import Any
+from typing import TypeVar
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
 
+T = TypeVar("T")
 
-def run_async[T](coro: Coroutine[Any, Any, T]) -> T:
+
+def run_async(  # ruff: ignore[non-pep695-generic-function] -- see engine/singleflight.py
+    coro: Coroutine[Any, Any, T],
+) -> T:
     """Run a coroutine to completion on a fresh event loop.
 
     Args:
