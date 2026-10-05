@@ -354,22 +354,45 @@ def _check_mcp_request(origin: str, request: dict[str, Any]) -> None:
     """Require the fields a relayed `tools/call` is recorded with.
 
     A relayed call has no URL, so the HTTP shape's `path` is not merely optional
-    here -- it is meaningless, and a fixture that carried one would be describing a
-    request that never happened. What identifies the call instead is the tool name
-    and its arguments, so those are required, and `argv` is optional because the
-    operator may have reached the server over a transport this build cannot spawn.
+    here -- it is meaningless, and a fixture carrying one would describe a request
+    that never happened. What identifies the call instead is the tool name and its
+    arguments.
 
     Args:
         origin: The fixture's origin, for the message.
         request: The request object.
 
-    A missing or empty `tool`, an `arguments` that is not an object, an `argv` that
-    is not a list of strings, and any of `path` / `url` / `method` are each refused
-    through `_refuse`.
+    Each failure below is refused through `_refuse`.
+    """
+    _check_tool_name(origin, request)
+    _check_relayed_arguments(origin, request)
+    _check_relayed_argv(origin, request)
+    _check_no_url_fields(origin, request)
+
+
+def _check_tool_name(origin: str, request: dict[str, Any]) -> None:
+    """Require a non-empty `tool`.
+
+    Args:
+        origin: The fixture's origin, for the message.
+        request: The request object.
     """
     tool = request.get("tool")
     if not isinstance(tool, str) or not tool:
         _refuse(origin, "request.tool", f"required and non-empty; got {tool!r}")
+
+
+def _check_relayed_arguments(origin: str, request: dict[str, Any]) -> None:
+    """Require `arguments`, when present, to be an object.
+
+    Optional, because a tool may legitimately take none -- but a JSON array or a
+    string here would mean the caller passed the wrong shape to `--arguments`, and
+    §6.2's rule is that a tool's arguments are an object.
+
+    Args:
+        origin: The fixture's origin, for the message.
+        request: The request object.
+    """
     arguments = request.get("arguments")
     if arguments is not None and not isinstance(arguments, dict):
         _refuse(
@@ -377,6 +400,18 @@ def _check_mcp_request(origin: str, request: dict[str, Any]) -> None:
             "request.arguments",
             f"must be an object, not {type(arguments).__name__}",
         )
+
+
+def _check_relayed_argv(origin: str, request: dict[str, Any]) -> None:
+    """Allow `argv` to be absent, but not to be anything but strings.
+
+    Absent is legal: the operator may have reached the relay over a transport this
+    build cannot spawn, and the call is still described by `tool` and `arguments`.
+
+    Args:
+        origin: The fixture's origin, for the message.
+        request: The request object.
+    """
     argv = request.get("argv")
     if argv is not None and (
         not isinstance(argv, list) or not all(isinstance(a, str) for a in argv)
@@ -386,6 +421,15 @@ def _check_mcp_request(origin: str, request: dict[str, Any]) -> None:
             "request.argv",
             "must be a list of strings when present",
         )
+
+
+def _check_no_url_fields(origin: str, request: dict[str, Any]) -> None:
+    """Refuse a URL field on a call that had no URL.
+
+    Args:
+        origin: The fixture's origin, for the message.
+        request: The request object.
+    """
     for unexpected in ("path", "url", "method"):
         if unexpected in request:
             _refuse(
