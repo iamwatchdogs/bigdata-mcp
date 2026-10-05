@@ -344,7 +344,55 @@ def _check_request_shape(
     if transport is Transport.SSH_CLI:
         _check_argv(origin, request)
         return
+    if transport is Transport.MCP_CLIENT:
+        _check_mcp_request(origin, request)
+        return
     _check_http_request(origin, transport, request)
+
+
+def _check_mcp_request(origin: str, request: dict[str, Any]) -> None:
+    """Require the fields a relayed `tools/call` is recorded with.
+
+    A relayed call has no URL, so the HTTP shape's `path` is not merely optional
+    here -- it is meaningless, and a fixture that carried one would be describing a
+    request that never happened. What identifies the call instead is the tool name
+    and its arguments, so those are required, and `argv` is optional because the
+    operator may have reached the server over a transport this build cannot spawn.
+
+    Args:
+        origin: The fixture's origin, for the message.
+        request: The request object.
+
+    A missing or empty `tool`, an `arguments` that is not an object, an `argv` that
+    is not a list of strings, and any of `path` / `url` / `method` are each refused
+    through `_refuse`.
+    """
+    tool = request.get("tool")
+    if not isinstance(tool, str) or not tool:
+        _refuse(origin, "request.tool", f"required and non-empty; got {tool!r}")
+    arguments = request.get("arguments")
+    if arguments is not None and not isinstance(arguments, dict):
+        _refuse(
+            origin,
+            "request.arguments",
+            f"must be an object, not {type(arguments).__name__}",
+        )
+    argv = request.get("argv")
+    if argv is not None and (
+        not isinstance(argv, list) or not all(isinstance(a, str) for a in argv)
+    ):
+        _refuse(
+            origin,
+            "request.argv",
+            "must be a list of strings when present",
+        )
+    for unexpected in ("path", "url", "method"):
+        if unexpected in request:
+            _refuse(
+                origin,
+                f"request.{unexpected}",
+                "does not apply to a relayed tools/call, which has no URL",
+            )
 
 
 def _check_argv(origin: str, request: dict[str, Any]) -> None:

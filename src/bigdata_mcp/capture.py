@@ -30,10 +30,16 @@ import argparse
 import asyncio
 import datetime
 import json
+import shlex
 import sys
+from collections.abc import Callable
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
 from typing import Any
+
+from mcp import Client
+from mcp import StdioServerParameters
+from mcp.types import TextContent
 
 from bigdata_mcp.config import SECRET_REF_PREFIXES
 from bigdata_mcp.errors import BigDataMcpError
@@ -44,8 +50,11 @@ from bigdata_mcp.fixtures.schema import Source
 from bigdata_mcp.fixtures.schema import Transport
 from bigdata_mcp.session import Session
 
-if TYPE_CHECKING:
-    from collections.abc import Sequence
+#: Builds an MCP client for a server argv. A seam rather than a direct `Client`
+#: construction so a test can connect an in-process server: the stdio path spawns a
+#: subprocess, and a test suite that needs a subprocess to prove a two-line call is
+#: a test suite that will be skipped in CI for being slow.
+McpConnect = Callable[[Sequence[str]], "Client"]
 
 #: What `add_subparsers` hands back. Named because the private
 #: `argparse._SubParsersAction` is not something to annotate against in a module
@@ -60,6 +69,18 @@ EXIT_UNSUPPORTED_TRANSPORT = 3
 #: `MCP_CLIENT` is not here: it is a stdio `tools/call`, not an HTTP exchange, and
 #: gets its own subcommand.
 HTTP_TRANSPORTS: tuple[Transport, ...] = (Transport.HTTPS_API, Transport.WEB_SESSION)
+
+#: Every subcommand that captures a transport. `ssh_cli` is absent because it is
+#: deliberately uncapturable here (see `SSH_CLI_RECIPE`), so the set is the enum
+#: minus that one member -- the invariant `test_every_transport_has_a_capture_path`
+#: asserts, and the reason `_dispatch` can refuse an unknown command instead of
+#: falling through to `_capture` and reading `args.url` off a namespace without one.
+CAPTURE_COMMANDS: frozenset[str] = frozenset(
+    transport.value for transport in HTTP_TRANSPORTS
+) | {Transport.MCP_CLIENT.value}
+
+#: The subcommand that wraps output an operator captured by hand.
+WRAPPER_COMMAND = "wrap-ssh"
 
 #: §11.1's recipe, reproduced so the operator can paste it unchanged. The exit
 #: status is captured separately because `echo` clobbers `$?` otherwise, which is
@@ -112,18 +133,18 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=_TRANSPORT_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    commands = parser.add_subparsers(dest="command", required=True)
+    # `dest="transport"`, not `dest="command"`: `mcp_client` has its own
+    # `--command` option naming the server to launch, and argparse writes option
+    # values after the subparser action, so `dest="command"` was silently
+    # overwritten by the argv string. The subcommand name then read
+    # "python -m registry" and dispatch refused its own subcommand.
+    commands = parser.add_subparsers(dest="transport", required=True)
 
     for transport in HTTP_TRANSPORTS:
         _add_http_command(commands, transport)
 
     mcp = commands.add_parser("mcp_client", help="capture a relayed MCP tools/call")
-    mcp.add_argument("--command", required=True, help="command that starts the server")
-    mcp.add_argument("--tool", required=True, help="tool name to call")
-    mcp.add_argument("--arguments", default="{}", help="JSON object of arguments")
-    mcp.add_argument("--source-id", required=True, help="e.g. schema-registry")
-    mcp.add_argument("--operation", required=True, help="the call, as a label")
-    _add_output_arguments(mcp)
+    _add_mcp_command(mcp)
 
     wrap = commands.add_parser(
         "wrap-ssh",
@@ -142,6 +163,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_output_arguments(wrap)
     return parser
+
+
+def _add_mcp_command(command: argparse.ArgumentParser) -> None:
+    """Register the arguments a relayed `tools/call` capture needs.
+
+    `--command` is a whole argv *string* rather than repeated flags because an MCP
+    server is frequently launched through an interpreter with flags before the
+    module (`python -m schema_registry`, `npx -y @upstream/mcp-server`), and a
+    flag-per-argument interface cannot express that without asking the operator to
+    quote a list the shell will also try to expand.
+
+    Args:
+        command: The `mcp_client` subparser to populate.
+    """
+    command.add_argument(
+        "--command",
+        required=True,
+        help="command that starts the server, as a shell-quoted argv string",
+    )
+    command.add_argument("--tool", required=True, help="tool name to call")
+    command.add_argument("--arguments", default="{}", help="JSON object of arguments")
+    command.add_argument("--source-id", required=True, help="e.g. schema-registry")
+    command.add_argument("--operation", required=True, help="the call, as a label")
+    command.add_argument(
+        "--provenance",
+        default=None,
+        help="where this was captured; defaults to the command and tool name",
+    )
+    _add_output_arguments(command)
 
 
 def _add_http_command(commands: Subparsers, transport: Transport) -> None:
@@ -197,11 +247,16 @@ def _add_output_arguments(command: argparse.ArgumentParser) -> None:
     )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None, *, connect: McpConnect | None = None
+) -> int:
     """Run the capture CLI.
 
     Args:
         argv: Argument vector, or `None` to read `sys.argv`.
+        connect: Builds the MCP client for `mcp_client`, or `None` for the real
+            stdio client. A seam so a test can drive the whole CLI -- dispatch,
+            validation, writing -- against an in-process server.
 
     Returns:
         0 on a written fixture, 3 for an uncapturable transport, 4 when the
@@ -210,11 +265,39 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     args = build_parser().parse_args(argv)
     try:
-        fixture = _wrap_ssh(args) if args.command == "wrap-ssh" else _capture(args)
+        fixture = _dispatch(args, connect=connect)
     except (BigDataMcpError, PermissionError) as exc:
         sys.stderr.write(f"error: {exc}\n")
         return EXIT_REFUSED
     return _write(fixture, args.out, force=args.force)
+
+
+def _dispatch(
+    args: argparse.Namespace, *, connect: McpConnect | None = None
+) -> Fixture:
+    """Route a parsed namespace to the capture path for its transport.
+
+    Args:
+        args: The parsed namespace.
+        connect: Forwarded to `_capture_mcp`; ignored by the other paths.
+
+    Returns:
+        The observed fixture.
+
+    Raises:
+        ConfigError: If the command names no capture path. Argparse already refuses
+            an unknown command, so this catches a transport that reached the enum
+            without reaching a branch here -- a bug that would otherwise read an
+            attribute off a namespace that does not have it.
+    """
+    if args.transport == WRAPPER_COMMAND:
+        return _wrap_ssh(args)
+    if args.transport == Transport.MCP_CLIENT.value:
+        return _capture_mcp(args, connect=connect)
+    if args.transport in CAPTURE_COMMANDS:
+        return _capture(args)
+    message = f"no capture path for command {args.transport!r}"
+    raise ConfigError(message)
 
 
 def _capture(args: argparse.Namespace) -> Fixture:
@@ -235,7 +318,7 @@ def _capture(args: argparse.Namespace) -> Fixture:
     params = _json_object(args.params, "params")
     url = args.url.rstrip("/") + args.path
     headers = _credential_header(args.credential_ref) if args.credential_ref else None
-    transport = Transport(args.command)
+    transport = Transport(args.transport)
 
     async def call() -> tuple[int, str, str]:
         async with Session(
@@ -265,6 +348,146 @@ def _capture(args: argparse.Namespace) -> Fixture:
         captured_at=now(),
         provenance=args.provenance or f"captured via {url}",
     )
+
+
+def _capture_mcp(
+    args: argparse.Namespace, *, connect: McpConnect | None = None
+) -> Fixture:
+    """Capture one relayed `tools/call` over stdio.
+
+    §7.3 makes `mcp_client` a first-class transport, so the corpus has to be able to
+    hold one -- and the only honest way to fill it is to actually make the call. The
+    response is stored as the tool returned it: `stdout` is the text blocks joined
+    by newlines, `exit_code` is `0` for a successful call and `1` for one the server
+    reported as an error, because an MCP result carries an `isError` flag rather
+    than a process status and collapsing the two into one number would make the
+    distinction unrecoverable later.
+
+    `structured_content` is preserved in `stderr` when present. That is a
+    deliberate overloading of a field meant for diagnostics, and it is the reason:
+    a tool that returns a Pydantic model (§6.2's structured-output rule) puts its
+    whole answer in `structured_content`, and a corpus that dropped it would record
+    a tool as having returned nothing.
+
+    Args:
+        args: The parsed namespace.
+        connect: Builds the client, or `None` for the real stdio client. Injected
+            so a test can connect an in-process server rather than spawning one.
+
+    Returns:
+        The observed fixture.
+
+    Raises:
+        ConfigError: If `--arguments` is not a JSON object, or `--command` is
+            empty once the shell has had it.
+    """
+    if connect is None:
+        connect = _stdio_client
+    arguments = _json_object(args.arguments, "arguments")
+    argv = shlex.split(args.command)
+    if not argv:
+        message = "--command was empty once the shell had it"
+        raise ConfigError(message)
+
+    async def call() -> tuple[str, str | None, bool]:
+        async with connect(argv) as client:
+            result = await client.call_tool(args.tool, arguments)
+        return (
+            _text_of(result.content),
+            _structured_of(result.structured_content),
+            result.is_error,
+        )
+
+    text, structured, is_error = asyncio.run(call())
+    stderr = structured if structured is not None else ""
+    if not is_error:
+        stderr = _with_status(stderr, "ok")
+    else:
+        stderr = _with_status(stderr, "isError")
+    return Fixture(
+        schema_version=FIXTURE_SCHEMA_VERSION,
+        source=Source.OBSERVED,
+        transport=Transport.MCP_CLIENT,
+        source_id=args.source_id,
+        operation=args.operation,
+        request={
+            "tool": args.tool,
+            "arguments": arguments,
+            "argv": argv,
+        },
+        stdout=text,
+        stderr=stderr,
+        exit_code=1 if is_error else 0,
+        captured_at=now(),
+        provenance=args.provenance or f"mcp_client {shlex.join(argv)} {args.tool}",
+    )
+
+
+def _stdio_client(argv: Sequence[str]) -> Client:
+    """Return a client that launches `argv` as a stdio MCP server.
+
+    Args:
+        argv: The server command, already split.
+
+    Returns:
+        An `mcp.Client` configured for stdio. The subprocess is not started until
+        the context manager is entered.
+    """
+    return Client(StdioServerParameters(command=argv[0], args=list(argv[1:])))
+
+
+def _text_of(blocks: Sequence[Any]) -> str:
+    """Join a result's content blocks into the text a caller would see.
+
+    Only `TextContent` is read. An image or a resource block in a relayed result is
+    not something a text corpus can hold, so it is dropped rather than rendered --
+    and dropped silently, because the count that follows records that it happened.
+
+    Args:
+        blocks: The `CallToolResult.content` list.
+
+    Returns:
+        The text of every `TextContent` block, separated by newlines.
+    """
+    texts: list[str] = [
+        block.text for block in blocks if isinstance(block, TextContent)
+    ]
+    other = len(blocks) - len(texts)
+    if other:
+        texts.append(f"[{other} non-text content block(s) omitted]")
+    return "\n".join(texts)
+
+
+def _structured_of(structured: object) -> str | None:
+    """Render a result's `structured_content` for the fixture.
+
+    Args:
+        structured: The `CallToolResult.structured_content`, or `None`.
+
+    Returns:
+        Pretty JSON, or `None` when the tool returned no structured content.
+    """
+    if structured is None:
+        return None
+    return json.dumps(structured, indent=2, sort_keys=True)
+
+
+def _with_status(rendered: str, status: str) -> str:
+    """Prefix the fixture's `stderr` with the protocol status.
+
+    The prefix is a JSON object rather than prose so that a reader can tell a status
+    line from output the tool itself produced, which is the whole reason this is not
+    simply `stdout`.
+
+    Args:
+        rendered: The rendered `structured_content`, possibly empty.
+        status: `"ok"` or `"isError"`.
+
+    Returns:
+        The `stderr` value to store.
+    """
+    prefix = json.dumps({"status": status}, sort_keys=True)
+    return f"{prefix}\n{rendered}" if rendered else prefix
 
 
 def _wrap_ssh(args: argparse.Namespace) -> Fixture:
@@ -427,6 +650,7 @@ def now() -> str:
 
 
 __all__ = [
+    "CAPTURE_COMMANDS",
     "EXIT_EXISTS",
     "EXIT_REFUSED",
     "EXIT_UNSUPPORTED_TRANSPORT",
@@ -436,3 +660,7 @@ __all__ = [
     "main",
     "now",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

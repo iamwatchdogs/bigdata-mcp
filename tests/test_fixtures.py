@@ -36,12 +36,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from bigdata_mcp.errors import ConfigError
 from bigdata_mcp.fixtures import Corpus
 from bigdata_mcp.fixtures import Source
+from bigdata_mcp.fixtures import Transport
 from bigdata_mcp.fixtures import load_corpus
 from bigdata_mcp.fixtures.corpus import merge
 from bigdata_mcp.fixtures.fields import check_version
@@ -359,3 +361,55 @@ def test_a_non_string_stdout_is_refused() -> None:
 def test_a_non_string_method_is_refused() -> None:
     with pytest.raises(ConfigError, match=r"request\.method"):
         parse_fixture(observed(request={"method": 7, "path": "/x"}))
+
+
+# --------------------------------------------------------------------------
+# A relayed call: `mcp_client` has no URL, and the loader says so
+# --------------------------------------------------------------------------
+
+
+def _relayed(**request: Any) -> dict[str, Any]:
+    """Return an `observed` document describing a relayed `tools/call`.
+
+    Args:
+        **request: Fields merged into the `request` object.
+
+    Returns:
+        A document that validates unless `request` breaks it.
+    """
+    return observed(
+        transport="mcp_client",
+        source_id="schema-registry",
+        operation="schema_get users",
+        request={"tool": "schema_get", "arguments": {"name": "users"}, **request},
+    )
+
+
+def test_a_relayed_call_is_recorded_by_tool_and_arguments() -> None:
+    fixture = parse_fixture(_relayed())
+
+    assert fixture.transport is Transport.MCP_CLIENT
+    assert fixture.request["tool"] == "schema_get"
+
+
+def test_a_relayed_call_without_a_tool_is_refused() -> None:
+    with pytest.raises(ConfigError, match=r"request\.tool"):
+        parse_fixture(observed(transport="mcp_client", request={"arguments": {}}))
+
+
+def test_a_relayed_call_with_non_object_arguments_is_refused() -> None:
+    with pytest.raises(ConfigError, match=r"request\.arguments"):
+        parse_fixture(_relayed(arguments=["not", "an", "object"]))
+
+
+def test_a_relayed_call_may_omit_argv_the_operator_never_had() -> None:
+    """`argv` is optional: a relay may be reached over a transport we cannot spawn."""
+    document = _relayed()
+
+    assert parse_fixture(document).transport is Transport.MCP_CLIENT
+
+
+def test_a_relayed_call_that_also_carries_a_path_is_refused() -> None:
+    """A URL field on a relayed call describes a request that never happened."""
+    with pytest.raises(ConfigError, match=r"request\.path"):
+        parse_fixture(_relayed(path="/schema/users"))
