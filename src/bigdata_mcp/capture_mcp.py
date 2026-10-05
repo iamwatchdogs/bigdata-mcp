@@ -10,6 +10,23 @@ module that is mostly about sessions would make both harder to read.
 readers: the default launches the command over stdio, and a test connects an
 `MCPServer` in-process. Proving a two-line call by spawning an interpreter is a
 test suite that gets skipped for being slow.
+
+Three decisions about how the answer is recorded, each with a test that fails if it
+is reversed:
+
+An `isError` result becomes `exit_code = 1`. A result carries a protocol flag
+rather than a process status, and collapsing the two would make the distinction
+unrecoverable later -- filing a failing call as a passing one is the same
+fabricated success the observer refuses to invent with an unreadable load average,
+and far harder to notice.
+
+`structured_content` is kept, in `stderr`, behind a status prefix. Overloading a
+diagnostics field is ugly and is still right: §6.2's structured-output rule means a
+tool returning a Pydantic model puts its whole answer there, and dropping it records
+the tool as having returned nothing. The prefix is JSON so a reader can tell the
+status line from output the tool produced.
+
+Non-text content blocks are dropped with a count rather than silently.
 """
 
 from __future__ import annotations
@@ -104,19 +121,7 @@ def capture(
     provenance: str | None = None,
     connect: McpConnect | None = None,
 ) -> Fixture:
-    """Capture one relayed `tools/call` over stdio.
-
-    Structured input rather than a parsed `argparse.Namespace`, because turning
-    `--arguments` from JSON text into a dict is the CLI's job and this module has
-    no business knowing how a CLI spells it.
-
-    The response is stored as the tool returned it: `stdout` is the text blocks
-    joined by newlines, and `exit_code` is 0 for a successful call and 1 for one the
-    server reported as an error. An MCP result carries an `isError` flag rather than
-    a process status, and collapsing the two would make the distinction
-    unrecoverable later -- filing a failing call as a passing one is the same
-    fabricated success the observer refuses to invent with an unreadable load
-    average, and much harder to notice.
+    """Call `tool` over stdio and return what the server answered.
 
     Args:
         tool: The tool name to call.
@@ -125,8 +130,8 @@ def capture(
         source_id: The upstream server this relay belongs to.
         operation: The call, as a label.
         provenance: Where this was captured, or `None` to describe the call itself.
-        connect: Builds the client, or `None` for the real stdio client. Injected
-            so a test can connect an in-process server rather than spawning one.
+        connect: Builds the client, or `None` for the real stdio client. Injected so
+            a test can connect an in-process server rather than spawning one.
 
     Returns:
         The observed fixture.
@@ -151,17 +156,56 @@ def capture(
         )
 
     text, structured, is_error = asyncio.run(call())
-    stderr = structured if structured is not None else ""
-    status = "isError" if is_error else "ok"
+    return _fixture(
+        tool=tool,
+        arguments=arguments,
+        argv=argv,
+        source_id=source_id,
+        operation=operation,
+        provenance=provenance,
+        text=text,
+        structured=structured,
+        is_error=is_error,
+    )
+
+
+def _fixture(
+    *,
+    tool: str,
+    arguments: dict[str, Any],
+    argv: Sequence[str],
+    source_id: str,
+    operation: str,
+    provenance: str | None,
+    text: str,
+    structured: str | None,
+    is_error: bool,
+) -> Fixture:
+    """Build the fixture from a relayed call and its result.
+
+    Args:
+        tool: The tool that was called.
+        arguments: The arguments it was called with.
+        argv: The command the server was launched with.
+        source_id: The upstream server this relay belongs to.
+        operation: The call, as a label.
+        provenance: Where this was captured, or `None` to describe the call itself.
+        text: The text blocks, joined.
+        structured: The rendered `structured_content`, or `None`.
+        is_error: Whether the server marked the result an error.
+
+    Returns:
+        The observed fixture.
+    """
     return Fixture(
         schema_version=FIXTURE_SCHEMA_VERSION,
         source=Source.OBSERVED,
         transport=Transport.MCP_CLIENT,
         source_id=source_id,
         operation=operation,
-        request={"tool": tool, "arguments": arguments, "argv": argv},
+        request={"tool": tool, "arguments": arguments, "argv": list(argv)},
         stdout=text,
-        stderr=_with_status(stderr, status),
+        stderr=_with_status(structured or "", "isError" if is_error else "ok"),
         exit_code=1 if is_error else 0,
         captured_at=now(),
         provenance=provenance or f"mcp_client {shlex.join(argv)} {tool}",
