@@ -20,6 +20,9 @@ Mutation evidence, each applied and observed red before reverting:
   `test_the_connector_limit_is_explicit_not_aiohttps_unlimited_default`
 * N6 build the SSL context with verification off ->
   `test_the_ssl_context_never_trusts_by_default`
+* N8 build the context but never pass it to the connector, leaving aiohttp on its
+  own default roots ->
+  `test_the_configured_ca_bundle_is_the_context_the_request_uses`
 * N7 construct a `ClientSession` outside the seam -> the gate's own tests in
   `test_redirect_gate.py`, which is where that rule now lives
 """
@@ -35,10 +38,12 @@ from bigdata_mcp.errors import BackendUnreachable
 from bigdata_mcp.session import LIMIT_PER_HOST
 from bigdata_mcp.session import MAX_REDIRECTS
 from bigdata_mcp.session import RedirectRefusal
+from bigdata_mcp.session import Response
 from bigdata_mcp.session import Session
 from bigdata_mcp.session import build_ssl_context
 from tests.support.async_runner import run_async
 from tests.support.http_server import LocalHttpServer
+from tests.support.http_server import LocalTlsServer
 from tests.support.http_server import Reply
 from tests.support.http_server import json_reply
 from tests.support.http_server import redirect
@@ -320,6 +325,43 @@ def test_a_missing_ca_bundle_fails_rather_than_falling_back() -> None:
     """A bad bundle path must raise, never silently degrade to the system roots."""
     with pytest.raises(FileNotFoundError, match="No such file"):
         build_ssl_context("/nonexistent/ca-bundle.pem")
+
+
+def test_the_configured_ca_bundle_is_the_context_the_request_uses() -> None:
+    """A `ca_bundle` that reaches the server proves the context is attached.
+
+    `build_ssl_context` was already tested in isolation and the configured context
+    was still unused: it was built in `__init__`, stored on `self._ssl_context`,
+    and never passed to the connector, so aiohttp verified against its own default
+    and every internal-CA host failed. Both tests below passed while the promise
+    was broken.
+
+    So this drives a real TLS socket. With the bundle, the handshake succeeds; with
+    no bundle, the same server is refused. A context that is built but not attached
+    cannot produce that pair.
+    """
+    server = LocalTlsServer()
+    server.route("/x", lambda _path: text("secret"))
+    server.start()
+    try:
+        url = server.url("/x")
+        host = f"127.0.0.1:{server.port}"
+
+        async def fetch(ca_bundle: str | None) -> Response:
+            async with Session(
+                allowlist=frozenset({host}),
+                ca_bundle=ca_bundle,
+            ) as session:
+                return await session.get(url)
+
+        trusted = run_async(fetch(str(server.certificate_path)))
+        assert trusted.status == 200
+        assert trusted.body.strip() == "secret"
+
+        with pytest.raises(BackendUnreachable):
+            run_async(fetch(None))
+    finally:
+        server.stop()
 
 
 # --------------------------------------------------------------------------

@@ -177,10 +177,19 @@ class Session:
     async def __aenter__(self) -> Self:
         """Open the underlying session with an explicit connector limit.
 
+        The configured `SSLContext` goes on the connector, which is the only place
+        it can take effect. Building it and then handing aiohttp its own default is
+        the shape of bug where §3's internal CA silently stops mattering: every
+        request still succeeds against a publicly-signed host and fails against
+        the one you configured this for, and the failure reads as a broken CA file
+        rather than a context that was never attached.
+
         Returns:
             This instance, so `async with Session(...) as s:` works.
         """
-        connector = aiohttp.TCPConnector(limit_per_host=LIMIT_PER_HOST)
+        connector = aiohttp.TCPConnector(
+            limit_per_host=LIMIT_PER_HOST, ssl=self._ssl_context
+        )
         self._session = aiohttp.ClientSession(
             connector=connector,
             timeout=aiohttp.ClientTimeout(total=self._timeout_s),

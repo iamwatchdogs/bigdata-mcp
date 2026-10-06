@@ -14,19 +14,30 @@ peer RM" or "a body larger than the cap" without a web framework.
 
 from __future__ import annotations
 
+import datetime
+import ipaddress
 import json
+import ssl
+import tempfile
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import Self
 from typing import cast
 from typing import override
 from urllib.parse import urlsplit
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -304,3 +315,127 @@ class LocalHttpServer:
             it satisfies the repo's hermetic-host contract test.
         """
         return f"http://127.0.0.1:{self.port}{path}"
+
+
+class LocalTlsServer(LocalHttpServer):
+    """A loopback **HTTPS** server, for proving the configured CA bundle is used.
+
+    A separate class rather than a flag on `LocalHttpServer` because the whole
+    point is that a client which does not trust this certificate must fail: a
+    flag would make it easy to write the negative test against the same object as
+    the positive one and quietly prove nothing.
+
+    The certificate is self-signed for `localhost`, generated per server, and
+    written out so a test can pass it as `ca_bundle`. §3 is about an internal CA,
+    and this is the smallest honest stand-in for one on a machine with no estate.
+    """
+
+    def __init__(self) -> None:
+        """Generate a self-signed certificate before starting."""
+        super().__init__()
+        self.certificate_path, self.key_path = _self_signed("localhost")
+
+    @override
+    def start(self) -> Self:
+        """Bind to loopback and serve TLS with this server's certificate.
+
+        Returns:
+            This instance.
+
+        Raises:
+            RuntimeError: If already started.
+        """
+        if self._server is not None:
+            message = "LocalTlsServer is already running"
+            raise RuntimeError(message)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(self.certificate_path, self.key_path)
+        self._server = _Server(("127.0.0.1", 0))
+        self._server.routes = self.routes
+        self._server.recorded = self.recorded
+        self._server.socket = context.wrap_socket(self._server.socket, server_side=True)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        return self
+
+    @override
+    def url(self, path: str = "/") -> str:
+        """Build an absolute `https://` URL against this server.
+
+        An override rather than a new property: the base class's `url` is a
+        method, and shadowing it with a property would be an LSP violation that
+        `ty` is right to reject — and worse, it would read as "this server has no
+        URL" to any caller holding a `LocalHttpServer`.
+
+        Args:
+            path: The path, with any query string.
+
+        Returns:
+            An `https://127.0.0.1:<port><path>` URL. Raises `RuntimeError` if the
+            server is not running, via `port`.
+        """
+        return f"https://127.0.0.1:{self.port}{path}"
+
+
+#: PEM encodings, named because the triple reads worse than the constants do.
+_PEM_CERT = serialization.Encoding.PEM
+_PEM_KEY = (
+    serialization.Encoding.PEM,
+    serialization.PrivateFormat.TraditionalOpenSSL,
+    serialization.NoEncryption(),
+)
+
+
+def _self_signed(common_name: str) -> tuple[Path, Path]:
+    """Write a self-signed certificate and key for `common_name` to a temp dir.
+
+    Generated at runtime rather than committed, because a committed key in a test
+    fixture is a key in a repository forever, and `gitleaks` will eventually be
+    right to complain about it.
+
+    The SAN list carries both the name and `127.0.0.1`. The server binds to
+    loopback, so the client dials an address, and a certificate naming only
+    `localhost` fails hostname verification with a
+    `ClientConnectorCertificateError` that has nothing to do with what the test is
+    checking. An `IPAddress` SAN is required for an address; a `DNSName` is not a
+    substitute.
+
+    Args:
+        common_name: The certificate's CN and first SAN.
+
+    Returns:
+        The certificate path and the key path.
+    """
+    directory = Path(tempfile.mkdtemp(prefix="bigdata-mcp-tls-"))
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+    now = datetime.datetime.now(datetime.UTC)
+    certificate = (
+        x509
+        .CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName([
+                x509.DNSName(common_name),
+                x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+            ]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    certificate_path = directory / "cert.pem"
+    key_path = directory / "key.pem"
+    certificate_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        )
+    )
+    return certificate_path, key_path
