@@ -64,11 +64,38 @@ _LITERAL_CREDENTIAL_RULE = (
     "plaintext credential tier (§15.8)"
 )
 
-#: Leaf keys that name a credential. Checked on the leaf rather than on the
-#: dotted path, because `auth.custom.extra_headers.token` names a credential and a
-#: path-aware test would miss it precisely for being long.
-_SECRET_KEY_NAMES: frozenset[str] = frozenset({"password", "secret", "token"})
-_SECRET_KEY_SUFFIXES: tuple[str, ...] = ("_ref", "_password", "password")
+#: Leaf keys that name a credential exactly. Checked on the leaf rather than on
+#: the dotted path, because `auth.custom.extra_headers.token` names a credential and
+#: a path-aware test would miss it precisely for being long.
+_SECRET_KEY_NAMES: frozenset[str] = frozenset({
+    "apikey",
+    "api_key",
+    "bearer",
+    "credential",
+    "credentials",
+    "passwd",
+    "password",
+    "pwd",
+    "secret",
+    "token",
+})
+
+#: Leaf key suffixes that name a credential. `authorization` is here rather than
+#: in the exact set because every header spelling of it ends that way —
+#: `Authorization`, `Proxy-Authorization`, `X-Authorization` — and that is the one
+#: name this list was missing.
+_SECRET_KEY_SUFFIXES: tuple[str, ...] = (
+    "_authorization",
+    "_credential",
+    "_credentials",
+    "_key",
+    "_password",
+    "_ref",
+    "_secret",
+    "_token",
+    "authorization",
+    "password",
+)
 
 
 @cache
@@ -243,13 +270,24 @@ def _reject_literal_secrets(document: dict[str, Any]) -> None:
 def _is_secret_key(key: str) -> bool:
     """Whether a leaf key names a credential.
 
+    Dashes are folded to underscores first, because this list exists mainly for
+    `auth.custom.extra_headers` and every header name in it is spelled with dashes:
+    `X-Api-Key` and `api_key` are the same credential, and a matcher that only
+    understood one spelling of a header would be defeated by the other.
+
+    Nothing here matches a config field that is not a credential, which is the
+    property that makes broadening this list safe rather than a tightening. The
+    near-misses are named in `test_the_real_config_surface_is_not_a_credential`:
+    `key_path`, `ccache_path` and `keytab` are file locations, and `auth` is an
+    enum whose *value* is the word "password".
+
     Args:
         key: The leaf key name, never a dotted path.
 
     Returns:
         True for an exact credential name or a credential-shaped suffix.
     """
-    lowered = key.lower()
+    lowered = key.lower().replace("-", "_")
     return lowered in _SECRET_KEY_NAMES or lowered.endswith(_SECRET_KEY_SUFFIXES)
 
 

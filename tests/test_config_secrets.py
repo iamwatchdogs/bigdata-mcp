@@ -9,7 +9,16 @@ carries it verbatim and never resolves it (§2.3 mandate 3).
 
 Mutation evidence for the source behaviour here (M4, "short-circuit the
 literal-secret pass" -> `test_literal_credential_hidden_in_a_map_is_refused`) is
-recorded in `test_config.py`'s module docstring, where the M-series lives.
+recorded in `test_config.py`'s module docstring, where the M-series lives. The
+S-series added with the header-spelling cases lives here:
+
+* S1 drop `authorization` from the matched names ->
+  `test_a_literal_credential_header_in_the_open_map_is_refused[Authorization]` and
+  the `Proxy-Authorization` case
+* S2 stop folding `-` to `_` in the leaf name ->
+  `test_a_literal_credential_header_in_the_open_map_is_refused[X-Api-Key]`
+* S3 add a credential suffix broad enough to catch a file path ->
+  `test_the_real_config_surface_is_not_a_credential`
 """
 
 from __future__ import annotations
@@ -131,6 +140,91 @@ def test_literal_credential_hidden_in_a_map_is_refused() -> None:
                 """,
             )
         )
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "Authorization",
+        "Proxy-Authorization",
+        "X-Api-Key",
+        "api_key",
+        "apikey",
+        "X-Auth-Token",
+        "client_secret",
+        "passwd",
+        "bearer",
+    ],
+)
+def test_a_literal_credential_header_in_the_open_map_is_refused(
+    header: str, tmp_path: Path
+) -> None:
+    """`extra_headers` must not become a way to write a secret to disk.
+
+    The second load pass exists for exactly this map — its keys come from another
+    system and cannot be enumerated in a schema — and it matched only `password`,
+    `secret`, `token` and three suffixes. `Authorization = "Bearer abc123"` sailed
+    through, so the module docstring's promise that this map "cannot smuggle a
+    literal secret in" was not true of the one header name that matters most.
+
+    Every spelling is checked because headers are spelled with dashes and config
+    keys with underscores, and a matcher that understood only one of them would be
+    defeated by the other.
+    """
+    with pytest.raises(ConfigError, match="no plaintext credential tier"):
+        load_config(
+            write_config(
+                tmp_path,
+                f"""
+                [server]
+                mode = "read_only"
+
+                [auth]
+                tier = "custom"
+
+                [auth.custom]
+                extra_headers = {{ {header} = "Bearer abc123" }}
+                """,
+            )
+        )
+
+
+def test_the_real_config_surface_is_not_a_credential(tmp_path: Path) -> None:
+    """Broadening the matcher is safe only if these still load.
+
+    The obvious near-misses in this repository's own schema: `key_path`,
+    `ccache_path` and `keytab` are file locations, and `auth` is an enum whose
+    *value* is the word "password". None ends in a credential suffix, and this
+    test is what keeps that true — a matcher that refused `ccache_path` would push
+    operators toward the workaround §15.8 exists to prevent, which would make the
+    rule worse than the gap it closed.
+
+    An earlier attempt at this covered the same ground with a deny-list of
+    `_path`-shaped suffixes. That guard was dead code: no suffix in the list
+    matched a `_path` leaf, so the test stayed green when the guard was deleted —
+    a mutation that proved nothing. Naming the real fields is what actually holds.
+    """
+    config = load_config(
+        write_config(
+            tmp_path,
+            """
+            [server]
+            mode = "read_only"
+
+            [kerberos]
+            transport = "curl_subprocess"
+            ccache_path = "/tmp/krb5cc_1000"
+            keytab = "/etc/krb5.keytab"
+
+            [hdfs]
+            enabled = true
+            auth = "password"
+            key_path = "/etc/security/keytabs/hdfs.keytab"
+            known_hosts = "~/.ssh/known_hosts"
+            """,
+        )
+    )
+    assert config.posture is Posture.READ_ONLY
 
 
 def test_a_credential_reference_inside_an_open_map_is_accepted() -> None:
