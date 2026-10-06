@@ -35,6 +35,16 @@ first attempt too, because the mutation renamed the option's `dest` as well and 
 removed the collision instead of reproducing it; both are noted here because a
 mutation that stays green for the wrong reason is worth as much as one that goes
 red for the right one.
+
+**Mutation evidence** for the HTTP path, added with the C-series:
+
+* C1 file `--params` into the fixture without encoding them into the URL ->
+  `test_captured_params_are_sent_and_not_merely_recorded`
+* C2 record any `--method` without refusing the ones `Session` cannot send ->
+  `test_a_method_the_session_cannot_send_is_refused`
+* C3 put the credential reference back on the wire as an `Authorization` header ->
+  `test_a_credential_reference_is_refused_rather_than_sent` and
+  `test_a_plaintext_credential_ref_is_refused`
 """
 
 from __future__ import annotations
@@ -209,25 +219,136 @@ def test_a_plaintext_credential_ref_is_refused(
     assert code == capture.EXIT_REFUSED
     assert not (tmp_path / "unused.json").exists()
     # The refusal must name the rule. An exit code alone cannot distinguish "you
-    # passed a literal" from "the host did not resolve", and both are 5.
-    assert "no plaintext credential tier" in capsys.readouterr().err
+    # passed a literal" from "there is no secret store", and both are 5.
+    assert "no secret store" in capsys.readouterr().err
 
 
-def test_the_credential_ref_rule_itself_is_refused() -> None:
-    """The rule in isolation, so nothing downstream can mask it."""
-    from bigdata_mcp.capture import _credential_header
+def test_a_credential_reference_is_refused_rather_than_sent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The reference must never reach the wire, and never reach a fixture either.
 
-    with pytest.raises(ConfigError, match="no plaintext credential tier"):
-        _credential_header("hunter2")
+    It used to be handed to `Session` as `{"authorization": reference}`. Two
+    things went wrong and the operator could see neither: every authenticated
+    capture came back 401, which reads as an expired credential on the estate; and
+    the backend learned the secret-store *name*, which is a map to wherever the
+    real credential lives. §15.8 allows the reference in a config and nowhere else.
+    """
+    code = capture.main([
+        "https_api",
+        "--url",
+        "https://rm1.invalid:8088",
+        "--source-id",
+        "yarn_rm",
+        "--operation",
+        "info",
+        "--allowlist-host",
+        "rm1.invalid",
+        "--credential-ref",
+        "keychain:bigdata-edge",
+        "--out",
+        str(tmp_path / "unused.json"),
+    ])
+    assert code == capture.EXIT_REFUSED
+    assert not (tmp_path / "unused.json").exists()
+    message = capsys.readouterr().err
+    assert "no secret store" in message
+    assert "bigdata-edge" not in message, "the refusal echoed the secret-store name"
 
 
-def test_a_credential_reference_is_carried_verbatim_not_resolved() -> None:
-    """The reference travels; resolving it here would be a second secret store."""
-    from bigdata_mcp.capture import _credential_header
+def test_a_method_the_session_cannot_send_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`Session` speaks GET. A recorded POST would describe a request never made."""
+    code = capture.main([
+        "https_api",
+        "--url",
+        "https://rm1.invalid:8088",
+        "--source-id",
+        "yarn_rm",
+        "--operation",
+        "info",
+        "--allowlist-host",
+        "rm1.invalid",
+        "--method",
+        "POST",
+        "--out",
+        str(tmp_path / "unused.json"),
+    ])
+    assert code == capture.EXIT_REFUSED
+    assert "Session speaks GET only" in capsys.readouterr().err
 
-    assert _credential_header("keychain:bigdata-edge") == {
-        "authorization": "keychain:bigdata-edge"
-    }
+
+def test_captured_params_are_sent_and_not_merely_recorded(
+    server: LocalHttpServer, tmp_path: Path
+) -> None:
+    """The fixture's `params` and the bytes the server saw must agree.
+
+    `--params` was parsed and filed into the fixture while the URL was built
+    without a query string, so `--params '{"states":"RUNNING"}'` wrote a fixture
+    claiming a filtered query whose body was the unfiltered response. §8.1's
+    `resolved_params` exists to be what was *actually* sent; a capture that
+    disagreed with its own recorded parameters poisons every replay built on it.
+
+    Asserting the server's access log, not the fixture: the fixture is what the bug
+    got wrong, so agreeing with it proves nothing.
+    """
+    server.route("/ws/v1/cluster/apps", lambda _p: json_reply({"apps": []}))
+    out = tmp_path / "capture.json"
+
+    code = capture.main([
+        "https_api",
+        "--url",
+        server.url(),
+        "--source-id",
+        "yarn_rm",
+        "--operation",
+        "apps",
+        "--allowlist-host",
+        "127.0.0.1",
+        "--path",
+        "/ws/v1/cluster/apps",
+        "--params",
+        '{"states": "RUNNING"}',
+        "--out",
+        str(out),
+    ])
+
+    assert code == 0
+    assert server.recorded == ["/ws/v1/cluster/apps?states=RUNNING"], (
+        f"the query string never reached the server: {server.recorded}"
+    )
+    fixture = load_fixture(out)
+    assert fixture.request["params"] == {"states": "RUNNING"}
+    assert "states=RUNNING" in str(fixture.request["url"])
+
+
+def test_no_params_means_no_query_string(
+    server: LocalHttpServer, tmp_path: Path
+) -> None:
+    """Encoding must not append an empty `?`, which would change the recorded URL."""
+    server.route("/info", lambda _p: json_reply({}))
+    out = tmp_path / "capture.json"
+
+    code = capture.main([
+        "https_api",
+        "--url",
+        server.url(),
+        "--source-id",
+        "yarn_rm",
+        "--operation",
+        "info",
+        "--allowlist-host",
+        "127.0.0.1",
+        "--path",
+        "/info",
+        "--out",
+        str(out),
+    ])
+
+    assert code == 0
+    assert server.recorded == ["/info"]
+    assert "?" not in str(load_fixture(out).request["url"])
 
 
 def test_an_http_capture_records_the_real_status_and_body(

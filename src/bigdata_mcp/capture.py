@@ -19,6 +19,29 @@ What it can reach, and what it cannot:
   turns operator-captured output into a fixture instead, and `--help` says so
   rather than letting it be discovered at the first attempt.
 
+Three things are refused rather than recorded, and all three are the same bug in
+different clothes: a fixture whose recorded request differs from the request the
+server actually received.
+
+`--params` is encoded into the query string rather than filed alongside the request.
+`Session.get` takes a URL and nothing else, so a `params` field that never reached
+the wire describes a filtered query whose body is the unfiltered response. §8.1's
+`resolved_params` exists to be what was *actually* sent, and a capture that
+disagrees with its own recorded parameters poisons every replay and every
+differential test built on it.
+
+`--method` may only be GET. `Session` exposes only `get`, so a fixture recording a
+POST against a body fetched by GET is the same confident wrongness one field out.
+
+`--credential-ref` is refused outright. §15.8 has no plaintext tier and §2.3
+mandate 3 says a reference is carried verbatim and never resolved here, so this
+build has nothing that could turn `keychain:bigdata-edge` into a usable
+`Authorization` value. Sending it anyway had two effects the operator could see
+neither: every authenticated capture returned 401, which reads as an expired
+credential on the estate; and the backend learned the secret-store *name*, which is
+a map to wherever the real credential lives. A refusal is loud and correct; a 401
+recorded as an observation is neither.
+
 Everything written is `source = "observed"` with `captured_at` and `provenance`,
 and an existing file is never replaced without `--force`: silently overwriting a
 captured response destroys the evidence that anything changed.
@@ -33,9 +56,9 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
+from urllib.parse import urlencode
 
 from bigdata_mcp import capture_mcp
-from bigdata_mcp.config import SECRET_REF_PREFIXES
 from bigdata_mcp.errors import BigDataMcpError
 from bigdata_mcp.errors import ConfigError
 from bigdata_mcp.fixtures.schema import FIXTURE_SCHEMA_VERSION
@@ -183,7 +206,9 @@ def _add_http_command(commands: Subparsers, transport: Transport) -> None:
     command.add_argument(
         "--params", default="{}", help="JSON object of query parameters"
     )
-    command.add_argument("--method", default="GET", help="HTTP method")
+    command.add_argument(
+        "--method", default="GET", help="HTTP method; anything but GET is refused"
+    )
     command.add_argument(
         "--allowlist-host",
         required=True,
@@ -195,7 +220,10 @@ def _add_http_command(commands: Subparsers, transport: Transport) -> None:
     command.add_argument(
         "--credential-ref",
         default="",
-        help="secret reference for the Authorization header; never a literal",
+        help=(
+            "REFUSED in this build: there is no secret store, so a reference "
+            "cannot be resolved. Use wrap-ssh for authenticated captures"
+        ),
     )
     command.add_argument(
         "--provenance", default="", help="machine and command, verbatim"
@@ -295,16 +323,18 @@ def _capture(args: argparse.Namespace) -> Fixture:
     an operator running this on the edge host should never have to read Python
     internals to find out why their capture did not happen.
     """
+    _refuse_an_unsent_method(args.method)
+    _refuse_an_unresolved_credential(args.credential_ref)
     params = _json_object(args.params, "params")
     url = args.url.rstrip("/") + args.path
-    headers = _credential_header(args.credential_ref) if args.credential_ref else None
+    if params:
+        url = f"{url}?{urlencode(params)}"
     transport = Transport(args.transport)
 
     async def call() -> tuple[int, str, str]:
         async with Session(
             allowlist=frozenset({args.allowlist_host}),
             allow_http=args.url.startswith("http://"),
-            headers=headers,
         ) as session:
             response = await session.get(url)
             return response.status, response.body, response.url
@@ -451,30 +481,55 @@ def _json_object(raw: str, field_name: str) -> dict[str, Any]:
     return dict(parsed)
 
 
-def _credential_header(reference: str) -> dict[str, str]:
-    """Turn a credential reference into a header carrying the reference itself.
-
-    The reference is resolved nowhere here. §15.8 has no plaintext tier, and a
-    capture tool that read a secret off disk would be a second place secrets live
-    with no redaction boundary. The reference travels in the fixture so the
-    operator's replay tool resolves it through the one store that redacts it.
+def _refuse_an_unsent_method(method: str) -> None:
+    """Refuse a method `Session` cannot send.
 
     Args:
-        reference: A `keychain:` / `exec:` / `file:` reference.
-
-    Returns:
-        The header carrying the reference verbatim.
+        method: The `--method` value.
 
     Raises:
-        ConfigError: If the reference has no known prefix.
+        ConfigError: If it is anything but GET. `Session` exposes only `get`, and
+            a fixture recording a POST against a body fetched by GET is a
+            confidently wrong observation.
     """
-    if not reference.startswith(SECRET_REF_PREFIXES):
+    if method.upper() != "GET":
         message = (
-            f"--credential-ref must start with one of {SECRET_REF_PREFIXES}; "
-            "there is no plaintext credential tier (§15.8)"
+            f"--method {method!r} is refused: Session speaks GET only. A fixture "
+            "recording a verb the capture did not use is worse than no fixture"
         )
         raise ConfigError(message)
-    return {"authorization": reference}
+
+
+def _refuse_an_unresolved_credential(reference: str) -> None:
+    """Refuse `--credential-ref` rather than put the reference on the wire.
+
+    §15.8 has no plaintext tier and §2.3 mandate 3 says the loader carries a
+    reference verbatim and never resolves it — so this build has nothing that could
+    turn `keychain:bigdata-edge` into a usable `Authorization` value. Two things
+    went wrong by sending it anyway, and both are worse than a refusal:
+
+    * every authenticated capture returned 401, and the operator had no way to tell
+      that from an expired credential on the estate;
+    * the backend learned the secret-store *name*. Sending a reference to a server
+      that cannot use it hands an attacker the map to wherever the real credential
+      lives.
+
+    Args:
+        reference: The `--credential-ref` value, or an empty string.
+
+    Raises:
+        ConfigError: If a reference was supplied.
+    """
+    if not reference:
+        return
+    message = (
+        "--credential-ref is refused: this build has no secret store, so the "
+        "reference cannot be resolved into a credential. Sending it verbatim would "
+        "put the secret-store name on the wire and return 401. Capture "
+        "authenticated exchanges with `wrap-ssh`, which records operator output "
+        "without touching the credential"
+    )
+    raise ConfigError(message)
 
 
 __all__ = [
