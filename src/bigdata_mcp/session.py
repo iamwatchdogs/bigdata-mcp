@@ -18,7 +18,12 @@ is worth more than a review comment:
 4. **No `ssl.SSLContext` is ever built from a default trust source.** Corporate
    endpoints use an internal CA (§3), so one context per configured CA bundle is
    built once, with `check_hostname=True` and `verify_mode=CERT_REQUIRED`, and
-   passed explicitly. There is no path here that returns a permissive context.
+   passed to the connector. There is no path here that returns a permissive
+   context, and no path that builds one and then does not use it.
+5. **A credential does not outlive its origin.** `Authorization`,
+   `Proxy-Authorization` and `Cookie` are dropped the moment a hop leaves the
+   `(scheme, host, port)` the request started on. See the note on manual
+   redirect following below for why this is not aiohttp's job here.
 
 `TCPConnector(limit_per_host=2)` is set explicitly because aiohttp's `0` means
 *unlimited*, which would make every politeness guarantee in §10 decorative.
@@ -27,6 +32,14 @@ Redirects are followed **manually**, one hop at a time, rather than by handing a
 whole chain to aiohttp. That is what makes per-hop allowlist checking possible at
 all: an automatic follower resolves the entire chain before returning, so there is
 no point at which an individual hop can be refused.
+
+It also gives up one thing aiohttp does for free, and property 5 exists to get it
+back: its follower strips `Authorization` when a hop leaves the origin. Following
+hops by hand means sending what you were given, so a YARN RM that redirects to an
+allowlisted Solr host would hand that host the YARN credential. Being allowlisted
+is not a reason to keep a credential — the allowlist is keyed on *host* precisely
+so HA peers on different hosts stay reachable, which is the same reason it is too
+wide to authenticate to.
 """
 
 from __future__ import annotations
@@ -55,6 +68,15 @@ MAX_REDIRECTS: int = 5
 LIMIT_PER_HOST: int = 2
 
 REDIRECT_STATUSES: frozenset[int] = frozenset({301, 302, 303, 307, 308})
+
+#: Header names that carry a credential, dropped when a hop leaves the origin the
+#: request started on. §4.2 item 2's per-hop allowlist is what makes cross-origin
+#: redirects possible at all, so the credential has to be what is re-checked.
+CREDENTIAL_HEADERS: frozenset[str] = frozenset({
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+})
 
 
 class Scheme(enum.Enum):
@@ -167,7 +189,7 @@ class Session:
     ) -> None:
         """Store the policy. Nothing is opened until `__aenter__`."""
         self._allowlist = allowlist
-        self._headers = dict(headers or {})
+        self._headers: dict[str, str] = dict(headers or {})
         self._timeout_s = timeout_s
         self._max_output_bytes = max_output_bytes
         self._allow_http = allow_http
@@ -254,11 +276,12 @@ class Session:
         `_next_hop`, but only ever with a message naming the rule that fired.
         """
         current = url
+        first_origin = _origin_of(current)
         hops = 0
         while True:
             self._check_initial_scheme(current)
             try:
-                merged = {**self._headers, **(headers or {})}
+                merged = self._headers_for(current, first_origin, headers)
                 async with self._raw().get(
                     current, headers=merged, allow_redirects=False
                 ) as raw:
@@ -272,6 +295,43 @@ class Session:
                 raise BackendUnreachable(
                     endpoint=current, detail=type(exc).__name__
                 ) from exc
+
+    def _headers_for(
+        self,
+        current: str,
+        first_origin: str,
+        per_request: Mapping[str, str] | None,
+    ) -> dict[str, str]:
+        """Return the headers to send to `current`.
+
+        The session's own headers and the caller's per-request headers are merged
+        as usual, then the credential-bearing names are dropped as soon as the hop
+        leaves the origin the request started on.
+
+        This is the one thing aiohttp's automatic follower would have done for
+        free and that following redirects by hand gives up. Its `ClientSession`
+        strips `Authorization` on a cross-origin redirect; this loop sends what it
+        is given, so without this a YARN RM that redirects to an allowlisted Solr
+        host hands that host the YARN `Authorization` header. The allowlist is
+        deliberately wider than one origin — HA peers are on different hosts — so
+        "allowlisted" is not a reason to keep a credential.
+
+        Args:
+            current: The URL about to be fetched.
+            first_origin: The `(scheme, host, port)` the request started on.
+            per_request: The caller's headers, or `None`.
+
+        Returns:
+            The headers for this hop, without credentials if the origin changed.
+        """
+        merged: dict[str, str] = {**self._headers, **(per_request or {})}
+        if _origin_of(current) != first_origin:
+            return {
+                name: value
+                for name, value in merged.items()
+                if name.lower() not in CREDENTIAL_HEADERS
+            }
+        return merged
 
     @staticmethod
     def _refuse(reason: RedirectRefusal, detail: str) -> None:
@@ -418,6 +478,27 @@ def _host_of(url: str) -> str:
     return authority.split(":", 1)[0].lower()
 
 
+def _origin_of(url: str) -> str:
+    """Return a URL's origin as `(scheme, host, port)`, lowercased.
+
+    Compared as a triple rather than as a string prefix: two URLs differing only
+    by a default port, or by the *case* of the host, are the same origin, and a
+    prefix comparison would treat `http://rm1` and `http://rm1.evil` as related
+    while treating `http://rm1:80` and `http://rm1` as unrelated.
+
+    Args:
+        url: The URL to inspect.
+
+    Returns:
+        The origin, or an empty string when the URL carries no host.
+    """
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    port = parts.port
+    default = 443 if parts.scheme.lower() == Scheme.HTTPS.value else 80
+    return f"{parts.scheme.lower()}://{host}:{port or default}"
+
+
 def _lower(headers: Mapping[str, str]) -> dict[str, str]:
     """Lowercase response header names.
 
@@ -431,6 +512,7 @@ def _lower(headers: Mapping[str, str]) -> dict[str, str]:
 
 
 __all__ = [
+    "CREDENTIAL_HEADERS",
     "LIMIT_PER_HOST",
     "MAX_REDIRECTS",
     "REDIRECT_STATUSES",

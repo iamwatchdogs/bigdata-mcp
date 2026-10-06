@@ -126,6 +126,7 @@ class _Server(ThreadingHTTPServer):
 
     routes: dict[str, Handler]
     recorded: list[str]
+    received_headers: list[dict[str, str]]
 
     def __init__(self, address: tuple[str, int]) -> None:
         """Bind without serving, so `start` controls when serving begins.
@@ -166,6 +167,7 @@ class _Handler(BaseHTTPRequestHandler):
         server = cast("_Server", self.server)
         path = urlsplit(self.path).path
         server.recorded.append(self.path)
+        server.received_headers.append({k.lower(): v for k, v in self.headers.items()})
         route = server.routes.get(path)
         reply = (
             route(path)
@@ -214,12 +216,16 @@ class LocalHttpServer:
     Attributes:
         routes: Path-to-handler table, mutated before the first request.
         recorded: Every path this server has served, in order.
+        received_headers: The request headers of every served request, in order,
+            lowercased keys. Recorded because "did the second host receive the
+            credential" cannot be answered from the response.
     """
 
     def __init__(self) -> None:
         """Start with an empty route table and an empty access log."""
         self.routes: dict[str, Handler] = {}
         self.recorded: list[str] = []
+        self.received_headers: list[dict[str, str]] = []
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -251,6 +257,7 @@ class LocalHttpServer:
         self._server = _Server(("127.0.0.1", 0))
         self._server.routes = self.routes
         self._server.recorded = self.recorded
+        self._server.received_headers = self.received_headers
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
         return self
@@ -353,6 +360,7 @@ class LocalTlsServer(LocalHttpServer):
         self._server = _Server(("127.0.0.1", 0))
         self._server.routes = self.routes
         self._server.recorded = self.recorded
+        self._server.received_headers = self.received_headers
         self._server.socket = context.wrap_socket(self._server.socket, server_side=True)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -386,6 +394,15 @@ _PEM_KEY = (
 )
 
 
+#: PEM encodings, named because the key's triple reads worse inline.
+_PEM = serialization.Encoding.PEM
+_KEY_ENCODING = (
+    serialization.Encoding.PEM,
+    serialization.PrivateFormat.TraditionalOpenSSL,
+    serialization.NoEncryption(),
+)
+
+
 def _self_signed(common_name: str) -> tuple[Path, Path]:
     """Write a self-signed certificate and key for `common_name` to a temp dir.
 
@@ -393,24 +410,41 @@ def _self_signed(common_name: str) -> tuple[Path, Path]:
     fixture is a key in a repository forever, and `gitleaks` will eventually be
     right to complain about it.
 
-    The SAN list carries both the name and `127.0.0.1`. The server binds to
-    loopback, so the client dials an address, and a certificate naming only
-    `localhost` fails hostname verification with a
-    `ClientConnectorCertificateError` that has nothing to do with what the test is
-    checking. An `IPAddress` SAN is required for an address; a `DNSName` is not a
-    substitute.
-
     Args:
         common_name: The certificate's CN and first SAN.
 
     Returns:
         The certificate path and the key path.
     """
-    directory = Path(tempfile.mkdtemp(prefix="bigdata-mcp-tls-"))
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    directory = Path(tempfile.mkdtemp(prefix="bigdata-mcp-tls-"))
+    certificate_path = directory / "cert.pem"
+    key_path = directory / "key.pem"
+    _write(certificate_path, _certificate(common_name, key).public_bytes(_PEM))
+    _write(key_path, key.private_bytes(*_KEY_ENCODING))
+    return certificate_path, key_path
+
+
+def _certificate(common_name: str, key: rsa.RSAPrivateKey) -> x509.Certificate:
+    """Build a self-signed certificate for `common_name`.
+
+    The SAN list carries both the name and `127.0.0.1`. The server binds to
+    loopback, so the client dials an address, and a certificate naming only
+    `localhost` fails hostname verification with a
+    `ClientConnectorCertificateError` that has nothing to do with what the test is
+    checking. An `IPAddress` SAN is required for an address; a `DNSName` is not a
+    substitute for one.
+
+    Args:
+        common_name: The CN and first SAN.
+        key: The key to certify.
+
+    Returns:
+        The signed certificate.
+    """
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
     now = datetime.datetime.now(datetime.UTC)
-    certificate = (
+    return (
         x509
         .CertificateBuilder()
         .subject_name(subject)
@@ -428,14 +462,13 @@ def _self_signed(common_name: str) -> tuple[Path, Path]:
         )
         .sign(key, hashes.SHA256())
     )
-    certificate_path = directory / "cert.pem"
-    key_path = directory / "key.pem"
-    certificate_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
-    key_path.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.TraditionalOpenSSL,
-            serialization.NoEncryption(),
-        )
-    )
-    return certificate_path, key_path
+
+
+def _write(path: Path, payload: bytes) -> None:
+    """Write PEM bytes to `path`.
+
+    Args:
+        path: Where to write.
+        payload: The encoded bytes.
+    """
+    path.write_bytes(payload)

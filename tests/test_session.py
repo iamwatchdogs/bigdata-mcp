@@ -21,8 +21,12 @@ Mutation evidence, each applied and observed red before reverting:
 * N6 build the SSL context with verification off ->
   `test_the_ssl_context_never_trusts_by_default`
 * N8 build the context but never pass it to the connector, leaving aiohttp on its
-  own default roots ->
+  own roots ->
   `test_the_configured_ca_bundle_is_the_context_the_request_uses`
+* N9 send the merged headers unchanged on every hop ->
+  `test_a_redirect_to_another_origin_does_not_carry_the_credential`
+* N10 drop the credential on every hop, including same-origin ones ->
+  `test_a_redirect_on_the_same_origin_keeps_the_credential`
 * N7 construct a `ClientSession` outside the seam -> the gate's own tests in
   `test_redirect_gate.py`, which is where that rule now lives
 """
@@ -173,6 +177,71 @@ def test_the_allowlist_is_checked_on_the_target_not_only_the_first_url(
     with pytest.raises(PermissionError):
         run_async(scenario())
     assert not any("metadata" in path for path in server.recorded)
+
+
+def test_a_redirect_to_another_origin_does_not_carry_the_credential() -> None:
+    """A YARN `Authorization` header must not reach a different origin.
+
+    The allowlist is keyed on host, so two loopback servers on different ports are
+    both allowlisted and the hop is permitted — §3's YARN HA needs exactly that.
+    Being allowlisted is therefore not a reason to keep sending a credential: this
+    is the redirect aiohttp's automatic follower would have stripped for us, lost
+    by following hops by hand.
+
+    The second server records what it received, because "did the other host see the
+    credential" is not answerable from the response.
+    """
+    with LocalHttpServer() as peer:
+        peer.route("/landing", lambda _p: text("peer's page"))
+        peer.route("/landed", lambda _p: text("peer's page"))
+        with LocalHttpServer() as origin:
+            origin.route("/away", lambda _p: redirect(peer.url("/landed")))
+
+            async def scenario() -> Response:
+                async with Session(
+                    allowlist=frozenset({TRUSTED}),
+                    allow_http=True,
+                    headers={"Authorization": "Bearer yarn-secret"},
+                ) as session:
+                    return await session.get(origin.url("/away"))
+
+            response = run_async(scenario())
+
+    assert response.body.strip() == "peer's page"
+    assert peer.recorded == ["/landed"], "the hop was not followed at all"
+    landed_headers = peer.received_headers[0]
+    assert "authorization" not in landed_headers, (
+        f"the credential crossed origins: {landed_headers.get('authorization')!r}"
+    )
+
+
+def test_a_redirect_on_the_same_origin_keeps_the_credential() -> None:
+    """The other half: stripping everywhere would break HA, not just leak.
+
+    §3's YARN standby answers 307 pointing at the active peer. Dropping the
+    header on that hop would turn a working cluster into an estate that answers
+    every request with 401, so the rule has to be about the origin changing and not
+    about the redirect itself.
+    """
+    with LocalHttpServer() as origin:
+        origin.route("/away", lambda _p: redirect(origin.url("/landed")))
+        origin.route("/landed", lambda _p: text("same origin"))
+
+        async def scenario() -> Response:
+            async with Session(
+                allowlist=frozenset({TRUSTED}),
+                allow_http=True,
+                headers={"Authorization": "Bearer yarn-secret"},
+            ) as session:
+                return await session.get(origin.url("/away"))
+
+        response = run_async(scenario())
+
+    assert response.body.strip() == "same origin"
+    assert origin.recorded == ["/away", "/landed"], (
+        "the second hop never reached the origin server"
+    )
+    assert origin.received_headers[1].get("authorization") == "Bearer yarn-secret"
 
 
 def test_https_to_http_downgrade_is_refused() -> None:
