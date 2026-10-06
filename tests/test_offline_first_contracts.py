@@ -32,7 +32,11 @@ FIXTURE_OWNERSHIP_SENTINEL = "No test may require estate access"
 LOCAL_HOST_TOKENS = frozenset({
     "localhost",
     "127.0.0.1",
+    # Both spellings of the IPv6 loopback. `urlsplit().hostname` reports the
+    # compressed form, so a test asserting on the long form would otherwise be
+    # flagged as reaching a remote host.
     "::1",
+    "0:0:0:0:0:0:0:1",
     "[::1]",
     "host.docker.internal",
 })
@@ -107,7 +111,13 @@ def test_no_module_under_tests_targets_a_remote_host(path: Path) -> None:
     cluster fails here instead of hanging or, worse, mutating one.
     """
     text = path.read_text(encoding="utf-8")
-    scheme_spans = re.finditer(r"\bhttps?://[^\s'\"`)\]}<>,;]+", text)
+    # `]` is inside the character class on purpose. Excluding it — which the
+    # pattern used to do, to avoid swallowing a markdown link's closing bracket —
+    # truncated every IPv6 literal at the closing bracket of the address, so the
+    # bracket handling in `_is_local_or_reserved` could never fire and any test
+    # naming an IPv6 loopback was reported as reaching a remote host. A hermetic
+    # test had no way to say otherwise, which is the opposite of what this is for.
+    scheme_spans = re.finditer(r"\bhttps?://[^\s'\"`)<>,;}]+", text)
     offenders = [
         match.group(0)
         for match in scheme_spans

@@ -16,6 +16,7 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 from typing import Any
 
+from bigdata_mcp.hosts import host_of
 from bigdata_mcp.posture import Posture
 
 if TYPE_CHECKING:
@@ -193,7 +194,5 @@ class Config:
         for section in (self.yarn, self.solr):
             if section is None:
                 continue
-            for url in section.base_urls:
-                authority = url.split("://", 1)[-1].split("/", 1)[0]
-                hosts.add(authority.rsplit("@", 1)[-1].split(":", 1)[0])
+            hosts.update(host_of(url) for url in section.base_urls)
         return frozenset(host for host in hosts if host)

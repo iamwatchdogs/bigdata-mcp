@@ -186,6 +186,36 @@ def test_the_allowlist_is_checked_on_the_target_not_only_the_first_url(
     assert not any("metadata" in path for path in server.recorded)
 
 
+def test_an_ipv6_literal_target_is_matched_against_the_allowlist() -> None:
+    """§4.2's allowlist has to be able to name an IPv6 host at all.
+
+    The allowlist is a set of host strings and this module derives the host of a
+    redirect target with the same helper the config side uses. An IPv6 literal is
+    all colons, so a first-colon split yields `[` — which matches no configured
+    host, so an IPv6 estate loses every HA redirect. Refused rather than followed,
+    so it is safe; but it is refused for a reason that reads as a misconfiguration,
+    and nothing in the message points at the parser.
+    """
+    from bigdata_mcp.hosts import host_of
+
+    assert host_of("https://[::1]:8088/ws") == "::1"
+    assert host_of("https://[0:0:0:0:0:0:0:1]:8088") == "::1", (
+        "the long form of loopback must match the short form in an allowlist"
+    )
+
+    async def scenario() -> None:
+        async with Session(
+            allowlist=frozenset({"::1"}),
+        ) as session:
+            # `_next_hop` is what the allowlist check lives in; driving it directly
+            # keeps the loopback server, which can only bind IPv4, out of the test.
+            session._next_hop(  # ruff: ignore[private-member-access] - the rule under test is private
+                "https://[::1]:8088/next", "https://[::1]:8088/here"
+            )
+
+    run_async(scenario())
+
+
 def test_a_redirect_to_another_origin_does_not_carry_the_credential() -> None:
     """A YARN `Authorization` header must not reach a different origin.
 

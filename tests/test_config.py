@@ -321,6 +321,36 @@ def test_redirect_allowlist_covers_every_configured_https_source() -> None:
     assert config.redirect_allowlist == {"rm1.invalid", "rm2.invalid", "solr1.invalid"}
 
 
+def test_the_redirect_allowlist_reads_an_ipv6_literal_host() -> None:
+    """An IPv6 RM is a legal `base_urls` entry and must reach the allowlist.
+
+    Splitting the authority on the first colon turned `https://[::1]:8088` into
+    `[`. That host matches nothing, so a redirect to it was refused — safe, but
+    refused for a reason that looks like a misconfiguration rather than a parser
+    that cannot count colons, and an estate on IPv6 loses HA redirects for a reason
+    no operator could find.
+    """
+    config = load_config(
+        write_config(
+            _fresh_dir(),
+            """
+            [server]
+            mode = "read_only"
+
+            [yarn]
+            enabled = true
+            base_urls = ["https://[::1]:8088", "https://[0:0:0:0:0:0:0:1]:8088"]
+            credential_shape = "spnego"
+            """,
+        )
+    )
+    # Both spellings of the same address collapse to one entry, and the allowlist
+    # holds exactly one host rather than two spellings of it — otherwise a config
+    # listing the short form refuses a redirect written in the long form, which is
+    # the same bug as the colon split one layer further up.
+    assert config.redirect_allowlist == {"::1"}
+
+
 def test_redirect_allowlist_is_empty_when_nothing_is_configured() -> None:
     """No configured source means no redirect is followed at all."""
     config = load_config(write_config(_fresh_dir(), VALID_TOML))

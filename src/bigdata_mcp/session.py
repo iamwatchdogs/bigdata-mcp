@@ -56,6 +56,7 @@ from urllib.parse import urlsplit
 import aiohttp
 
 from bigdata_mcp.errors import BackendUnreachable
+from bigdata_mcp.hosts import host_of
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -417,7 +418,7 @@ class Session:
         was_https = urlsplit(current).scheme.lower() == Scheme.HTTPS.value
         if was_https and urlsplit(target).scheme.lower() == Scheme.HTTP.value:
             self._refuse(RedirectRefusal.SCHEME_DOWNGRADE, f"{current} -> {target}")
-        host = _host_of(target)
+        host = host_of(target)
         if host not in self._allowlist:
             allowed = ", ".join(sorted(self._allowlist)) or "(nothing)"
             self._refuse(
@@ -472,21 +473,6 @@ class Session:
             headers=_lower(raw.headers),
             truncated=cut or (declared is not None and received < declared),
         )
-
-
-def _host_of(url: str) -> str:
-    """Return a URL's host, lowercased and without the port.
-
-    Args:
-        url: The URL to inspect.
-
-    Returns:
-        The host component, or an empty string when the URL carries none.
-    """
-    netloc = urlsplit(url).netloc
-    # Strip userinfo before splitting the port; a URL may carry both.
-    authority = netloc.rsplit("@", 1)[-1]
-    return authority.split(":", 1)[0].lower()
 
 
 def _origin_of(url: str) -> str:
