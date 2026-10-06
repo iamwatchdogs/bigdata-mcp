@@ -27,6 +27,12 @@ Mutation evidence, each applied and observed red before reverting:
   `test_a_redirect_to_another_origin_does_not_carry_the_credential`
 * N10 drop the credential on every hop, including same-origin ones ->
   `test_a_redirect_on_the_same_origin_keeps_the_credential`
+* N11 report `truncated` by comparing against `Content-Length`, which a chunked
+  response does not carry ->
+  `test_a_chunked_body_cut_by_the_cap_says_it_was_cut`
+* N12 set `truncated` unconditionally ->
+  `test_a_chunked_body_under_the_cap_reports_whole`, plus the two pre-existing
+  whole-body tests, which catch the over-correction
 * N7 construct a `ClientSession` outside the seam -> the gate's own tests in
   `test_redirect_gate.py`, which is where that rule now lives
 """
@@ -49,6 +55,7 @@ from tests.support.async_runner import run_async
 from tests.support.http_server import LocalHttpServer
 from tests.support.http_server import LocalTlsServer
 from tests.support.http_server import Reply
+from tests.support.http_server import chunked
 from tests.support.http_server import json_reply
 from tests.support.http_server import redirect
 from tests.support.http_server import text
@@ -462,6 +469,44 @@ def test_a_body_over_the_cap_is_refused_before_it_is_read(
     body, truncated = run_async(scenario())
     assert truncated is True
     assert "exceeds the 100 byte cap" in body
+
+
+def test_a_chunked_body_cut_by_the_cap_says_it_was_cut(
+    server: LocalHttpServer,
+) -> None:
+    """No `Content-Length` means the client cannot compare against one.
+
+    `received < (declared or received)` reads `received < received` here, so a
+    chunked body cut by the cap reported `truncated=False` — reported whole on the
+    one response that was not. Chunked is not a corner case either: streaming
+    endpoints are exactly what a `Content-Length`-shaped assumption breaks on.
+    """
+    server.route(
+        "/stream",
+        lambda _p: chunked(b"x" * 60, b"y" * 60),
+    )
+
+    async def scenario() -> tuple[str, bool]:
+        async with trusted_session(max_output_bytes=100) as session:
+            response = await session.get(server.url("/stream"))
+            return response.body, response.truncated
+
+    body, truncated = run_async(scenario())
+    assert truncated is True, "a body cut by the cap reported itself whole"
+    assert len(body) == 100
+
+
+def test_a_chunked_body_under_the_cap_reports_whole(server: LocalHttpServer) -> None:
+    """The other half, so the flag cannot be set unconditionally instead."""
+    server.route("/stream", lambda _p: chunked(b"x" * 30, b"y" * 30))
+
+    async def scenario() -> tuple[str, bool]:
+        async with trusted_session(max_output_bytes=100) as session:
+            response = await session.get(server.url("/stream"))
+            return response.body, response.truncated
+
+    body, truncated = run_async(scenario())
+    assert (body, truncated) == ("x" * 30 + "y" * 30, False)
 
 
 def test_a_body_under_the_cap_arrives_whole(server: LocalHttpServer) -> None:

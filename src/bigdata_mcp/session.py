@@ -429,6 +429,13 @@ class Session:
     async def _read(self, raw: aiohttp.ClientResponse, url: str) -> Response:
         """Read a non-redirect response, enforcing the byte cap.
 
+        `truncated` is set by the cap actually firing, not by comparing the bytes
+        received against a `Content-Length`. A chunked response has no declared
+        length, so the comparison reads `received < received` and reports False on
+        a body that was cut in half — which is the one case where a caller most
+        needs to be told. A declared length is still checked as well, because a
+        server that under-declares should not be believed either.
+
         Args:
             raw: The response to drain.
             url: The URL the body came from.
@@ -448,10 +455,14 @@ class Session:
             )
         chunks: list[bytes] = []
         received = 0
+        cut = False
         async for chunk in raw.content.iter_chunked(8192):
             remaining = self._max_output_bytes - received
             if remaining <= 0:
+                cut = True
                 break
+            if len(chunk) > remaining:
+                cut = True
             chunks.append(chunk[:remaining])
             received += len(chunks[-1])
         return Response(
@@ -459,7 +470,7 @@ class Session:
             body=b"".join(chunks).decode("utf-8", errors="replace"),
             url=url,
             headers=_lower(raw.headers),
-            truncated=received < (declared or received),
+            truncated=cut or (declared is not None and received < declared),
         )
 
 

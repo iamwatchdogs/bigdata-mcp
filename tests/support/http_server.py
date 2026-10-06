@@ -59,6 +59,33 @@ class Reply:
     status: int = 200
     body: bytes = b""
     headers: dict[str, str] = field(default_factory=dict)
+    chunked: tuple[bytes, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Derive the transfer-encoding header when a chunked reply is built.
+
+        Attributes:
+            chunked: Chunk payloads. Empty means a normal `Content-Length` reply.
+                Non-empty sends `Transfer-Encoding: chunked` and no length at all,
+                which is the only way to reach the client code path where the
+                response size is not known in advance.
+        """
+        if self.chunked:
+            self.headers["transfer-encoding"] = "chunked"
+
+
+def chunked(*payloads: bytes, status: int = 200) -> Reply:
+    """Build a reply with no `Content-Length`.
+
+    Args:
+        *payloads: The chunks, written in order.
+        status: HTTP status.
+
+    Returns:
+        A chunked `Reply`. `aiohttp` reports `content_length` as `None` for one
+        of these, which is the case the byte-cap flag had to be written for.
+    """
+    return Reply(status=status, chunked=tuple(payloads))
 
 
 def text(
@@ -175,6 +202,24 @@ class _Handler(BaseHTTPRequestHandler):
             else Reply(status=404, body=b"no such path")
         )
         self.send_response(reply.status)
+        self._write_headers(reply)
+        self._write_body(reply)
+
+    def _write_headers(self, reply: Reply) -> None:
+        """Write the reply's headers, with the framing decided by `chunked`.
+
+        A chunked reply carries no `Content-Length` at all — that is the point of
+        it, and sending one anyway would make the client believe it knows the size.
+
+        Args:
+            reply: The reply to write headers for.
+        """
+        for name, value in reply.headers.items():
+            if name.lower() != "content-length":
+                self.send_header(name, value)
+        if reply.chunked:
+            self.end_headers()
+            return
         declared = next(
             (
                 value
@@ -183,13 +228,23 @@ class _Handler(BaseHTTPRequestHandler):
             ),
             None,
         )
-        for name, value in reply.headers.items():
-            if name.lower() != "content-length":
-                self.send_header(name, value)
-        length = declared if declared is not None else str(len(reply.body))
-        self.send_header("content-length", length)
+        self.send_header("content-length", declared or str(len(reply.body)))
         self.end_headers()
-        self.wfile.write(reply.body)
+
+    def _write_body(self, reply: Reply) -> None:
+        """Write the reply's body, chunk-framed when `chunked` is set.
+
+        Args:
+            reply: The reply to write the body of.
+        """
+        if not reply.chunked:
+            self.wfile.write(reply.body)
+            return
+        for payload in reply.chunked:
+            self.wfile.write(f"{len(payload):x}\r\n".encode())
+            self.wfile.write(payload)
+            self.wfile.write(b"\r\n")
+        self.wfile.write(b"0\r\n\r\n")
 
     @override
     # The parameter keeps the stdlib's name because `ty` checks this override
