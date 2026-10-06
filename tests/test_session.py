@@ -20,14 +20,13 @@ Mutation evidence, each applied and observed red before reverting:
   `test_the_connector_limit_is_explicit_not_aiohttps_unlimited_default`
 * N6 build the SSL context with verification off ->
   `test_the_ssl_context_never_trusts_by_default`
-* N7 construct a `ClientSession` outside the seam ->
-  `test_no_module_outside_session_touches_the_http_client`
+* N7 construct a `ClientSession` outside the seam -> the gate's own tests in
+  `test_redirect_gate.py`, which is where that rule now lives
 """
 
 from __future__ import annotations
 
 import ssl
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -54,7 +53,6 @@ TRUSTED = "127.0.0.1"
 #: happens before any DNS lookup, which is itself part of what is being tested.
 UNTRUSTED_HOST = "elsewhere.invalid"
 
-BANNED_OUTSIDE_THE_SEAM = ("ClientSession", "TCPConnector", "allow_redirects")
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -393,29 +391,3 @@ def test_using_the_session_outside_its_context_manager_is_refused() -> None:
 
     with pytest.raises(RuntimeError, match="outside `async with`"):
         run_async(scenario())
-
-
-# --------------------------------------------------------------------------
-# The structural rule: no other module may construct an HTTP client
-# --------------------------------------------------------------------------
-
-
-def test_no_module_outside_session_touches_the_http_client() -> None:
-    """§4.2 item 2, asserted here as well as in `scripts/redirect_gate.py`.
-
-    The gate fails at commit time; this fails under `make test`, so the rule is
-    also covered by CI on every platform the matrix runs.
-    """
-    from bigdata_mcp import session as seam
-
-    package_dir = Path(str(seam.__file__)).parent
-    seam_path = package_dir / "session.py"
-    offenders = [
-        f"{candidate.name}: {banned}"
-        for candidate in sorted(package_dir.glob("*.py"))
-        if candidate.name != "session.py"
-        for banned in BANNED_OUTSIDE_THE_SEAM
-        if banned in candidate.read_text(encoding="utf-8")
-    ]
-    assert not offenders, f"HTTP client construction outside session.py: {offenders}"
-    assert seam_path.is_file()

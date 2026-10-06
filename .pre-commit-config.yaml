@@ -94,12 +94,16 @@ repos:
       - id: redirect-gate
         name: "http seam: only session.py may build a client"
         # SPEC.md §4.2 item 2 promised this rule in v1 and never wrote it.
-        # Fails at commit time rather than at review; the same rule is asserted in
-        # tests/test_session.py so it also runs in CI on every matrix platform.
+        # Fails at commit time rather than at review.
+        #
+        # `scripts/` is in the pattern, and it is in the pattern because the gate
+        # itself lives there: an edit to `scripts/redirect_gate.py` is the edit
+        # most likely to weaken it, and `^(src|tests)/` would skip the hook on
+        # exactly that file. Same failure mode as the bandit hook below.
         entry: uv run python scripts/redirect_gate.py
         language: system
         pass_filenames: false
-        files: ^(src|tests)/.*\.py$
+        files: ^(src|tests|scripts)/.*\.py$
 
       - id: pytest-testmon
         name: pytest-testmon on changed Python files

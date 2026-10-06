@@ -31,6 +31,14 @@ PACKAGE_DIR = REPO_ROOT / "src" / "bigdata_mcp"
 #: The one module allowed to name these.
 ALLOWED_MODULE = "session.py"
 
+__all__ = [
+    "ALLOWED_MODULE",
+    "BANNED_IDENTIFIERS",
+    "ScanFailed",
+    "find_violations",
+    "main",
+]
+
 #: The identifiers that mean "a raw HTTP client is being built here". `session.get`
 #: is deliberately absent: `Session.get` is the public, policy-carrying entry point,
 #: and banning the substring would forbid the correct call as well as the wrong one.
@@ -42,6 +50,46 @@ BANNED_IDENTIFIERS: tuple[str, ...] = (
 )
 
 
+class ScanFailed(RuntimeError):
+    """The tree could not be scanned at all.
+
+    A distinct type rather than a message in the violation list, so `main` can
+    tell "found something" from "could not look" and exit differently for each.
+
+    Attributes:
+        directory: The directory that was expected to exist and did not.
+    """
+
+    def __init__(self, directory: Path) -> None:
+        """Record which directory was missing.
+
+        Args:
+            directory: The package directory that could not be scanned.
+        """
+        message = f"{directory}: package directory not found; nothing was scanned"
+        super().__init__(message)
+        self.directory = directory
+
+
+def _reporting_root(package_dir: Path) -> Path:
+    """Return the directory that offending paths are reported relative to.
+
+    `REPO_ROOT` when the scan covers the repository, so a real finding reads as
+    `src/bigdata_mcp/foo.py:12`. A scan rooted anywhere else -- a temporary copy,
+    a vendored tree, a checkout unpacked under `/tmp` -- reports relative to its
+    own root instead, because `Path.relative_to` raises on a path outside the
+    base and a gate that crashes while scanning is not a gate that fails closed.
+
+    Args:
+        package_dir: The directory being scanned.
+
+    Returns:
+        The directory to report against.
+    """
+    resolved = package_dir.resolve()
+    return REPO_ROOT if REPO_ROOT in resolved.parents else resolved.parent
+
+
 def find_violations(package_dir: Path = PACKAGE_DIR) -> list[str]:
     """Return one message per banned identifier found outside the seam.
 
@@ -50,18 +98,25 @@ def find_violations(package_dir: Path = PACKAGE_DIR) -> list[str]:
 
     Returns:
         Messages of the form `relative/path.py:12: allow_redirects`. Empty when
-        the tree is clean. A missing package directory yields a single message
-        rather than a silent pass — this gate must not read "clean" from a scan
-        that never happened.
+        the tree is clean.
+
+    Raises:
+        ScanFailed: If `package_dir` does not exist. Raised rather than returned
+            as a violation string, because the two are different facts and `main`
+            must report them with different exit codes: a caller that receives a
+            string cannot tell "found a problem" from "looked in the wrong place",
+            and a gate that conflates them reports a broken checkout as a code
+            defect and a real violation as a broken checkout.
     """
     if not package_dir.is_dir():
-        return [f"{package_dir}: package directory not found; nothing was scanned"]
+        raise ScanFailed(package_dir)
 
     violations: list[str] = []
+    root = _reporting_root(package_dir)
     for module in sorted(package_dir.rglob("*.py")):
         if module.name == ALLOWED_MODULE:
             continue
-        relative = module.relative_to(REPO_ROOT)
+        relative = module.relative_to(root)
         lines = module.read_text(encoding="utf-8").splitlines()
         violations.extend(
             f"{relative}:{number}: {identifier}"
@@ -72,14 +127,23 @@ def find_violations(package_dir: Path = PACKAGE_DIR) -> list[str]:
     return violations
 
 
-def main() -> int:
+def main(package_dir: Path = PACKAGE_DIR) -> int:
     """Run the gate.
+
+    Args:
+        package_dir: The directory to scan. A parameter rather than a hardcoded
+            constant so a caller can point the gate at a copy of the tree; the
+            default is the repository's own package.
 
     Returns:
         0 when no module outside the seam names a banned identifier, 1 when one
         does, 2 when the tree could not be scanned.
     """
-    violations = find_violations()
+    try:
+        violations = find_violations(package_dir)
+    except ScanFailed as exc:
+        print(f"Cannot scan: {exc}")
+        return 2
     if violations:
         print(f"HTTP-client seam violated. Only {ALLOWED_MODULE} may name:")
         for identifier in BANNED_IDENTIFIERS:

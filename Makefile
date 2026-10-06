@@ -116,7 +116,7 @@ security: ## Pre-push gate: zizmor + osv-scanner + gitleaks + codacy + coderabbi
 	$(PREK) run --all-files --stage pre-push
 
 redirect-gate: ## Assert only session.py may construct an HTTP client (§4.2 item 2)
-	uv run python scripts/redirect_gate.py
+	$(PYTHON) scripts/redirect_gate.py
 
 bandit: ## Python security analysis (commit-time gate)
 	$(PREK) run bandit --all-files
