@@ -24,6 +24,7 @@ the edge host is a configuration fact, and it arrives as one.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import time
 from typing import TYPE_CHECKING
@@ -273,6 +274,45 @@ class FakeExecutor:
         return self.results.get(key, self.default)
 
 
+#: How long to wait for a killed child before giving up on reaping it.
+REAP_GRACE_S = 1.0
+
+
+async def _terminate(process: asyncio.subprocess.Process | None) -> None:
+    """Kill a child and wait until it is genuinely gone.
+
+    `asyncio.timeout` cancels `communicate()`, which cancels the *wait*. It does
+    not signal the child. The process keeps running — holding its descriptors, and
+    whatever estate resources the command had opened — long after `DeadlineExceeded`
+    told the caller it had finished. On a polled edge host that is a leak per timed
+    out call, and nothing in the return value mentions it.
+
+    Kill rather than terminate: the caller has already run out of budget, and a
+    polite SIGTERM is a request the child may decline — which would put the wait
+    right back, and a capture tool must not be the thing that hangs.
+
+    The wait afterwards is bounded for the same reason. A child that ignored even
+    SIGKILL is not a case worth blocking on; it is a case worth reporting and
+    returning from, and the caller's own budget is already spent.
+
+    Args:
+        process: The child, or `None` when the timeout fired before the spawn
+            finished — which happens whenever the budget is shorter than the
+            process launch.
+    """
+    if process is None or process.returncode is not None:
+        return
+    with contextlib.suppress(ProcessLookupError, OSError):
+        process.kill()
+    # The signal was already SIGKILL, which a running process cannot decline, so
+    # this bound is only reached by something in uninterruptible sleep. Swallowing
+    # it leaves a transport for the collector to close, which is a warning rather
+    # than a hang.
+    with contextlib.suppress(TimeoutError):
+        async with asyncio.timeout(REAP_GRACE_S):
+            await process.wait()
+
+
 class SubprocessExecutor:
     """The real `Executor`: `asyncio.create_subprocess_exec`, never `run`.
 
@@ -307,20 +347,22 @@ class SubprocessExecutor:
         Args:
             argv: The command as a list. Passed to `create_subprocess_exec`, so
                 there is no shell and no quoting step to get wrong.
-            deadline: The budget, applied with `asyncio.timeout` so cancellation
-                reaches the child rather than leaving it running.
+            deadline: The budget.
 
         Returns:
             The result. A process that fails to start yields `spawn_failed=True`
             rather than an exception, because a missing binary on the edge host is
-            a reportable configuration fact.
+                a reportable configuration fact.
 
         Raises:
             DeadlineExceeded: If the budget runs out while the child is alive.
                 Raised rather than returned because the child's partial output is
                 not an answer, and a partial answer that looks complete is the
-                failure §8.1 names as worst.
+                failure §8.1 names as worst. The child is killed first — see
+                `_terminate`, because a timeout that leaves the work running is not
+                a timeout.
         """
+        process: asyncio.subprocess.Process | None = None
         try:
             async with asyncio.timeout(deadline.remaining_s):
                 process = await asyncio.create_subprocess_exec(
@@ -332,6 +374,7 @@ class SubprocessExecutor:
                 )
                 raw_out, raw_err = await process.communicate()
         except TimeoutError:
+            await _terminate(process)
             raise DeadlineExceeded(argv[0], deadline.budget_s) from None
         except (OSError, ValueError) as exc:
             return ExecResult(

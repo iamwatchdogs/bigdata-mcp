@@ -15,6 +15,10 @@ from a short one.
 
 from __future__ import annotations
 
+import sys
+import time
+from typing import TYPE_CHECKING
+
 import pytest
 
 from bigdata_mcp.engine import FakeClock
@@ -25,6 +29,9 @@ from bigdata_mcp.executor import ExecResult
 from bigdata_mcp.executor import FakeExecutor
 from bigdata_mcp.executor import SubprocessExecutor
 from tests.support.argv import COUNT_ARGV
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # --------------------------------------------------------------------------
 # The deadline
@@ -88,6 +95,91 @@ async def test_a_real_timeout_raises_rather_than_returning_partial_output() -> N
     async def scenario() -> None:
         with pytest.raises(DeadlineExceeded):
             await executor.exec(["sleep", "5"], deadline)
+
+    await scenario()
+
+
+async def test_a_timed_out_child_is_dead_and_not_merely_cancelled(
+    tmp_path: Path,
+) -> None:
+    """The child must be gone, not just unwatched.
+
+    `asyncio.timeout` cancels `communicate()`, which cancels the wait. It does not
+    signal the process, so the child kept running after `DeadlineExceeded` told the
+    caller it was finished — holding its descriptors and whatever estate resources
+    the command had opened. A timeout that leaves the work running is not a
+    timeout.
+
+    The child writes a file every half second. If it were still running when this
+    test finished, the marker would keep appearing — so the assertion is made after
+    giving it longer than the marker's interval to act.
+    """
+    marker = tmp_path / "still-alive"
+    executor = SubprocessExecutor()
+    deadline = Deadline.starting_now(0.05)
+    program = (
+        "import pathlib, time, sys\n"
+        f"marker = pathlib.Path({str(marker)!r})\n"
+        "while True:\n"
+        "    marker.write_text(str(time.time()))\n"
+        "    time.sleep(0.05)\n"
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(DeadlineExceeded):
+            await executor.exec([sys.executable, "-c", program], deadline)
+
+    await scenario()
+    # Two intervals: one to prove it was alive before, one to prove it stopped.
+    time.sleep(0.15)
+    first = marker.read_text()
+    time.sleep(0.15)
+    assert marker.read_text() == first, (
+        "the child was still running after the deadline expired"
+    )
+
+
+async def test_a_child_that_declines_sigterm_is_still_killed(tmp_path: Path) -> None:
+    """`kill`, not `terminate` — and the difference has to be observable.
+
+    A default child dies on SIGTERM, so swapping `kill` for `terminate` leaves an
+    ordinary test green. This child ignores SIGTERM, which is what a shell wrapper,
+    a JVM with its own shutdown hook, or anything mid-transaction does when it has
+    not finished cleaning up. The caller has already run out of budget, so there is
+    no time left to wait for a polite request to be honoured.
+    """
+    marker = tmp_path / "stubborn"
+    executor = SubprocessExecutor()
+    deadline = Deadline.starting_now(0.3)
+    program = (
+        "import pathlib, signal, time\n"
+        f"marker = pathlib.Path({str(marker)!r})\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "while True:\n"
+        "    marker.write_text(str(time.time()))\n"
+        "    time.sleep(0.05)\n"
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(DeadlineExceeded):
+            await executor.exec([sys.executable, "-c", program], deadline)
+
+    await scenario()
+    assert marker.exists(), "the child never started, so this proves nothing"
+    time.sleep(0.2)
+    first = marker.read_text()
+    time.sleep(0.2)
+    assert marker.read_text() == first, "a child that ignores SIGTERM survived"
+
+
+async def test_a_timeout_before_the_spawn_is_still_a_deadline() -> None:
+    """The child may not exist yet, and the timeout still has to fire cleanly."""
+    executor = SubprocessExecutor()
+    deadline = Deadline.starting_now(0.000001)
+
+    async def scenario() -> None:
+        with pytest.raises(DeadlineExceeded):
+            await executor.exec([sys.executable, "-c", "pass"], deadline)
 
     await scenario()
 
