@@ -40,6 +40,7 @@ Mutation evidence, each applied and observed red before reverting:
 from __future__ import annotations
 
 import ssl
+import threading
 from typing import TYPE_CHECKING
 
 import pytest
@@ -118,6 +119,107 @@ def trusted_session(
 # --------------------------------------------------------------------------
 # Redirect policy. Both directions, because §4.2 item 6 requires both.
 # --------------------------------------------------------------------------
+
+
+def test_an_initial_request_to_an_unallowlisted_host_is_refused(
+    server: LocalHttpServer,
+) -> None:
+    """The allowlist gates the first request, not only the redirects.
+
+    Mutation evidence: hoisting the check into `get` before the loop is what this
+    test pins — with the check only in `_next_hop`, `Session.get` fetched a host
+    outside the allowlist and returned its body (observed: status 200 against a
+    loopback server with `allowlist={"not-this-host.invalid"}`). The `Session`
+    docstring promises "empty permits nothing", and only a check on the initial
+    URL makes that true.
+    """
+    server.route("/x", lambda _p: text("reached"))
+
+    async def scenario() -> None:
+        async with Session(
+            allowlist=frozenset({"not-this-host.invalid"}),
+            allow_http=True,
+        ) as session:
+            await session.get(server.url("/x"))
+
+    with pytest.raises(PermissionError) as caught:
+        run_async(scenario())
+    message = str(caught.value)
+    assert RedirectRefusal.NOT_ALLOWLISTED.value in message
+    assert "not-this-host.invalid" in message
+    assert not any("/x" in path for path in server.recorded), (
+        "the unallowlisted host was fetched before the refusal"
+    )
+
+
+def test_an_empty_allowlist_permits_nothing(server: LocalHttpServer) -> None:
+    """The documented default posture: an empty allowlist cannot reach out.
+
+    This is the misconfiguration guard the class docstring promises. A caller that
+    forgets to configure hosts must get a named refusal, not a successful fetch.
+    """
+    server.route("/y", lambda _p: text("reached"))
+
+    async def scenario() -> None:
+        async with Session(allowlist=frozenset(), allow_http=True) as session:
+            await session.get(server.url("/y"))
+
+    with pytest.raises(PermissionError) as caught:
+        run_async(scenario())
+    assert RedirectRefusal.NOT_ALLOWLISTED.value in str(caught.value)
+    assert "(nothing)" in str(caught.value)
+
+
+def test_a_same_host_initial_request_still_passes_the_first_hop_check(
+    server: LocalHttpServer,
+) -> None:
+    """The added check must not break the loopback case every other test uses."""
+    server.route("/ok", lambda _p: text("fine"))
+
+    async def scenario() -> tuple[int, str]:
+        async with trusted_session() as session:
+            response = await session.get(server.url("/ok"))
+            return response.status, response.body
+
+    status, body = run_async(scenario())
+    assert (status, body) == (200, "fine")
+
+
+def test_the_session_timeout_raises_a_typed_error_not_a_bare_timeout(
+    server: LocalHttpServer,
+) -> None:
+    """§5.2: aiohttp types never escape `get`, including the session's own budget.
+
+    The connector timeout surfaces as `aiohttp.ServerTimeoutError`, which *is* an
+    `aiohttp.ClientError` and was already converted. The session's own
+    `ClientTimeout(total=...)` raises the builtin `TimeoutError`, which is not a
+    `ClientError` — so it escaped `get` untyped. Mutation evidence: removing the
+    `except TimeoutError` arm turns this test red with a bare `TimeoutError`.
+    """
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow(_path: str) -> Reply:
+        started.set()
+        release.wait(10)
+        return text("too late")
+
+    server.route("/slow", slow)
+
+    async def scenario() -> None:
+        async with Session(
+            allowlist=frozenset({TRUSTED}),
+            allow_http=True,
+            timeout_s=0.2,
+        ) as session:
+            await session.get(server.url("/slow"))
+
+    try:
+        with pytest.raises(BackendUnreachable) as caught:
+            run_async(scenario())
+        assert "TimeoutError" in str(caught.value.detail)
+    finally:
+        release.set()
 
 
 def test_a_plain_get_returns_the_body(server: LocalHttpServer) -> None:

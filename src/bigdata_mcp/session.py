@@ -8,11 +8,13 @@ is worth more than a review comment:
    redirects *by default* — measured, not assumed: it followed a 302 and returned
    200. So the raw session is never exposed, and the rule is pinned by
    `scripts/redirect_gate.py` plus a test rather than by review.
-2. **Every hop is re-validated against the configured allowlist.** The check runs
-   on the redirect *target*, not only on the initial URL, because a first-hop-only
-   check is precisely the one that lets a trusted host redirect to
-   `169.254.169.254`. YARN HA needs this: the standby answers 307 pointing at the
-   active peer, and refusing that would make the estate unreachable (§3).
+2. **Every request and every hop is validated against the configured allowlist.**
+   The check runs on the initial URL *and* on each redirect target, because both
+   ends of the chain are policy: a first-hop-only check lets a caller-supplied URL
+   reach any host, and a target-only check would let the initial URL bypass a
+   posture that promises "empty permits nothing". YARN HA needs this: the standby
+   answers 307 pointing at the active peer, and refusing that would make the
+   estate unreachable (§3).
 3. **HTTPS → HTTP is always refused.** A redirect that downgrades transport
    cannot be inside a policy that exists to protect transport.
 4. **No `ssl.SSLContext` is ever built from a default trust source.** Corporate
@@ -176,8 +178,8 @@ class Session:
     `aiohttp.ClientSession`, and `scripts/redirect_gate.py` enforces that.
 
     Args:
-        allowlist: Hosts a request and each of its redirects may reach. Empty
-            permits nothing, so a misconfigured session cannot reach out.
+        allowlist: Hosts the initial request and each of its redirects may reach.
+            Empty permits nothing, so a misconfigured session cannot reach out.
         ca_bundle: PEM bundle for the TLS context. When `None`, no context is
             built and every `https://` request raises `MissingCABundleError`:
             this seam never substitutes a default trust source.
@@ -198,8 +200,17 @@ class Session:
         allow_http: bool = False,
         headers: Mapping[str, str] | None = None,
     ) -> None:
-        """Store the policy. Nothing is opened until `__aenter__`."""
-        self._allowlist = allowlist
+        """Store the policy. Nothing is opened until `__aenter__`.
+
+        Allowlist entries are normalised through `host_of` so both sides of the
+        membership check compare canonical hosts: the request side is always
+        `host_of(url)`, so an entry written as `host:port` would otherwise never
+        match anything — silently, which for a first-hop check is the difference
+        between a policy and a decoration.
+        """
+        self._allowlist = frozenset(
+            host_of(entry) or entry.lower() for entry in allowlist
+        )
         self._headers: dict[str, str] = dict(headers or {})
         self._timeout_s = timeout_s
         self._max_output_bytes = max_output_bytes
@@ -284,16 +295,20 @@ class Session:
             BackendUnreachable: If the endpoint could not be reached, naming the
                 URL attempted and the transport fault class. `aiohttp` types never
                 escape this method — §5.2 requires a clean tool error, never a
-                library exception reaching an adapter.
+                library exception reaching an adapter. The session's own timeout
+                budget is included: its builtin `TimeoutError` is not an
+                `aiohttp.ClientError`, so it is converted here too.
 
-        A `PermissionError` also escapes, from `_check_initial_scheme` or
-        `_next_hop`, but only ever with a message naming the rule that fired.
+        A `PermissionError` also escapes, from `_check_initial_scheme`,
+        `_check_host_allowed`, or `_next_hop`, but only ever with a message naming
+        the rule that fired.
         """
         current = url
         first_origin = _origin_of(current)
+        self._check_initial_scheme(current)
+        self._check_host_allowed(host_of(current), current)
         hops = 0
         while True:
-            self._check_initial_scheme(current)
             try:
                 merged = self._headers_for(current, first_origin, headers)
                 async with self._raw().get(
@@ -305,6 +320,15 @@ class Session:
                         self._refuse(RedirectRefusal.TOO_MANY_HOPS, current)
                     current = self._next_hop(raw.headers.get("Location"), current)
                     hops += 1
+            except TimeoutError as exc:
+                # The session's own `ClientTimeout(total=...)` raises the builtin
+                # `TimeoutError`, which is *not* an `aiohttp.ClientError`. Left
+                # uncaught it would escape as a bare library exception — exactly
+                # what §5.2 forbids — so it joins the same typed error.
+                raise BackendUnreachable(
+                    endpoint=current,
+                    detail=f"TimeoutError after {self._timeout_s:.1f}s budget",
+                ) from exc
             except aiohttp.ClientError as exc:
                 raise BackendUnreachable(
                     endpoint=current, detail=type(exc).__name__
@@ -414,8 +438,8 @@ class Session:
         """Validate one redirect and return the URL to follow.
 
         This is the rule §4.2 item 4 exists for. The allowlist is checked against
-        the *target*, because the initial URL was already trusted and the threat is
-        a trusted host pointing somewhere else.
+        the *target*, because the initial URL has already had the identical check
+        in `get` — see `_check_host_allowed`, which both hops share.
 
         Takes the `Location` value rather than the response, deliberately: the rule
         needs one header and one URL, and a signature that admits an
@@ -439,14 +463,30 @@ class Session:
         was_https = urlsplit(current).scheme.lower() == Scheme.HTTPS
         if was_https and urlsplit(target).scheme.lower() == Scheme.HTTP:
             self._refuse(RedirectRefusal.SCHEME_DOWNGRADE, f"{current} -> {target}")
-        host = host_of(target)
+        self._check_host_allowed(host_of(target), f"{current} -> {target}")
+        return target
+
+    def _check_host_allowed(self, host: str, detail: str) -> None:
+        """Refuse a host that is not on the allowlist.
+
+        Shared by the first request and every redirect hop. Hoisted out of
+        `_next_hop` because the first request needs the identical check: the
+        allowlist is what a caller configures instead of trusting itself, and an
+        initial request that skips it makes `Session(allowlist=frozenset())` — the
+        documented "permits nothing" posture — reachable by any URL the caller
+        happens to pass. Raises through `_refuse`, which names the rule and the
+        URL.
+
+        Args:
+            host: The hostname the request would reach.
+            detail: URL context for the refusal message.
+        """
         if host not in self._allowlist:
             allowed = ", ".join(sorted(self._allowlist)) or "(nothing)"
             self._refuse(
                 RedirectRefusal.NOT_ALLOWLISTED,
-                f"{host}, from {current} -> {target}. Allowed: {allowed}",
+                f"{host}, from {detail}. Allowed: {allowed}",
             )
-        return target
 
     async def _read(self, raw: aiohttp.ClientResponse, url: str) -> Response:
         """Read a non-redirect response, enforcing the byte cap.
