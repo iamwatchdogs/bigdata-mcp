@@ -15,10 +15,8 @@ Mutation evidence, each applied and observed red before reverting:
 * E3 make the queue unbounded -> `test_the_queue_refuses_at_its_cap` and
   `test_a_refusal_does_not_run_the_work`; running the whole file under E3 hangs,
   which is the cleanest possible demonstration of what an unbounded queue does.
-* E4 release the permit only on success ->
-  `test_a_permit_is_released_when_the_body_raises`
-* E5 leave the gate's own occupancy accounting stale ->
-  `test_the_gate_bounds_concurrency_and_never_exceeds_its_cap`
+* E4, E5, G1-G4 are recorded in `test_gate.py`'s docstring — the gate section
+  moved there when this file crossed Codacy's 500-NLOC limit
 * E6 drop the TTL expiry -> `test_an_expired_entry_is_not_served`
 * E7, E8, E13, E14, E15 are recorded in `test_singleflight.py`'s docstring
 * H1 let the first caller's `use_cache` decide for everyone coalescing ->
@@ -37,6 +35,21 @@ Mutation evidence, each applied and observed red before reverting:
 * E11 clamp the TTL floor to zero -> `test_the_ttl_is_clamped_into_the_specs_range`
 * E12 skip the cache on a repeat call ->
   `test_a_repeated_call_is_answered_from_the_cache`
+* G1 drop the `max(0, ...)` clamp on `available` ->
+  `test_a_gate_reports_how_many_permits_are_free`
+* G2 report the cap regardless of occupancy -> the same test
+* G3 make `len(gate)` report occupancy, the mistake the test exists to prevent ->
+  `test_len_of_a_gate_is_its_configured_cap`
+* G4 return gate objects from `hosts()` instead of host names ->
+  `test_the_registry_reports_only_the_hosts_that_have_a_gate`
+
+G1 to G4 came from the per-file coverage floor: `available`, `__len__` and
+`hosts()` were the three lines in `semaphore.py` no test had ever called, and they
+are all accessors rather than logic — which is exactly why they drift. `hosts()`
+is the one with a real semantic trap in it: "every host with a gate *so far*" is
+not "every configured source", and a reader who expects the latter will find an
+answer that never grows to match the config. The absent host is asserted for that
+reason, not just the two present ones.
 
 Two design bugs were found by these tests rather than by review, and both are
 recorded in the code they came from:
@@ -45,8 +58,7 @@ recorded in the code they came from:
   never taken. `test_a_refusal_releases_the_slot_it_was_about_to_take` caught it.
 - The gate originally *refused* rather than waited, so any configuration with
   `queue_depth` greater than the derived cap — the normal one — raised
-  `PermitUnavailable` at the caller. The queue rejects and the semaphore bounds;
-  making both refuse is the same control twice, with the wrong precedence.
+  `PermitUnavailable` at the caller. Its tests moved to `test_gate.py`.
 """
 
 from __future__ import annotations
@@ -61,7 +73,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 from bigdata_mcp.engine import FakeClock
-from bigdata_mcp.engine import HostGate
 from bigdata_mcp.engine import PoliteEngine
 from bigdata_mcp.engine import Probe
 from bigdata_mcp.engine import TtlCache
@@ -116,86 +127,6 @@ def test_the_engine_reports_the_derived_cap() -> None:
     engine = PoliteEngine(FakeExecutor(), edge_cores=16)
     assert engine.concurrency == 8
     assert engine.stats().concurrency == 8
-
-
-# --------------------------------------------------------------------------
-# The gate: never negative, never leaked, never queued
-# --------------------------------------------------------------------------
-
-
-async def test_the_gate_bounds_concurrency_and_never_exceeds_its_cap() -> None:
-    """The gate waits for a slot; it does not refuse.
-
-    §10.1 splits the two controls: the bounded queue rejects, the semaphore
-    bounds. A semaphore that refused would make the depth cap and the concurrency
-    cap the same control twice, and the two would contradict each other the moment
-    `queue_depth` exceeds the derived cap — which is the normal configuration.
-    """
-    gate = HostGate(2)
-    order: list[int] = []
-
-    async def hold(index: int) -> None:
-        async with gate.permit():
-            order.append(index)
-            await asyncio.sleep(0.005)
-
-    await asyncio.gather(*(hold(index) for index in range(6)))
-    assert gate.in_flight == 0
-    assert gate.peak <= 2
-
-
-def test_a_gate_below_one_is_refused() -> None:
-    with pytest.raises(ValueError, match="at least 1"):
-        _ = HostGate(0)
-
-
-async def test_a_permit_is_released_when_the_body_raises() -> None:
-    """A leaked permit degrades a server into a single-threaded one that looks fine."""
-
-    async def scenario() -> int:
-        gate = HostGate(1)
-        with pytest.raises(RuntimeError):
-            await _raise_inside(gate)
-        return gate.in_flight
-
-    assert await scenario() == 0
-
-
-async def test_the_peak_is_recorded_so_a_cap_that_never_bites_is_visible() -> None:
-    async def scenario() -> tuple[int, int]:
-        gate = HostGate(4)
-        async with gate.permit():
-            pass
-        return gate.peak, gate.in_flight
-
-    peak, now = await scenario()
-    assert peak == 1
-    assert now == 0
-
-
-async def test_the_stress_harness_never_lets_permits_go_negative() -> None:
-    """§17.2's stress invariant, verbatim: permit count never negative."""
-    engine = PoliteEngine(FakeExecutor(), edge_cores=4, queue_cap=64)
-
-    async def one(_i: int) -> str:
-        return (await engine.run(f"k{_i}", ("true",))).stdout
-
-    await asyncio.gather(*(one(index) for index in range(60)))
-
-    # The counter cannot go negative and the assertion has to be able to notice if
-    # it ever does, which `min(in_flight, peak) >= 0` cannot: both terms are
-    # non-negative by construction, so it holds whatever the counters say. The
-    # three assertions below are the properties that can each actually fail.
-    gate = engine.gates.for_host("edge")
-    assert gate.in_flight == 0, "permits were still held after every call returned"
-    # A ceiling, not a target: `FakeExecutor` returns immediately, so calls overlap
-    # only by chance and the peak is whatever the scheduler happened to produce.
-    # Asserting `peak == concurrency` would be asserting that this particular run
-    # saturated the gate, which is a property of the scheduler and not of the code.
-    assert 1 <= gate.peak <= engine.concurrency, (
-        f"peak in-flight was {gate.peak}, outside 1..{engine.concurrency}"
-    )
-    assert gate.in_flight <= gate.peak
 
 
 async def test_the_stress_harness_keeps_the_queue_bounded() -> None:
@@ -626,21 +557,6 @@ async def _answer(value: int) -> int:
     """
     await asyncio.sleep(0)
     return value
-
-
-async def _raise_inside(gate: HostGate) -> None:
-    """Enter a permit scope and fail inside it.
-
-    Args:
-        gate: The gate whose permit to hold.
-
-    Raises:
-        RuntimeError: Always, from inside the permit scope. That is the point: the
-            caller checks the gate has no permit left afterwards.
-    """
-    async with gate.permit():
-        boom = "backend exploded"
-        raise RuntimeError(boom)
 
 
 async def _never() -> int:
