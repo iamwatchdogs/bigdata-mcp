@@ -187,9 +187,10 @@ jobs:
         # `make lint-check` and silently unlinted in CI, which is the worst of both.
         #
         # Not left to ruff's default discovery either. With no paths it happens to
-        # reach the same 53 files today, but `[tool.ruff] testpaths` is a test-only
-        # setting, so a gate that leans on it is one config edit away from dropping
-        # `src/`. A CI gate should be readable rather than clever.
+        # reach the same 53 files today, but `[tool.pytest.ini_options] testpaths`
+        # is a test-only setting, so a gate that leans on it is one config edit
+        # away from dropping `src/`. A CI gate should be readable rather than
+        # clever.
         run: uv run ruff check src tests scripts
 
       - name: Run type checking
