@@ -7,10 +7,10 @@ would leave the code and the document disagreeing.
 **Mutation evidence** (AGENTS.md requires the red-then-green transcript):
 
 * Delete the §3 constraint row ->
-  `test_spec_records_that_development_has_no_estate_access` fails on the
+  `test_spec_records_the_development_environment_constraint` fails on the
   missing-literal assertion.
 * Add a scheme-prefixed URL for `yarn.corp:8088` to any module under `tests/` ->
-  `test_no_module_under_tests_targets_a_remote_host` fails, naming the file. (The
+  `test_no_test_targets_a_non_local_host` fails, naming the file. (The
   scheme is spelled out in prose here rather than written literally, because this
   very module is subject to the rule.)
 """
@@ -82,7 +82,7 @@ def _testing_section() -> str:
     return "\n".join(lines[start:end])
 
 
-def test_spec_records_that_development_has_no_estate_access() -> None:
+def test_spec_records_the_development_environment_constraint() -> None:
     """§3 carries the constraint, and §17.2 carries the rule it produces."""
     assert ESTATE_ACCESS_SENTINEL in _environment_section(), (
         "SPEC.md §3 must record that development has no access to the target estate; "
@@ -101,6 +101,27 @@ def test_fixture_ownership_is_split_between_implementer_and_owner() -> None:
     assert "does not validate a parser" in section
 
 
+def test_the_testing_table_rows_record_who_captures_and_what_stands_in() -> None:
+    """§3.1 asks §17.2 for a row and a paragraph; assert the row, not the prose.
+
+    The paragraph is the memorable part, and a table row is the part an edit
+    leaves alone because nothing quotes it. Without this assertion the row can
+    go and the section still reads as if it were recorded.
+    """
+    section = _testing_section()
+    table_lines = [
+        line
+        for line in section.splitlines()
+        if line.startswith("|") and "---" not in line
+    ]
+    assert any("capture-fixtures" in line for line in table_lines), (
+        "§17.2's table must name capture-fixtures as how the corpus is produced"
+    )
+    assert any("localhost" in line for line in table_lines), (
+        "§17.2's table must name the loopback server as the estate's substitute"
+    )
+
+
 @pytest.mark.parametrize(
     "path",
     sorted(
@@ -108,7 +129,7 @@ def test_fixture_ownership_is_split_between_implementer_and_owner() -> None:
     ),
     ids=lambda p: str(p.relative_to(REPO_ROOT)),
 )
-def test_no_module_under_tests_targets_a_remote_host(path: Path) -> None:
+def test_no_test_targets_a_non_local_host(path: Path) -> None:
     """No test may reach a non-local host.
 
     A convention with teeth. Every URL literal in the suite must be `localhost`

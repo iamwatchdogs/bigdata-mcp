@@ -1900,6 +1900,8 @@ environment variable, and why §16 has no plaintext `env:` credential tier.
 | TTL, rate limiter, queue deadlines | deterministic clock | **Verify `time-machine` exists** (§18.2). No `synctest` equivalent was confirmed. |
 | Polite engine invariants | stress harness | Asserts permit count never negative, queue never unbounded. Closest Python gets to `-race`. |
 | Cluster responses | golden fixtures | Captured from the real cluster. **Doubles as the v2 differential-test oracle.** |
+| The corpus itself | `bigdata-mcp capture-fixtures`, run by the **owner** | §3: development has no route to the estate, so the bytes are captured on the owner's machine and committed. Synthetic fixtures prove the loader, never a parser. |
+| Every test that touches the network | a real local server on `localhost` | §17.2's rule made behavioural: no test may reach the estate, so the cluster's substitute is a socket on loopback, not a mock and not a skip. |
 | stdout purity | CI integration test | Assert raw stdout is exactly one JSON object. |
 | Static | `ty` strict + `ruff` | Closes most of the Go gap. |
 
