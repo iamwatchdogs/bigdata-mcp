@@ -160,6 +160,7 @@ ignore = [
 "scripts/coderabbit_advisory.py" = ["start-process-with-partial-path"]
 "scripts/bandit_gate.py" = ["subprocess-without-shell-equals-true", "start-process-with-partial-path"]
 "scripts/codacy_gate.py" = ["subprocess-without-shell-equals-true", "start-process-with-partial-path"]
+"scripts/coverage_gate.py" = ["subprocess-without-shell-equals-true", "start-process-with-partial-path"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

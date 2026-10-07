@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import]
 import sys
 import tomllib
@@ -157,8 +158,19 @@ def _report_from_coverage() -> dict[str, object]:
         NoReport: If `coverage json` exits non-zero (typically no `.coverage`
             data file exists) or its stdout is not JSON.
     """
+    # The bare program name is load-bearing, not tidiness — the same reasoning
+    # `scripts/codacy_gate.py` records above its own call: opengrep's
+    # `dangerous-subprocess-use-audit` rule exempts a literal argv and reports
+    # anything else, and `[sys.executable, "-m", ...]` is not a literal. The
+    # `which` check runs first so the check and the call cannot disagree about
+    # whether the tool exists, and its failure is a clean `NoReport` rather than
+    # a `FileNotFoundError` traceback from a gate that is supposed to classify
+    # failures rather than raise them.
+    if shutil.which("coverage") is None:
+        message = "`coverage` is not on PATH; run through `uv run` or `make`"
+        raise NoReport(message)
     completed = subprocess.run(
-        [sys.executable, "-m", "coverage", "json", "-o", "-"],
+        ["coverage", "json", "-o", "-"],
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,

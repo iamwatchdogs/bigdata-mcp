@@ -17,6 +17,16 @@ the other twenty-four hold the total at 98% and every gate stays green.
 * C4 skip empty files -> `test_an_empty_file_is_not_held_against_the_floor`
 * C5 accept a report entry with no `percent_covered` as clean ->
   `test_a_summary_without_a_percentage_is_unreadable_not_passing`
+* C6 tolerate a non-int `num_statements` ->
+  `test_a_summary_without_a_percentage_is_unreadable_not_passing`, the
+  `null_count` case. The branch had no test until C6 went green, which is how
+  that surfaced
+* C7 remove the `shutil.which` guard ->
+  `test_a_missing_coverage_binary_is_unreadable_not_passing`. Written after the
+  call was changed to a bare `coverage` name to satisfy opengrep's
+  `dangerous-subprocess-use-audit` rule (see `scripts/codacy_gate.py` for the same
+  reasoning): with a literal program, an absent binary must still fail closed
+  rather than escape as `FileNotFoundError`
 
 The tests drive `main()` through `--json` and read the floor from the repository's
 own `pyproject.toml`, which is what the gate does in production. They are written
@@ -174,6 +184,23 @@ def test_an_empty_files_map_is_unreadable_not_passing() -> None:
         offenders({"files": {}}, floor=95.0)
     with pytest.raises(NoReport, match="no files map"):
         offenders({}, floor=95.0)
+
+
+def test_a_missing_coverage_binary_is_unreadable_not_passing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No `coverage` on PATH is exit 2, not a traceback.
+
+    The bare program name this gate now uses is what opengrep's
+    `dangerous-subprocess-use-audit` rule exempts — `codacy_gate.py` documents
+    the same trade — and it buys exactly this failure mode: `FileNotFoundError`
+    from a gate that is meant to classify failures rather than raise them. The
+    `which` guard is the difference, and this test is the only thing that would
+    notice its removal.
+    """
+    monkeypatch.setattr("coverage_gate.shutil.which", lambda _name: None)
+
+    assert main([]) == EXIT_NO_REPORT
 
 
 def test_a_clean_report_exits_zero(tmp_path: Path) -> None:
