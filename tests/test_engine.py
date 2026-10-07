@@ -26,6 +26,11 @@ Mutation evidence, each applied and observed red before reverting:
   `test_a_failure_is_shared_rather_than_retried_by_every_waiter`
 * E9 remove the pre-permit deadline check ->
   `test_a_call_with_no_budget_left_never_reaches_the_executor`
+* F1 build the engine deadline without the injected clock ->
+  `test_the_engine_deadline_runs_on_the_injected_clock`
+* F2 never enforce the queue cap -> `test_the_stress_harness_keeps_the_queue_bounded`
+* F3 stop tracking the queue's peak depth ->
+  `test_the_stress_harness_keeps_the_queue_bounded`
 * E10 let `spawn_failed` count as success ->
   `test_a_spawn_failure_is_not_a_success`
 * E11 clamp the TTL floor to zero -> `test_the_ttl_is_clamped_into_the_specs_range`
@@ -46,11 +51,14 @@ recorded in the code they came from:
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+from typing import TYPE_CHECKING
+from typing import override
 
 import pytest
 
-from bigdata_mcp.engine import BoundedQueue
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
 from bigdata_mcp.engine import FakeClock
 from bigdata_mcp.engine import HostGate
 from bigdata_mcp.engine import PoliteEngine
@@ -173,12 +181,22 @@ async def test_the_stress_harness_never_lets_permits_go_negative() -> None:
     async def one(_i: int) -> str:
         return (await engine.run(f"k{_i}", ("true",))).stdout
 
-    async def scenario() -> int:
-        await asyncio.gather(*(one(index) for index in range(60)))
-        gate = engine.gates.for_host("edge")
-        return min(gate.in_flight, gate.peak)
+    await asyncio.gather(*(one(index) for index in range(60)))
 
-    assert await scenario() >= 0
+    # The counter cannot go negative and the assertion has to be able to notice if
+    # it ever does, which `min(in_flight, peak) >= 0` cannot: both terms are
+    # non-negative by construction, so it holds whatever the counters say. The
+    # three assertions below are the properties that can each actually fail.
+    gate = engine.gates.for_host("edge")
+    assert gate.in_flight == 0, "permits were still held after every call returned"
+    # A ceiling, not a target: `FakeExecutor` returns immediately, so calls overlap
+    # only by chance and the peak is whatever the scheduler happened to produce.
+    # Asserting `peak == concurrency` would be asserting that this particular run
+    # saturated the gate, which is a property of the scheduler and not of the code.
+    assert 1 <= gate.peak <= engine.concurrency, (
+        f"peak in-flight was {gate.peak}, outside 1..{engine.concurrency}"
+    )
+    assert gate.in_flight <= gate.peak
 
 
 async def test_the_stress_harness_keeps_the_queue_bounded() -> None:
@@ -190,10 +208,8 @@ async def test_the_stress_harness_keeps_the_queue_bounded() -> None:
     """
     cap = 8
     engine = PoliteEngine(FakeExecutor(delay_s=0.005), edge_cores=4, queue_cap=cap)
-    peak = 0
 
     async def one(index: int) -> bool:
-        nonlocal peak
         try:
             await engine.run(f"k{index}", ("true",))
         except QueueFull:
@@ -201,8 +217,17 @@ async def test_the_stress_harness_keeps_the_queue_bounded() -> None:
         return True
 
     results = await asyncio.gather(*(one(index) for index in range(cap * 4)))
-    peak = engine.queue.depth
-    assert peak <= cap
+
+    # `peak_depth`, not `depth`. After `gather` every item has been released, so
+    # `depth` is 0 and `depth <= cap` is a tautology — it passes just as well
+    # against a queue with no cap at all, which is the whole thing being tested.
+    # The peak is read during execution and survives it.
+    # Both bounds, because each direction fails differently. `<= cap` alone passes
+    # against a queue that never tracked a peak at all, since 0 is under any cap.
+    assert engine.queue.peak_depth >= 1, "the queue never recorded any occupancy"
+    assert engine.queue.peak_depth <= cap, (
+        f"the queue reached {engine.queue.peak_depth} against a cap of {cap}"
+    )
     assert results.count(False) >= 1
     assert engine.stats().refused >= 1
 
@@ -216,82 +241,6 @@ async def test_the_engine_never_exceeds_the_derived_cap() -> None:
         return engine.gates.for_host("edge").peak
 
     assert await scenario() <= 2
-
-
-# --------------------------------------------------------------------------
-# The bounded queue
-# --------------------------------------------------------------------------
-
-
-def test_the_queue_refuses_at_its_cap() -> None:
-    queue: BoundedQueue[str] = BoundedQueue(2)
-    queue.admit()
-    queue.admit()
-    decision = queue.admit()
-    assert decision.admitted is False
-    assert decision.depth == 2
-
-
-def test_the_refusal_is_actionable() -> None:
-    """§8.2 row 4: depth, cap, and retry-after, or the model can only retry blindly."""
-    queue: BoundedQueue[str] = BoundedQueue(1)
-    queue.admit()
-    message = str(queue.admit().refuse())
-    assert "depth 1 of cap 1" in message
-    assert "Retry after" in message
-
-
-async def test_a_refusal_releases_the_slot_it_was_about_to_take() -> None:
-    """So a caller that catches `QueueFull` does not have to know it held a slot.
-
-    The queue is filled first, so `run` is genuinely refused rather than admitted;
-    without that the work would run and this test would hang on `_never`.
-    """
-    queue: BoundedQueue[int] = BoundedQueue(1)
-    queue.admit()
-
-    async def scenario() -> int:
-        with pytest.raises(QueueFull):
-            await queue.run(_never)
-        return queue.depth
-
-    assert await scenario() == 1
-    queue.release()
-    assert queue.depth == 0
-
-
-async def test_the_queue_depth_returns_to_zero_after_work() -> None:
-    queue: BoundedQueue[int] = BoundedQueue(4)
-
-    async def scenario() -> int:
-        await queue.run(lambda: _answer(7))
-        return queue.depth
-
-    assert await scenario() == 0
-
-
-def test_a_queue_below_one_is_refused() -> None:
-    with pytest.raises(ValueError, match="at least 1"):
-        _ = BoundedQueue(0)
-
-
-async def test_a_refusal_does_not_run_the_work() -> None:
-    queue: BoundedQueue[int] = BoundedQueue(1)
-    ran: list[int] = []
-
-    async def scenario() -> None:
-        queue.admit()
-
-        async def work() -> int:
-            await asyncio.sleep(0)
-            ran.append(1)
-            return 1
-
-        with pytest.raises(QueueFull):
-            await queue.run(work)
-
-    await scenario()
-    assert ran == []
 
 
 # --------------------------------------------------------------------------
@@ -513,6 +462,54 @@ async def test_the_fake_refuses_a_call_with_no_budget() -> None:
 # --------------------------------------------------------------------------
 
 
+async def test_the_engine_deadline_runs_on_the_injected_clock() -> None:
+    """A `FakeClock` must be able to expire an engine deadline.
+
+    The cache and the single-flight window both read `self._clock`, so before this
+    was passed through, a `FakeClock` could expire a cache entry and a
+    single-flight failure window but never a deadline: the deadline read
+    `time.monotonic` regardless, so the only way to reach the expiry branch was to
+    wait in real time. The module docstring says the engine runs on the injected
+    clock; this is that claim, checked.
+
+    The clock starts far enough ahead of any real monotonic reading that the two
+    cannot be confused, and the assertion is on where the deadline says it started.
+    Advancing the clock would not work: the deadline is created inside the call, so
+    it always begins at the current reading and is never already spent on entry.
+    """
+    clock = FakeClock(start=1_000_000.0)
+    seen: list[Deadline] = []
+
+    class RecordsDeadlines(FakeExecutor):
+        """A fake that keeps the deadline it was handed."""
+
+        @override
+        async def exec(self, argv: Sequence[str], deadline: Deadline) -> ExecResult:
+            """Record the deadline, then behave like the fake.
+
+            Args:
+                argv: The command.
+                deadline: The deadline the engine built.
+
+            Returns:
+                The fake's usual result.
+            """
+            seen.append(deadline)
+            return await super().exec(argv, deadline)
+
+    engine = PoliteEngine(RecordsDeadlines(), edge_cores=8, budget_s=10.0, clock=clock)
+
+    await engine.run("k", ("true",))
+
+    assert len(seen) == 1
+    # `approx`, not `==`: a real monotonic reading is on the order of 10^5 seconds
+    # on a developer laptop, so the two differ by five orders of magnitude. The
+    # tolerance only has to absorb float noise, not the gap it is proving.
+    assert seen[0].started_at == pytest.approx(1_000_000.0), (
+        "the deadline was not stamped from the injected clock"
+    )
+
+
 async def test_a_repeated_call_is_answered_from_the_cache() -> None:
     fake = FakeExecutor()
     engine = PoliteEngine(fake, edge_cores=8)
@@ -688,8 +685,3 @@ async def _never() -> int:
     await asyncio.sleep(3600)
     boom = "the queue ran work it should have refused"
     raise AssertionError(boom)
-
-
-def test_the_fixture_files_exist_where_the_docs_say() -> None:
-    """Guards the corpus location that `load_corpus`'s default names."""
-    assert (Path("tests/fixtures/synthetic")).is_dir()

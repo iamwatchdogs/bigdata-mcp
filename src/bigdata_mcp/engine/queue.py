@@ -77,6 +77,10 @@ class BoundedQueue(Generic[T]):  # ruff: ignore[non-pep695-generic-class] — Co
     Attributes:
         cap: The maximum depth, counting both queued and running items.
         _depth: Current depth.
+        _peak_depth: The deepest this has ever been. Tracked because `depth` reads
+            zero again once the work drains, so after a burst there is no way left
+            to ask how far it actually got — which is the only question worth asking
+            about a cap. `HostGate` keeps `peak_in_flight` for the same reason.
         _wait_s: Total seconds spent holding items, used to derive the retry hint.
         _completed: How many items have finished, the other half of that rate.
     """
@@ -96,6 +100,7 @@ class BoundedQueue(Generic[T]):  # ruff: ignore[non-pep695-generic-class] — Co
             raise ValueError(message)
         self.cap = cap
         self._depth = 0
+        self._peak_depth = 0
         self._wait_s = 0.0
         self._completed = 0
         self._release = asyncio.Event()
@@ -105,6 +110,15 @@ class BoundedQueue(Generic[T]):  # ruff: ignore[non-pep695-generic-class] — Co
     def depth(self) -> int:
         """Current depth."""
         return self._depth
+
+    @property
+    def peak_depth(self) -> int:
+        """The deepest this queue has ever been, over its whole life.
+
+        Never decreases, so a test can assert on it after the work has finished
+        rather than racing the work to sample `depth` while it is still running.
+        """
+        return self._peak_depth
 
     @property
     def available(self) -> int:
@@ -139,6 +153,7 @@ class BoundedQueue(Generic[T]):  # ruff: ignore[non-pep695-generic-class] — Co
                 retry_after_s=self._retry_after_s(),
             )
         self._depth += 1
+        self._peak_depth = max(self._peak_depth, self._depth)
         self._release.clear()
         return Admission(admitted=True, depth=self._depth, cap=self.cap)
 

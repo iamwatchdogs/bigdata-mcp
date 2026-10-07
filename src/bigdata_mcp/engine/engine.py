@@ -224,7 +224,13 @@ class PoliteEngine:
                 work that cannot run is a permit held for nothing.
         """
         gate = self.gates.for_host(self.host)
-        deadline = Deadline.starting_now(self.budget_s)
+        # The engine's clock, not `time.monotonic`. The cache and single-flight
+        # both read `self._clock`, so a deadline reading the wall clock instead
+        # means a `FakeClock` can expire a cache entry but never a deadline — and
+        # the module docstring promises the engine runs entirely on the injected
+        # clock. `Clock.now` and `Deadline` both come from `time.monotonic` by
+        # default, so passing it changes nothing in production.
+        deadline = Deadline.starting_now(self.budget_s, clock=self._clock.now)
         if deadline.expired:
             raise DeadlineExceeded(argv[0] if argv else key, self.budget_s)
 
