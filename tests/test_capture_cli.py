@@ -78,6 +78,7 @@ from bigdata_mcp.fixtures.fields import load_fixture
 from bigdata_mcp.fixtures.fields import parse_fixture
 from tests.support.fixture_docs import observed
 from tests.support.http_server import LocalHttpServer
+from tests.support.http_server import LocalTlsServer
 from tests.support.http_server import json_reply
 from tests.support.http_server import redirect
 
@@ -395,6 +396,63 @@ def test_an_http_capture_records_the_real_status_and_body(
     assert "STANDBY" in fixture.stdout
     assert fixture.transport is Transport.HTTPS_API
     assert fixture.request["path"] == "/ws/v1/cluster/info"
+
+
+def test_an_https_capture_without_a_ca_bundle_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No `--ca-bundle` means no capture over https, never a default trust fall-back."""
+    out = tmp_path / "captured.json"
+    code = capture.main([
+        "https_api",
+        "--url",
+        "https://127.0.0.1:1",
+        "--source-id",
+        "yarn_rm",
+        "--operation",
+        "GET /x",
+        "--allowlist-host",
+        "127.0.0.1",
+        "--out",
+        str(out),
+    ])
+    assert code == capture.EXIT_REFUSED
+    assert not out.exists()
+    assert "CA bundle" in capsys.readouterr().err
+
+
+def test_a_tls_capture_trusts_the_configured_bundle(tmp_path: Path) -> None:
+    """`--ca-bundle` reaches the seam: a host the system roots do not know."""
+    server = LocalTlsServer()
+    server.route("/ws/v1/cluster/info", lambda _p: json_reply({"state": "RUNNING"}))
+    server.start()
+    try:
+        out = tmp_path / "yarn-info.json"
+        code = capture.main([
+            "https_api",
+            "--url",
+            server.url(""),
+            "--path",
+            "/ws/v1/cluster/info",
+            "--source-id",
+            "yarn_rm",
+            "--operation",
+            "GET /ws/v1/cluster/info",
+            "--allowlist-host",
+            "127.0.0.1",
+            "--ca-bundle",
+            str(server.certificate_path),
+            "--provenance",
+            "laptop -> rm1",
+            "--out",
+            str(out),
+        ])
+        assert code == 0
+        fixture = load_fixture(out)
+        assert fixture.exit_code == 200
+        assert "RUNNING" in fixture.stdout
+    finally:
+        server.stop()
 
 
 def test_a_capture_records_a_refused_redirect_as_a_failure(

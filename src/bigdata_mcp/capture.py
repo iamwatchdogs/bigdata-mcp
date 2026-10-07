@@ -133,6 +133,8 @@ _TRANSPORT_EPILOG = (
     "              shelling out would put an SSH client on a capture\n"
     "              tool's request path where §11.1's allowlist cannot\n"
     "              reach it. Use `wrap-ssh` on the operator's copy.\n\n"
+    "  tls_verify  It is a configuration error to capture over https without\n"
+    "              --ca-bundle; no default trust source will be invented.\n\n"
     f"{SSH_CLI_RECIPE}"
 )
 
@@ -223,6 +225,16 @@ def _add_http_command(commands: Subparsers, transport: Transport) -> None:
         help=(
             "REFUSED in this build: there is no secret store, so a reference "
             "cannot be resolved. Use wrap-ssh for authenticated captures"
+        ),
+    )
+    command.add_argument(
+        "--ca-bundle",
+        default=None,
+        type=Path,
+        help=(
+            "PEM bundle trusting the captured endpoint's CA. Required for "
+            "https:// captures: the session refuses to find trust in a default "
+            "source instead of erroring on a missing CA"
         ),
     )
     command.add_argument(
@@ -335,6 +347,7 @@ def _capture(args: argparse.Namespace) -> Fixture:
         async with Session(
             allowlist=frozenset({args.allowlist_host}),
             allow_http=args.url.startswith("http://"),
+            ca_bundle=str(args.ca_bundle) if args.ca_bundle else None,
         ) as session:
             response = await session.get(url)
             return response.status, response.body, response.url

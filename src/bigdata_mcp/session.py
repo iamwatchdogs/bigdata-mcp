@@ -56,6 +56,7 @@ from urllib.parse import urlsplit
 import aiohttp
 
 from bigdata_mcp.errors import BackendUnreachable
+from bigdata_mcp.errors import MissingCABundleError
 from bigdata_mcp.hosts import host_of
 
 if TYPE_CHECKING:
@@ -139,21 +140,28 @@ class Response:
     truncated: bool = False
 
 
-def build_ssl_context(ca_bundle: str | None) -> ssl.SSLContext:
+def build_ssl_context(ca_bundle: str) -> ssl.SSLContext:
     """Build the one `SSLContext` this process uses for a CA bundle.
 
-    Never built from a default trust source. §3 records that corporate endpoints
-    use an internal CA, and a library default would either fail on every internal
-    host or — worse, if someone "fixed" that by turning verification off — pass
-    silently. Nothing here returns a permissive context.
+    Never built from a default trust source: §3's environment is corporate, and
+    a library default would either fail on every internal host or — worse, if
+    someone "fixed" that by turning verification off — pass silently. Nothing
+    here returns a permissive context.
 
     Args:
-        ca_bundle: Path to a PEM bundle, or `None` to load the system roots
-            explicitly. Either way the returned context verifies.
+        ca_bundle: Path to a PEM bundle. Required; `create_default_context`
+            with no path loads the library's default trust roots, which is the
+            path §3 forbids.
 
     Returns:
         A verifying context with hostname checking on.
+
+    Raises:
+        ValueError: If `ca_bundle` is empty.
     """
+    if not ca_bundle:
+        message = "An https session needs an explicit ca_bundle: no PEM path given"
+        raise ValueError(message)
     context = ssl.create_default_context(cafile=ca_bundle)
     context.check_hostname = True
     context.verify_mode = ssl.CERT_REQUIRED
@@ -170,7 +178,9 @@ class Session:
     Args:
         allowlist: Hosts a request and each of its redirects may reach. Empty
             permits nothing, so a misconfigured session cannot reach out.
-        ca_bundle: PEM bundle for the TLS context, or `None` for system roots.
+        ca_bundle: PEM bundle for the TLS context. When `None`, no context is
+            built and every `https://` request raises `MissingCABundleError`:
+            this seam never substitutes a default trust source.
         timeout_s: Per-request budget. Must undercut the client's own (§3).
         max_output_bytes: Hard cap on a response body.
         allow_http: Whether an initial `http://` request is permitted. Off by
@@ -194,7 +204,9 @@ class Session:
         self._timeout_s = timeout_s
         self._max_output_bytes = max_output_bytes
         self._allow_http = allow_http
-        self._ssl_context = build_ssl_context(ca_bundle)
+        self._ssl_context = (
+            build_ssl_context(ca_bundle) if ca_bundle is not None else None
+        )
         self._session: aiohttp.ClientSession | None = None
 
     async def __aenter__(self) -> Self:
@@ -211,7 +223,8 @@ class Session:
             This instance, so `async with Session(...) as s:` works.
         """
         connector = aiohttp.TCPConnector(
-            limit_per_host=LIMIT_PER_HOST, ssl=self._ssl_context
+            limit_per_host=LIMIT_PER_HOST,
+            **({"ssl": self._ssl_context} if self._ssl_context is not None else {}),
         )
         self._session = aiohttp.ClientSession(
             connector=connector,
@@ -378,9 +391,19 @@ class Session:
 
         Raises:
             PermissionError: If the scheme is not one this session permits.
+            MissingCABundleError: If an `https://` URL arrives with no CA bundle
+                configured, instead of a default trust source being substituted.
         """
         scheme = urlsplit(url).scheme.lower()
         if scheme == Scheme.HTTPS or (scheme == Scheme.HTTP and self._allow_http):
+            if scheme == Scheme.HTTPS and self._ssl_context is None:
+                message = (
+                    f"Cannot start an https request to {url}: no CA bundle is "
+                    "configured for this session, and a default trust source is "
+                    "not constructed. Pass ca_bundle to Session, or --ca-bundle "
+                    "to capture-fixtures."
+                )
+                raise MissingCABundleError(message)
             return
         permitted = "http and https" if self._allow_http else "https only"
         shown = scheme or "(none)"
@@ -512,6 +535,7 @@ __all__ = [
     "MAX_REDIRECTS",
     "REDIRECT_STATUSES",
     "BackendUnreachable",
+    "MissingCABundleError",
     "RedirectRefusal",
     "Response",
     "Scheme",

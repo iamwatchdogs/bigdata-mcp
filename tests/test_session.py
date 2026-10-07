@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from bigdata_mcp.errors import BackendUnreachable
+from bigdata_mcp.errors import MissingCABundleError
 from bigdata_mcp.session import LIMIT_PER_HOST
 from bigdata_mcp.session import MAX_REDIRECTS
 from bigdata_mcp.session import RedirectRefusal
@@ -100,7 +101,8 @@ def trusted_session(
     Args:
         allow_http: Whether to permit an initial plain-HTTP request.
         max_output_bytes: The response byte cap.
-        ca_bundle: PEM bundle for the TLS context, or `None` for system roots.
+        ca_bundle: PEM bundle for the TLS context. `None` refuses, rather than
+            inventing trust from a default source.
 
     Returns:
         A configured, unopened session.
@@ -422,9 +424,21 @@ def test_a_scheme_this_server_does_not_speak_is_refused(scheme: str) -> None:
 
 def test_the_ssl_context_never_trusts_by_default() -> None:
     """§4.2 item 7. A permissive context would make every internal host trusted."""
-    context = build_ssl_context(None)
-    assert context.verify_mode == ssl.CERT_REQUIRED
-    assert context.check_hostname is True
+    server = LocalTlsServer()
+    server.route("/x", lambda _path: text("secret"))
+    server.start()
+    try:
+        context = build_ssl_context(str(server.certificate_path))
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.check_hostname is True
+    finally:
+        server.stop()
+
+
+def test_build_ssl_context_rejects_an_absent_bundle() -> None:
+    """An empty hold of the bundle would silently become the default roots."""
+    with pytest.raises(ValueError, match="ca_bundle"):
+        build_ssl_context("")
 
 
 def test_a_missing_ca_bundle_fails_rather_than_falling_back() -> None:
@@ -442,9 +456,8 @@ def test_the_configured_ca_bundle_is_the_context_the_request_uses() -> None:
     and every internal-CA host failed. Both tests below passed while the promise
     was broken.
 
-    So this drives a real TLS socket. With the bundle, the handshake succeeds; with
-    no bundle, the same server is refused. A context that is built but not attached
-    cannot produce that pair.
+    So this drives a real TLS socket. With the bundle, the handshake succeeds;
+    with none, the seam refuses before the socket is touched.
     """
     server = LocalTlsServer()
     server.route("/x", lambda _path: text("secret"))
@@ -464,10 +477,26 @@ def test_the_configured_ca_bundle_is_the_context_the_request_uses() -> None:
         assert trusted.status == 200
         assert trusted.body.strip() == "secret"
 
-        with pytest.raises(BackendUnreachable):
+        with pytest.raises(MissingCABundleError, match="CA bundle"):
             run_async(fetch(None))
     finally:
         server.stop()
+
+
+def test_an_https_request_is_refused_when_no_ca_bundle_is_configured() -> None:
+    """A bundle-less Session must not reach the public roots behind its back.
+
+    Mutation watch: deleting the guard makes the failure the TLS handshake's
+    own (`BackendUnreachable`), which is exactly the silent-fallback-shape the
+    spec forbids — enough that this test must go red before the fix lands.
+    """
+
+    async def scenario() -> None:
+        async with Session(allowlist=frozenset({"127.0.0.1"})) as session:
+            await session.get("https://127.0.0.1:1/x")
+
+    with pytest.raises(MissingCABundleError, match="CA bundle"):
+        run_async(scenario())
 
 
 # --------------------------------------------------------------------------

@@ -164,6 +164,17 @@ class BackendUnreachable(_Taxonomied):
         self.message = f"Backend unreachable at {self.endpoint}"
 
 
+class MissingCABundleError(BigDataMcpError):
+    """An `https://` request went out without a configured CA bundle.
+
+    The seam refuses, rather than building an `SSLContext` from a default trust
+    source: a corporate internal CA is the only trust root that matches §3's
+    environment, and silently falling back to the public roots either fails
+    every internal host or gets "fixed" by disabling verification. Plain-HTTP
+    requests do not raise this.
+    """
+
+
 @dataclass(eq=False)
 class HostKeyUnknownOrChanged(_Taxonomied):
     """SSH host-key failure. **Human**-only, and never auto-accepted.
