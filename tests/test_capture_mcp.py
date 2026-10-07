@@ -27,6 +27,18 @@ applied and observed failing before reverting:
   `test_the_entry_point_propagates_the_subcommand_exit_code` (in `test_main.py`)
 * M8 put the subparser `dest` back to `command`, colliding with `--command` ->
   the four `test_an_mcp_capture_*` tests
+* M9 drop the count from the non-text summary line ->
+  `test_a_non_text_content_block_is_recorded_as_omitted_not_dropped`
+* M10 ignore non-text blocks silently rather than counting them -> the same test
+* M11 hand the whole argv to `command` and nothing to `args` ->
+  `test_the_real_stdio_client_splits_program_from_its_arguments`
+* M12 remove the `connect is None` fallback -> the same module, in
+  `test_the_capture_falls_back_to_the_real_stdio_client_when_none_is_injected`
+
+M9 to M12 exist because of the per-file coverage floor, and each one was a branch
+no test had reached. M11 and M12 are the pair worth noting: they are the production
+path, and the whole module injected around them, so a real capture failing to launch
+a server was invisible to a suite that was otherwise thorough about this file.
 
 M6 stayed green on its first attempt, which is why that test exists at all. M8 also
 stayed green, because the mutation renamed the option's `dest` too and so removed
@@ -37,15 +49,20 @@ right one.
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import TYPE_CHECKING
 from typing import Any
+from typing import Self
 
 import pytest
 from mcp import Client
 from mcp.server import MCPServer
+from mcp.types import ImageContent
+from mcp.types import TextContent
 
 from bigdata_mcp import capture
+from bigdata_mcp import capture_mcp
 from bigdata_mcp.errors import ConfigError
 from bigdata_mcp.fixtures import Transport
 from bigdata_mcp.fixtures.fields import load_fixture
@@ -56,6 +73,29 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from collections.abc import Sequence
     from pathlib import Path
+
+    from mcp.client.stdio import StdioServerParameters
+
+
+class _FakeClient:
+    """An `McpConnect` result that answers with one text block."""
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    async def call_tool(self, _tool: str, _arguments: dict[str, Any]) -> Any:
+        return type(
+            "R",
+            (),
+            {
+                "content": [TextContent(type="text", text="ok")],
+                "structured_content": None,
+                "is_error": False,
+            },
+        )()
 
 
 #: Whatever `--command` says, because the injected client never spawns it. Keeping a
@@ -89,6 +129,31 @@ def _registry(*, fails: bool = False) -> MCPServer:
     return server
 
 
+def _mixed_content_registry() -> MCPServer:
+    """Return a server whose tool answers with text *and* an image block.
+
+    Added for the per-file coverage floor: `_text_of`'s non-text branch had never
+    been reached, because a tool returning a string never produces one.
+
+    Returns:
+        A server whose `mixed` tool returns two content blocks of different types.
+    """
+    server = MCPServer(name="registry")
+
+    def mixed(name: str) -> list[Any]:
+        del name  # the tool takes an argument because every tool in this module does
+        # 8 bytes of a real PNG signature so the SDK accepts it as image data
+        # rather than rejecting the block and turning this into a test of nothing.
+        png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 8).decode()
+        return [
+            TextContent(type="text", text="hello"),
+            ImageContent(type="image", data=png, mime_type="image/png"),
+        ]
+
+    server.tool(name="mixed")(mixed)
+    return server
+
+
 def _connector(server: MCPServer) -> Callable[[Sequence[str]], Client]:
     """Return a `connect` seam that talks to `server` in-process.
 
@@ -105,12 +170,15 @@ def _connector(server: MCPServer) -> Callable[[Sequence[str]], Client]:
     return connect
 
 
-def _mcp_argv(out: Path, *, arguments: str = '{"name": "users"}') -> list[str]:
+def _mcp_argv(
+    out: Path, *, arguments: str = '{"name": "users"}', tool: str = "schema_get"
+) -> list[str]:
     """Return a complete `mcp_client` argv.
 
     Args:
         out: Where to write the fixture.
         arguments: The `--arguments` JSON.
+        tool: The tool to call.
 
     Returns:
         An argv list suitable for `capture.main`.
@@ -120,7 +188,7 @@ def _mcp_argv(out: Path, *, arguments: str = '{"name": "users"}') -> list[str]:
         "--command",
         UNUSED_ARGV,
         "--tool",
-        "schema_get",
+        tool,
         "--arguments",
         arguments,
         "--source-id",
@@ -309,3 +377,98 @@ def test_a_relayed_call_that_also_carries_a_path_is_refused() -> None:
     """A URL field on a relayed call describes a request that never happened."""
     with pytest.raises(ConfigError, match=r"request\.path"):
         parse_fixture(_relayed(path="/schema/users"))
+
+
+# --------------------------------------------------------------------------
+# Two paths only the real CLI reaches
+# --------------------------------------------------------------------------
+
+
+def test_a_non_text_content_block_is_recorded_as_omitted_not_dropped(
+    tmp_path: Path,
+) -> None:
+    """A tool that answers with an image must not produce an empty stdout.
+
+    `_text_of` joins the text blocks and counts the rest. The count matters: a
+    capture that silently dropped a non-text block would record a tool that
+    returned *nothing*, which replays as a tool that returned nothing — a
+    fabricated answer, the one outcome the observer's rules exist to prevent.
+
+    The count is asserted rather than just the text because a summary line that
+    omits the count ("[non-text content omitted]") still reads as if something
+    were there, and would be indistinguishable from a server that sent prose.
+    """
+    out = tmp_path / "mixed.json"
+    server = _mixed_content_registry()
+
+    code = capture.main(_mcp_argv(out, tool="mixed"), connect=_connector(server))
+
+    assert code == 0, f"capture exited {code}"
+    stdout = load_fixture(out).stdout
+    assert "hello" in stdout, f"the text block was lost: {stdout!r}"
+    assert "1 non-text content block(s) omitted" in stdout, (
+        f"the non-text block was neither kept nor counted: {stdout!r}"
+    )
+
+
+def test_the_real_stdio_client_splits_program_from_its_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_stdio_client` hands `argv[0]` to `command` and the rest to `args`.
+
+    The production default, unexercised because every other test here injects
+    `connect`. Getting this wrong is silent and total: pass the whole argv as
+    `command` and no real capture can launch a server, and drop `argv[0]` as the
+    program and the server is an empty command. Neither raises here, and no test
+    that injects a connector would notice.
+
+    `Client` is substituted so the parameters are readable — the SDK exposes no
+    getter for them, and reading a private attribute would pin this test to an
+    implementation detail of a dependency instead of to this module's behaviour.
+    """
+    seen: list[StdioServerParameters] = []
+
+    def record(params: StdioServerParameters) -> None:
+        seen.append(params)
+
+    monkeypatch.setattr(capture_mcp, "Client", record)
+
+    # ruff: ignore[private-member-access] - the production default is the rule under test
+    capture_mcp._stdio_client(["python", "-m", "registry"])
+
+    assert len(seen) == 1, f"expected one client, built {len(seen)}"
+    params = seen[0]
+    assert params.command == "python", f"program was {params.command!r}"
+    assert params.args == ["-m", "registry"], f"arguments were {params.args!r}"
+
+
+def test_the_capture_falls_back_to_the_real_stdio_client_when_none_is_injected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`connect=None` must reach `_stdio_client` rather than raise on `None`.
+
+    The default branch, which no test reached until the per-file coverage floor:
+    every caller of `capture.capture` in this suite passes a connector, so a
+    change that dropped the fallback would leave the suite green and make every
+    real capture fail with `TypeError: 'NoneType' object is not callable`.
+
+    The real client is substituted rather than spawned, so the assertion is about
+    the branch being taken and not about stdio transport.
+    """
+    seen: list[Sequence[str]] = []
+    monkeypatch.setattr(
+        capture_mcp, "_stdio_client", lambda argv: seen.append(argv) or _FakeClient()
+    )
+
+    capture_mcp.capture(
+        "schema_get",
+        {"name": "users"},
+        "python -m registry --flag",
+        source_id="schema-registry",
+        operation="schema_get users",
+    )
+
+    assert seen == [["python", "-m", "registry", "--flag"]], (
+        f"the fallback received {seen!r}; it must be handed the shell-split argv "
+        "and must be the seam used when no connector is injected"
+    )
