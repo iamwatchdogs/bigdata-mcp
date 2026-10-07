@@ -80,7 +80,7 @@ CREDENTIAL_HEADERS: frozenset[str] = frozenset({
 })
 
 
-class Scheme(enum.Enum):
+class Scheme(enum.StrEnum):
     """The two schemes this seam speaks.
 
     Attributes:
@@ -380,9 +380,7 @@ class Session:
             PermissionError: If the scheme is not one this session permits.
         """
         scheme = urlsplit(url).scheme.lower()
-        if scheme == Scheme.HTTPS.value or (
-            scheme == Scheme.HTTP.value and self._allow_http
-        ):
+        if scheme == Scheme.HTTPS or (scheme == Scheme.HTTP and self._allow_http):
             return
         permitted = "http and https" if self._allow_http else "https only"
         shown = scheme or "(none)"
@@ -415,8 +413,8 @@ class Session:
         if not location:
             self._refuse(RedirectRefusal.NO_LOCATION, current)
         target = urljoin(current, location)
-        was_https = urlsplit(current).scheme.lower() == Scheme.HTTPS.value
-        if was_https and urlsplit(target).scheme.lower() == Scheme.HTTP.value:
+        was_https = urlsplit(current).scheme.lower() == Scheme.HTTPS
+        if was_https and urlsplit(target).scheme.lower() == Scheme.HTTP:
             self._refuse(RedirectRefusal.SCHEME_DOWNGRADE, f"{current} -> {target}")
         host = host_of(target)
         if host not in self._allowlist:
@@ -492,7 +490,7 @@ def _origin_of(url: str) -> str:
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
     port = parts.port
-    default = 443 if parts.scheme.lower() == Scheme.HTTPS.value else 80
+    default = 443 if parts.scheme.lower() == Scheme.HTTPS else 80
     return f"{parts.scheme.lower()}://{host}:{port or default}"
 
 
