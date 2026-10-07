@@ -365,7 +365,19 @@ class SubprocessExecutor:
         process: asyncio.subprocess.Process | None = None
         try:
             async with asyncio.timeout(deadline.remaining_s):
-                process = await asyncio.create_subprocess_exec(
+                # `# nosemgrep` on the call: opengrep's
+                # `dangerous-asyncio-create-exec-audit` rule asks for a static
+                # string as the program, and the program is `argv[0]` by design —
+                # §11.1 forbids a shell string, and that the caller names the
+                # command is what this seam is. `argv` comes from validated
+                # configuration and never from an untrusted source, which is what
+                # the rule's own message asks the caller to confirm.
+                #
+                # Bare rather than `: rule-id` because the id is 98 characters
+                # and this line's limit is 88; a directive that does not fit is a
+                # directive that does not work. So a different finding on this one
+                # line would also be silenced — accepted, and recorded here.
+                process = await asyncio.create_subprocess_exec(  # nosemgrep
                     *argv,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
