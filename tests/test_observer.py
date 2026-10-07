@@ -44,6 +44,26 @@ Mutation evidence, each applied and observed red before reverting:
   `test_macos_never_asks_for_a_memory_reading_at_all`
 * D12 drop the `unknown` substitution from `describe_host` ->
   `test_describe_host_substitutes_unknown_for_a_blank_reading`, all three cases
+* D13 drop the `< 2` guard on a valueless `MemAvailable:` line ->
+  `test_a_mem_available_line_with_no_value_reports_no_memory` (it raises
+  `IndexError` out of the observer instead of returning `None`, which is what the
+  guard is there to prevent)
+* D14 let a non-numeric `MemAvailable` value propagate ->
+  `test_a_non_numeric_mem_available_value_reports_no_memory`
+* D15 return `0.0` when the line is absent entirely ->
+  `test_meminfo_without_a_mem_available_line_reports_no_memory` — the exact
+  plausible-looking wrong answer the spec singles out
+* D16 drop the `UnicodeDecodeError` handler ->
+  `test_a_file_that_is_not_text_is_no_reading_at_all`
+* D17 have the default reader return nothing ->
+  `test_the_default_reader_reads_a_real_file`
+
+D13 to D17 came from the per-file coverage floor: seven lines in `detect.py` no
+test had reached, and all seven are refusal paths. A coverage floor that only adds
+happy-path tests would have found the opposite seven and been no better than
+before. Each one was reachable through `detect()` with an injected reader, which
+means the suite's injection seam had made them testable and nobody had used it for
+these — the same gap `capture_mcp.py` had, reached the same way.
 """
 
 from __future__ import annotations
@@ -55,6 +75,7 @@ import pytest
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from pathlib import Path
 
 from bigdata_mcp.engine.semaphore import derive_concurrency
 from bigdata_mcp.observer import Reading
@@ -63,6 +84,7 @@ from bigdata_mcp.observer import Support
 from bigdata_mcp.observer import describe_host
 from bigdata_mcp.observer import detect
 from bigdata_mcp.observer import has_command
+from bigdata_mcp.observer.detect import _real_read_text
 
 LOADAVG = "1.50 2.00 3.00 4/512 65530\n"
 
@@ -417,3 +439,103 @@ def test_the_source_enum_names_both_platforms() -> None:
         "sysctl vm.loadavg",
         "none",
     }
+
+
+# --------------------------------------------------------------------------
+# The refusal paths: no reading is never a zero
+# --------------------------------------------------------------------------
+
+
+def _detect_with(meminfo: str) -> Reading:
+    """Detect on Linux with a hand-written `/proc/meminfo`.
+
+    Args:
+        meminfo: The whole file's contents.
+
+    Returns:
+        The reading.
+    """
+    return detect(
+        system="linux",
+        read_text=files({"/proc/loadavg": LOADAVG, "/proc/meminfo": meminfo}),
+        read_command=commands({"nproc": "4"}),
+    )
+
+
+def test_a_mem_available_line_with_no_value_reports_no_memory() -> None:
+    """`MemAvailable:` with nothing after it is no reading, not zero.
+
+    `line.split()` on that line yields one token, and the `< 2` guard exists
+    because indexing `[1]` on it would raise `IndexError` out of the observer —
+    a probe that crashes the process it is supposed to report on. The value is
+    absent rather than invalid, so it must reach its own `return None`.
+    """
+    reading = _detect_with("MemTotal: 16000000 kB\nMemAvailable:\n")
+
+    assert reading.memory_available_mb is None
+    assert reading.is_usable_as_a_cap_driver is True, (
+        "no memory reading must not disqualify a host whose load average is fine"
+    )
+
+
+def test_a_non_numeric_mem_available_value_reports_no_memory() -> None:
+    """A present-but-unparseable value is refused, not coerced.
+
+    The `ValueError` branch, which no test had reached: `float("garbage")` must
+    become "no reading" rather than an exception escaping `_detect_linux` or a
+    fallback to `MemTotal`, which would report a number the probe never measured.
+    """
+    reading = _detect_with("MemAvailable: garbage kB\n")
+
+    assert reading.memory_available_mb is None
+
+
+def test_meminfo_without_a_mem_available_line_reports_no_memory() -> None:
+    """The fall-through when the file exists but the line does not.
+
+    Distinct from the existing test where `/proc/meminfo` is absent altogether —
+    there the guard is one line earlier, at `raw is None`. An older kernel that
+    omits `MemAvailable` reaches the end of the loop instead, and the two are
+    separate exits of the same function.
+    """
+    reading = _detect_with("MemTotal: 16000000 kB\nMemFree: 4000000 kB\n")
+
+    assert reading.memory_available_mb is None
+
+
+def test_a_file_that_is_not_text_is_no_reading_at_all() -> None:
+    """`UnicodeDecodeError` from a reader is treated like an absent file.
+
+    Both handlers return `None` and for the same reason: no reading, never a
+    fabricated zero. They are written as two clauses rather than one tuple
+    because PEP 758 lets Python 3.14 drop the parentheses and this repo's
+    formatter does — and the parentheses are all Codacy's parser can read.
+    """
+    message = "invalid start byte 0xff"
+    decoder_error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, message)
+
+    def not_text(_path: str) -> str:
+        raise decoder_error
+
+    reading = detect(system="linux", read_text=not_text)
+
+    assert reading.load_per_core is None, (
+        "an unmeasurable file must produce no load figure, not a default one"
+    )
+    assert reading.memory_available_mb is None
+
+
+def test_the_default_reader_reads_a_real_file(tmp_path: Path) -> None:
+    """`_real_read_text` is the fallback every other reader test substitutes.
+
+    Worth one test of its own: every other case in this module injects a reader,
+    so the real one could have been broken by a rename or an encoding change and
+    the suite would stay green. Asserted on a real file rather than on
+    `/proc/loadavg`, which does not exist on the machine running these tests.
+    """
+    target = tmp_path / "signal"
+    target.write_text("1.50 2.00 3.00 4/512 65530\n", encoding="utf-8")
+
+    text = _real_read_text(str(target))
+
+    assert text.startswith("1.50 "), f"read back {text!r}"
