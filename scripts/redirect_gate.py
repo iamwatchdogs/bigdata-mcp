@@ -28,7 +28,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_DIR = REPO_ROOT / "src" / "bigdata_mcp"
 
-#: The one module allowed to name these.
+#: The one module allowed to name these. Matched against
+#: `package_dir / ALLOWED_MODULE` and never against a bare basename: `rglob` reaches
+#: every subdirectory, so a nested `engine/session.py` exists as a plausible future
+#: file, and a basename comparison would silently exempt it — the seam would hold
+#: everywhere except the one place someone adds a module and assumes the gate saw
+#: it. §4.2 puts the policy-bearing HTTP code in *this* `session.py`, and a policy
+#: that leaks into a second file is not the policy any more.
 ALLOWED_MODULE = "session.py"
 
 __all__ = [
@@ -113,8 +119,9 @@ def find_violations(package_dir: Path = PACKAGE_DIR) -> list[str]:
 
     violations: list[str] = []
     root = _reporting_root(package_dir)
+    allowed = package_dir / ALLOWED_MODULE
     for module in sorted(package_dir.rglob("*.py")):
-        if module.name == ALLOWED_MODULE:
+        if module == allowed:
             continue
         relative = module.relative_to(root)
         lines = module.read_text(encoding="utf-8").splitlines()

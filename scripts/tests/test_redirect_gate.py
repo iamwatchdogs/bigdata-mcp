@@ -34,6 +34,16 @@ applied and observed failing before reverting:
   `test_the_exemption_is_exact_not_a_substring_of_the_module_name`
 * R5 scan with `glob` instead of `rglob`, so every subpackage is unchecked ->
   `test_modules_in_subpackages_are_scanned`
+* R6 exempt by *path* substring, so any nested `session.py` escapes ->
+  `test_a_nested_session_py_is_not_the_seam`
+
+A sixth test was written for this fix and then deleted: one asserting the
+exemption still holds when `package_dir` arrives spelled `./bigdata_mcp`. It could
+not fail. `rglob` roots its results at the directory it was handed, so the
+comparison is consistent under any spelling, and the only mutation that reached it
+was R6, which the nested test already catches. A test whose every passing mutant
+is caught by a different test is a test that documents a property nobody could
+break.
 
 R4 took two attempts and the first one taught something. The mutation as first
 written — `ALLOWED_MODULE in module.name` — is not a widening at all:
@@ -144,6 +154,32 @@ def test_the_exemption_is_exact_not_a_substring_of_the_module_name(
     )
     reported = find_violations(package)
     assert reported, "a module named session_helpers.py escaped the gate"
+
+
+def test_a_nested_session_py_is_not_the_seam(tmp_path: Path) -> None:
+    """The exemption is a *path*, not a basename.
+
+    The test above pins the filename. This one pins the location, and it is a
+    separate property: `rglob` reaches every subdirectory, so a nested
+    `engine/session.py` is a perfectly plausible file to add — and a basename
+    comparison exempts it without anyone noticing. The gate would then pass on a
+    tree where the policy-bearing HTTP code had been split into two modules and
+    one of them was never checked.
+
+    Worth separating from the filename case because the two mutations look alike
+    and only one of them is what a future edit produces. Naming a file
+    `session_helpers.py` is a deliberate act; someone organising `engine/` into
+    its own module is not thinking about this gate at all.
+    """
+    package = tmp_path / "bigdata_mcp"
+    (package / "engine").mkdir(parents=True)
+    (package / ALLOWED_MODULE).write_text("VALUE = 1\n", encoding="utf-8")
+    (package / "engine" / ALLOWED_MODULE).write_text(
+        "import aiohttp\n\n\ndef go(url):\n    return aiohttp.request('GET', url)\n",
+        encoding="utf-8",
+    )
+    reported = find_violations(package)
+    assert reported, "a nested session.py was treated as the seam module"
 
 
 def test_modules_in_subpackages_are_scanned(tmp_path: Path) -> None:
