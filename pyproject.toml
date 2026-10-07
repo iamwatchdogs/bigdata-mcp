@@ -132,9 +132,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["unused-import", "undocumented-public-package"]
-# Both roots. The suite spans `tests/` and `scripts/tests/`, and the second exists
-# so that a test of a tool in `scripts/` lives with that tool rather than coupling
-# the product suite to CI wiring.
+# Both roots, listed separately because TOML has no way to alias one list into
+# another pattern, and the two suites ignore the same four rules for the same
+# reason: `assert` is what pytest evaluates, and `D`/`ANN`/`ARG` are noise on a
+# test. Widening either root's rules has to be done here twice, deliberately.
 "tests/**/*.py" = ["assert", "D", "ANN", "ARG"]
 "scripts/tests/**/*.py" = ["assert", "D", "ANN", "ARG"]
 # Executable tooling, not a library: run by `make` and by the pre-commit hook,
