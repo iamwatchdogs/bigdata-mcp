@@ -411,6 +411,12 @@ class LocalTlsServer(LocalHttpServer):
             message = "LocalTlsServer is already running"
             raise RuntimeError(message)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        # Pin the floor rather than inheriting OpenSSL's default, which is TLS 1.0
+        # on some builds. CodeQL flags this call for exactly that reason, and it is
+        # right to: a TLS 1.0-capable server is a real weakness even when the only
+        # client is `LocalTlsServer` in the next test over. TLS 1.2 has been the
+        # floor since 2021, so nothing this suite speaks to needs 1.0.
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(self.certificate_path, self.key_path)
         self._server = _Server(("127.0.0.1", 0))
         self._server.routes = self.routes
