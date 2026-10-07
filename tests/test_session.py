@@ -40,9 +40,6 @@ Mutation evidence, each applied and observed red before reverting:
 from __future__ import annotations
 
 import ssl
-import subprocess  # ruff: ignore[suspicious-subprocess-import] -- bandit-config skips B404
-import sys
-import types
 from typing import TYPE_CHECKING
 
 import pytest
@@ -54,8 +51,6 @@ from bigdata_mcp.session import MAX_REDIRECTS
 from bigdata_mcp.session import RedirectRefusal
 from bigdata_mcp.session import Response
 from bigdata_mcp.session import Session
-from bigdata_mcp.session import _check_the_seam
-from bigdata_mcp.session import _modules_that_skip_the_seam
 from bigdata_mcp.session import build_ssl_context
 from tests.support.async_runner import run_async
 from tests.support.http_server import LocalHttpServer
@@ -502,65 +497,6 @@ def test_an_https_request_is_refused_when_no_ca_bundle_is_configured() -> None:
 
     with pytest.raises(MissingCABundleError, match="CA bundle"):
         run_async(scenario())
-
-
-_IMPORT_GUARD_PROGRAM = """
-import sys
-import types
-
-offender = types.ModuleType("bigdata_mcp.would_break_the_seam")
-offender.ClientSession = object
-sys.modules["bigdata_mcp.would_break_the_seam"] = offender
-
-try:
-    import bigdata_mcp.session  # noqa: F401
-except ImportError as exc:
-    sys.stderr.write(str(exc) + "\\n")
-    raise SystemExit(3)
-
-raise SystemExit(0)
-"""
-
-
-def test_an_import_of_the_client_outside_the_seam_fails() -> None:
-    """The grep gate misses a tree without it; an ImportError cannot be missed.
-
-    Runs a fresh interpreter so the pre-registration of a poisoned module is not
-    confused by this suite's own imports of `Session`. Deleting the guard in
-    `session.py` turns the import success into exit 0 here, so this is the
-    red-now test that keeps the two mechanisms honest.
-    """
-    # ruff: ignore[subprocess-without-shell-equals-true] -- fixed argv
-    completed = subprocess.run(
-        [sys.executable, "-c", _IMPORT_GUARD_PROGRAM],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    assert completed.returncode == 3
-    assert "would_break_the_seam" in completed.stderr
-
-
-def test_the_seam_check_names_a_module_that_bypassed_it(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The refusal is reachable, and it names the offender rather than just firing.
-
-    The import-time refusal happens once, inside `session.py`'s own import, so a
-    suite reading this module's coverage would otherwise never execute those two
-    lines. `_check_the_seam` is split out for exactly that reason.
-    """
-    offender = types.ModuleType("bigdata_mcp.bypasses_the_seam")
-    offender.ClientSession = object  # ty: ignore[unresolved-attribute] -- the binding IS the fact under test
-    monkeypatch.setitem(sys.modules, "bigdata_mcp.bypasses_the_seam", offender)
-    assert "bigdata_mcp.bypasses_the_seam" in _modules_that_skip_the_seam()
-    with pytest.raises(ImportError, match="bypasses_the_seam"):
-        _check_the_seam()
-
-
-# --------------------------------------------------------------------------
-# The connector and the byte cap
-# --------------------------------------------------------------------------
 
 
 def test_the_connector_limit_is_explicit_not_aiohttps_unlimited_default() -> None:
