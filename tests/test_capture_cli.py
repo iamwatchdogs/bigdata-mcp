@@ -45,6 +45,21 @@ red for the right one.
 * C3 put the credential reference back on the wire as an `Authorization` header ->
   `test_a_credential_reference_is_refused_rather_than_sent` and
   `test_a_plaintext_credential_ref_is_refused`
+
+One test was removed rather than fixed. `test_run_async_is_used_by_the_capture_path`
+ran a no-op coroutine through `tests/support/async_runner.run_async` and asserted
+that it came back, under a docstring citing §4.3 mandate 3 — no blocking I/O on the
+request path. It never touched `src/bigdata_mcp/capture.py`, so no mutation of the
+capture could turn it red: it was a test of the test helper wearing the name of a
+test of the CLI.
+
+The rule it claimed to guard does not apply here, and saying so is the real fix.
+`main.main` and `capture.main` are both synchronous and `_capture` calls
+`asyncio.run` for the exchange, which is what an operator-run CLI does. §4.3 is
+about a tool serving a request on the event loop, and nothing in this branch calls
+the capture from async context. If that changes, the test to write is one that starts
+a capture while a heartbeat task runs and asserts the heartbeat advanced — not one
+that awaits a no-op.
 """
 
 from __future__ import annotations
@@ -61,7 +76,6 @@ from bigdata_mcp.fixtures import Source
 from bigdata_mcp.fixtures import Transport
 from bigdata_mcp.fixtures.fields import load_fixture
 from bigdata_mcp.fixtures.fields import parse_fixture
-from tests.support.async_runner import run_async
 from tests.support.fixture_docs import observed
 from tests.support.http_server import LocalHttpServer
 from tests.support.http_server import json_reply
@@ -469,23 +483,6 @@ def test_a_fixture_written_by_the_cli_reloads_through_the_loader(
 def test_the_timestamp_carries_an_explicit_offset() -> None:
     """§14.2's reason: a wrong zone assumption is a wrong answer with no error."""
     assert capture.now().endswith("+00:00")
-
-
-def test_run_async_is_used_by_the_capture_path() -> None:
-    """Guards against a capture that blocks the loop — §4.3 mandate 3."""
-    assert run_async(_noop()) == "ran"
-
-
-async def _noop() -> str:
-    """Return a fixed string after one suspension point.
-
-    Returns:
-        The string `"ran"`.
-    """
-    import asyncio
-
-    await asyncio.sleep(0)
-    return "ran"
 
 
 def test_params_must_be_a_json_object(tmp_path: Path) -> None:
