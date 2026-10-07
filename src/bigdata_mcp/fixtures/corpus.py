@@ -160,7 +160,7 @@ def load_corpus(directory: Path | None = None) -> Corpus:
     fixtures = [
         load_fixture(path)
         for path in sorted(root.rglob("*.json"))
-        if not _is_hidden(path)
+        if not _is_hidden(path, root)
     ]
     return Corpus(
         fixtures=tuple(fixtures),
@@ -205,16 +205,25 @@ def _index(fixtures: Iterable[Fixture]) -> dict[tuple[str, str], tuple[Fixture, 
     return {key: tuple(items) for key, items in buckets.items()}
 
 
-def _is_hidden(path: Path) -> bool:
-    """Whether a path sits under a dot-directory.
+def _is_hidden(path: Path, root: Path) -> bool:
+    """Whether a path sits under a dot-directory *below* the corpus root.
 
     Editors and `uv` leave caches beside a corpus; a fixture loader that read those
-    would report a corpus failure caused by an unrelated tool.
+    would report a corpus failure caused by an unrelated tool. So only the
+    components between the root and the file are inspected.
+
+    The components of `root` itself are not. Checking those means a corpus anywhere
+    under a dot-directory — `~/.local/…`, `.venv/…`, a checkout unpacked under
+    `~/.cache` — has every one of its fixtures classified as hidden, and
+    `load_corpus` returns an empty corpus with no error at all. A strict loader that
+    silently loads nothing is worse than a permissive one, because the empty result
+    is indistinguishable from a project that has captured nothing yet.
 
     Args:
         path: The candidate fixture path.
+        root: The corpus root the path was found under.
 
     Returns:
-        True when any part of the path starts with a dot.
+        True when any part strictly below `root` starts with a dot.
     """
-    return any(part.startswith(".") for part in path.parts)
+    return any(part.startswith(".") for part in path.relative_to(root).parts)

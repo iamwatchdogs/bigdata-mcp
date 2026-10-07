@@ -28,6 +28,8 @@ Mutation evidence, each applied and observed red before reverting:
   `test_a_plaintext_credential_ref_is_refused`
 * F11 report a synthetic-only corpus as validating ->
   `test_a_synthetic_only_corpus_cannot_validate_a_parser`
+* F12 classify fixtures by every component of the path, root included ->
+  `test_a_corpus_under_a_dot_directory_still_loads`
 * F12 drop the `--out` requirement ->
   `test_capture_requires_an_output_path`
 """
@@ -244,6 +246,34 @@ def test_every_committed_fixture_is_labelled_synthetic_and_commented() -> None:
     for fixture in corpus:
         assert fixture.source is Source.SYNTHETIC, fixture.source_id
         assert fixture.comment, f"{fixture.operation} has no comment"
+
+
+def test_a_corpus_under_a_dot_directory_still_loads(tmp_path: Path) -> None:
+    """The root's own components are not the root's contents.
+
+    `_is_hidden` walked `path.parts`, which includes the components of the corpus
+    root itself. A corpus anywhere under a dot-directory — `~/.local/…`, `.venv/…`,
+    a checkout unpacked under `~/.cache` — therefore had every fixture classified
+    as hidden and `load_corpus` returned an empty corpus with no error.
+
+    The failure is silent and it is the worst kind: an empty corpus is exactly what
+    a project that has captured nothing yet returns, so a corpus that was present
+    and loaded fine would be indistinguishable from one that was never there.
+
+    The hidden directory below the root is still skipped, which is the half of the
+    behaviour that was already right and is why the bug hid.
+    """
+    hidden_root = tmp_path / ".cache" / "corpus"
+    (hidden_root / ".ipynb_checkpoints").mkdir(parents=True)
+    (hidden_root / "visible.json").write_text(json.dumps(synthetic()), encoding="utf-8")
+    (hidden_root / ".ipynb_checkpoints" / "copy.json").write_text(
+        json.dumps(synthetic()), encoding="utf-8"
+    )
+
+    corpus = load_corpus(hidden_root)
+
+    assert len(corpus) == 1, "the corpus under a dot-directory loaded as empty"
+    assert corpus.root == hidden_root
 
 
 def test_a_synthetic_only_corpus_cannot_validate_a_parser() -> None:
