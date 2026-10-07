@@ -22,6 +22,10 @@ Mutation -> the test that goes red, verified one at a time:
   `test_host_key_error_is_human_only`
 * M8 flip the posture default to `read_write` ->
   `test_missing_mode_defaults_to_read_only`
+* P1 name a `Posture` member that does not exist in a docstring ->
+  `test_the_posture_enum_members_match_what_the_docstring_names`
+* P2 raise the posture refusal as a `ValueError` ->
+  `test_the_posture_refusal_is_not_catchable_as_a_bad_spec`
 
 Each was applied, observed failing, and reverted. The red names are the exact
 test names below, not a paraphrase of them.
@@ -29,6 +33,7 @@ test names below, not a paraphrase of them.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
@@ -137,6 +142,58 @@ def test_read_only_refuses_a_per_call_headers_table() -> None:
             posture=Posture.READ_ONLY,
             headers={"Authorization": "Bearer x"},
         )
+
+
+def test_the_posture_refusal_is_not_catchable_as_a_bad_spec() -> None:
+    """`PermissionError` is not a `ValueError`, and that is deliberate.
+
+    `portal_schema`'s docstring listed only `ValueError`, so a caller following it
+    wrote `except ValueError` around the call — and the posture refusals, which are
+    raised by `_refuse_if_unusable`, sailed past. A caller that treated a policy
+    decision as a typo would carry on and generate the schema it was just refused.
+
+    Asserted rather than left to the docstring, because a docstring is not enforced
+    and this is exactly the kind of contract that decays into a wrong exception type
+    nobody notices until a call is refused for the wrong reason.
+    """
+    assert not issubclass(PermissionError, ValueError)
+
+    with pytest.raises(PermissionError):
+        portal_schema(
+            name="warehouse",
+            paths={"list": "list"},
+            posture=Posture.READ_ONLY,
+            headers={"Authorization": "Bearer x"},
+        )
+
+    with pytest.raises(ValueError, match="no readable endpoints") as caught:
+        portal_schema(name="warehouse", paths={}, posture=Posture.READ_ONLY)
+    assert not isinstance(caught.value, PermissionError), (
+        "an empty spec must not be reported as a permission problem"
+    )
+
+
+def test_the_posture_enum_members_match_what_the_docstring_names() -> None:
+    """Every enum member the docstring names must exist, and vice versa.
+
+    `portal_schema`'s docstring said `READ_ONLY` or `WRITE_ENABLED`; the second
+    member is `READ_WRITE`. A docstring naming a member that does not exist is worse
+    than one naming none, because the reader has to work out whether the member was
+    renamed or the prose is stale, and the only way to find out is to open the enum.
+
+    Checked both directions. "Every named member exists" alone would pass a
+    docstring that named neither; "every member is named" alone would pass one that
+    named an extra. What matters is that the two lists agree, because a caller
+    choosing a posture reads this and not the enum.
+    """
+    members = {member.name for member in Posture}
+    assert members == {"READ_ONLY", "READ_WRITE"}
+
+    doc = portal_schema.__doc__ or ""
+    named = set(re.findall(r"Posture\.([A-Z_]+)", doc))
+    assert named == members, (
+        f"the docstring names {sorted(named)}, the enum has {sorted(members)}"
+    )
 
 
 def test_read_only_refuses_a_write_shaped_tool_name() -> None:

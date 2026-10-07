@@ -10,6 +10,21 @@ The mapping between the config literals (`"read_only"` / `"read_write"`) and thi
 enum is the one place those two spellings meet, and both are load-bearing: §16
 carries the lowercase literals and `scripts/tests/test_repo_contracts.py` asserts them
 there.
+
+**Two exception types, and callers need both.** A portal declaration with no
+endpoints raises `ValueError` — that is a mistake in the spec file, the kind an
+operator fixes by editing it. A declaration the posture cannot express raises
+`PermissionError`: per-call `headers` under `read_only`, or a tool name that reads
+as a write verb.
+
+`PermissionError` is deliberately not a subclass of `ValueError`. A caller writing
+`except ValueError` around `portal_schema` is handling a bad spec, and must not
+silently swallow a policy decision — otherwise it carries on and generates the very
+schema it was just refused, which is the failure §2.1 exists to make impossible.
+`portal_schema`'s docstring used to list only `ValueError`, so callers following it
+wrote exactly that handler; the docstring is not enforced, so
+`test_the_posture_refusal_is_not_catchable_as_a_bad_spec` in `tests/test_config.py`
+is.
 """
 
 from __future__ import annotations
@@ -141,18 +156,17 @@ def portal_schema(
 ) -> dict[str, Any]:
     """Generate a portal tool's input schema for `posture`.
 
-    This is §2.1's capability vocabulary and the reason the module exists: under
-    `READ_ONLY` the returned schema has **no `method` key**, so no caller value can
-    express a write, and per-call `headers` are refused for the same reason §14.2
-    refuses them -- a credential smuggled through a per-call field bypasses the
-    store that redacts it. The base URL is deliberately not a parameter: it is
-    session state belonging to `session.py`, and a schema carrying one would invite
-    a caller to point the request somewhere the redirect allowlist never saw.
+    Under `READ_ONLY` the returned schema has **no `method` key**, so no caller
+    value can express a write. The base URL is deliberately not a parameter: it is
+    session state belonging to `session.py`, and a schema carrying one would invite a
+    caller to point the request somewhere the redirect allowlist never saw.
 
     Args:
         name: Tool name. Under `READ_ONLY` it must not itself read as a write.
         paths: Endpoint name to description. Becomes the `endpoint` enum.
-        posture: `READ_ONLY` or `WRITE_ENABLED` (§2.1).
+        posture: `Posture.READ_ONLY` or `Posture.READ_WRITE` (§2.1). Those two are
+            the whole enum; an earlier draft of this docstring named a third,
+            which never existed.
         headers: Static headers for the portal. Refused under `READ_ONLY`.
 
     Returns:
@@ -160,10 +174,12 @@ def portal_schema(
         parameter is refused by the client rather than silently dropped.
 
     Raises:
-        ValueError: If `paths` is empty, or if `posture` is `READ_ONLY` and
-            `headers` were supplied -- including the `PermissionError` that second
-            case raises, which this docstring names here to keep the contract of
-            the public entry point in one place.
+        ValueError: If `paths` is empty. A declaration with nothing to read is a
+            mistake in the spec, not a permission problem.
+
+    A `PermissionError` also escapes — from `_refuse_if_unusable` — and it is
+    described here rather than listed under `Raises` only because the module
+    docstring already explains why the two types are kept apart.
     """
     if not paths:
         message = f"portal {name!r} declares no readable endpoints"
