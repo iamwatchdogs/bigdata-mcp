@@ -39,11 +39,22 @@ Mutation evidence, each applied and observed red before reverting:
   `test_an_unsupported_reading_is_not_usable_as_a_cap_driver`
 * D10 make an unusable reading look usable ->
   `test_an_unsupported_reading_is_not_usable_as_a_cap_driver`
+* D11 report `hw.memsize` as `memory_available_mb` again ->
+  `test_macos_reports_no_memory_rather_than_the_total` and
+  `test_macos_never_asks_for_a_memory_reading_at_all`
+* D12 drop the `unknown` substitution from `describe_host` ->
+  `test_describe_host_substitutes_unknown_for_a_blank_reading`, all three cases
 """
 
 from __future__ import annotations
 
+import platform as platform_module
+from typing import TYPE_CHECKING
+
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 from bigdata_mcp.engine.semaphore import derive_concurrency
 from bigdata_mcp.observer import Reading
@@ -274,7 +285,19 @@ def test_macos_does_not_read_proc() -> None:
     assert touched == []
 
 
-def test_macos_reports_total_memory_when_that_is_all_it_has() -> None:
+def test_macos_reports_no_memory_rather_than_the_total() -> None:
+    """`hw.memsize` is total physical memory, and total never shrinks.
+
+    It was reported in `memory_available_mb`, which is the one number macOS makes
+    easy to read and the one that means the opposite of what the field says. A host
+    that had swapped itself to death still reported every MiB it was built with,
+    and the cap driver reads that field to decide whether the host is under
+    pressure — so the reading it most needed was the one that could never move.
+
+    `None` is the answer that carries the information. "This platform has no
+    defensible memory reading" and "this host has all of the memory it was built
+    with" are not the same claim, and only the first one is true.
+    """
     reading = detect(
         system="darwin",
         read_command=commands({
@@ -283,16 +306,32 @@ def test_macos_reports_total_memory_when_that_is_all_it_has() -> None:
             "hw.memsize": "17179869184\n",
         }),
     )
-    assert reading.memory_available_mb == pytest.approx(16384.0)
-
-
-def test_macos_without_memsize_reports_no_memory() -> None:
-    reading = detect(
-        system="darwin",
-        read_command=commands({"vm.loadavg": MACOS_LOADAVG, "hw.ncpu": "8\n"}),
-    )
     assert reading.memory_available_mb is None
+    assert reading.support is Support.SUPPORTED, "losing memory is not losing support"
     assert reading.is_usable_as_a_cap_driver is True
+
+
+def test_macos_never_asks_for_a_memory_reading_at_all() -> None:
+    """`hw.memsize` is not even queried.
+
+    Otherwise a host whose `sysctl` is slow or absent pays for a `sysctl` whose
+    result is then discarded, and the probe list reads as though macOS memory
+    support were a matter of reaching the right key.
+    """
+    asked: list[str] = []
+
+    def runner(argv: Sequence[str]) -> str:
+        asked.extend(argv)
+        return {
+            "vm.loadavg": MACOS_LOADAVG,
+            "hw.ncpu": "8\n",
+            "hw.memsize": "17179869184\n",
+        }.get(argv[-1], "")
+
+    reading = detect(system="darwin", read_command=runner)
+
+    assert reading.memory_available_mb is None
+    assert not any("hw.memsize" in argument for argument in asked), asked
 
 
 # --------------------------------------------------------------------------
@@ -317,9 +356,49 @@ def test_a_reading_can_be_constructed_directly_for_the_engine() -> None:
 
 
 def test_describe_host_names_the_machine_for_a_bug_report() -> None:
+    """Platform, release and machine, with `unknown` standing in for a blank.
+
+    `platform.system()`, `platform.release()` and `platform.machine()` all return
+    an empty string on some platforms rather than raising, so each is substituted.
+    A bug report that says "unknown (unknown)" is still actionable; one that says
+    "  " is not.
+
+    The assertion is on the shape, not on the words: an earlier version checked
+    `"unknown" not in described or "unknown" in described`, which is true for every
+    string that exists and so could not fail for any change to `describe_host`.
+    """
     described = describe_host()
-    assert described.strip()
-    assert "unknown" not in described.lower() or "unknown" in described
+
+    assert described.strip(), "the description is empty"
+    assert described.count("(") == 1, f"the machine is not parenthesised: {described!r}"
+    assert described.count(")") == 1, f"the machine is not parenthesised: {described!r}"
+    platform, _, rest = described.partition(" ")
+    release, _, machine = rest.partition(" (")
+    assert platform, f"no platform in {described!r}"
+    assert release, f"no release in {described!r}"
+    assert machine.rstrip(")"), f"no machine in {described!r}"
+
+
+@pytest.mark.parametrize("attribute", ["system", "release", "machine"])
+def test_describe_host_substitutes_unknown_for_a_blank_reading(
+    attribute: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each of the three fields, separately, because they fail separately.
+
+    `platform.machine()` is empty on a handful of systems and `platform.release()` on
+    some hardened ones. Asserting only that the description is non-empty would not
+    notice a blank where a value should be, which is the whole point of the
+    substitution: a bug report reading "darwin  ()" is worse than one reading
+    "unknown ()" because it looks like it was filled in.
+    """
+    monkeypatch.setattr(platform_module, attribute, lambda: "", raising=False)
+
+    described = describe_host()
+
+    assert "unknown" in described, (
+        f"a blank {attribute} left no placeholder: {described!r}"
+    )
+    assert "  " not in described, f"a blank {attribute} left a gap: {described!r}"
 
 
 def test_has_command_reports_capability_rather_than_failing_at_first_use() -> None:

@@ -241,26 +241,34 @@ def _linux_memory_available_mb(reader: Callable[[str], str]) -> float | None:
     return None
 
 
-def _macos_memory_available_mb(runner: Callable[[Sequence[str]], str]) -> float | None:
-    """Read total memory from `sysctl hw.memsize` and page statistics.
+def _macos_memory_available_mb(*_probes: object) -> float | None:
+    """Report no macOS memory reading at all, rather than report the wrong one.
 
     Args:
-        runner: How to run a read-only query.
+        *_probes: The runner and anything else a caller might pass. Accepted and
+            ignored, so a signature that takes a probe it does not need is not also
+            a reason for the caller to special-case the platform.
 
     Returns:
-        Available memory in MiB, or `None` when the page statistics could not be
-        read. Total physical memory is a poor proxy for available, and reporting it
-        as though it were available would let the cap driver read healthy on a host
-        that is swapping — so this reports the total and names it in the docstring
-        rather than pretending to a precision it does not have.
+        Always `None`.
+
+    This used to read `sysctl hw.memsize` and report it in `memory_available_mb`,
+    which is the one reading macOS makes easy and the one that means the opposite
+    of what the field says. Total physical memory does not shrink, so a host that
+    had swapped itself to death still reported every MiB it was built with — and
+    the cap driver reads that field to decide whether the host is under pressure,
+    so the reading it most needed was the one that could never move.
+
+    `None` rather than a total dressed up as a reading, for the same reason the load
+    reading is `None` when `vm.loadavg` will not parse: a cap driver that trusts a
+    confident wrong number is worse than one that knows it has no reading.
+
+    Deriving a real figure needs page statistics — `vm.page_free_count` times
+    `hw.pagesize`, adjusted for the compressor — which is a second and third `sysctl`
+    whose interpretation is a research question, not a line of code. Until that is
+    done against a real host, macOS contributes load and cores and no memory.
     """
-    memsize = _try_run(runner, ["sysctl", "-n", "hw.memsize"])
-    if memsize is None:
-        return None
-    try:
-        return float(memsize.strip()) / (1024.0 * 1024.0)
-    except ValueError:
-        return None
+    return None
 
 
 def _try_read(reader: Callable[[str], str], path: str) -> str | None:
