@@ -67,6 +67,39 @@ def test_an_https_capture_without_a_ca_bundle_is_refused(
     assert "CA bundle" in capsys.readouterr().err
 
 
+def test_a_missing_ca_bundle_file_is_a_refusal_not_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A `--ca-bundle` that does not exist must exit 5, not crash the CLI.
+
+    The bundle is loaded when `Session` builds its TLS context, which happens
+    inside the capture call. `ssl.create_default_context` raises
+    `FileNotFoundError` there — not one of the families `capture.main` catches —
+    so the operator saw a traceback instead of the documented refusal. Mutation
+    evidence: removing the conversion in `build_ssl_context` turns this test red
+    with the raw `FileNotFoundError` propagating out of `capture.main`.
+    """
+    out = tmp_path / "captured.json"
+    code = capture.main([
+        "https_api",
+        "--url",
+        "https://127.0.0.1:1",
+        "--source-id",
+        "yarn_rm",
+        "--operation",
+        "GET /x",
+        "--allowlist-host",
+        "127.0.0.1",
+        "--ca-bundle",
+        str(tmp_path / "missing.pem"),
+        "--out",
+        str(out),
+    ])
+    assert code == capture.EXIT_REFUSED
+    assert not out.exists(), "a refused capture must not leave a fixture behind"
+    assert "Cannot load CA bundle" in capsys.readouterr().err
+
+
 def test_a_tls_capture_trusts_the_configured_bundle(tmp_path: Path) -> None:
     """`--ca-bundle` reaches the seam: a host the system roots do not know.
 

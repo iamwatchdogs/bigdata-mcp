@@ -58,6 +58,7 @@ from urllib.parse import urlsplit
 import aiohttp
 
 from bigdata_mcp.errors import BackendUnreachable
+from bigdata_mcp.errors import ConfigError
 from bigdata_mcp.errors import MissingCABundleError
 from bigdata_mcp.hosts import host_of
 
@@ -160,11 +161,23 @@ def build_ssl_context(ca_bundle: str) -> ssl.SSLContext:
 
     Raises:
         ValueError: If `ca_bundle` is empty.
+        ConfigError: If the bundle cannot be read or parsed — a missing path or
+            a file that is not PEM. Surfaced as a config fault so callers that
+            treat `BigDataMcpError` as a refusal (the capture CLI's exit 5) do
+            not emit a traceback instead.
     """
     if not ca_bundle:
         message = "An https session needs an explicit ca_bundle: no PEM path given"
         raise ValueError(message)
-    context = ssl.create_default_context(cafile=ca_bundle)
+    try:
+        context = ssl.create_default_context(cafile=ca_bundle)
+    except OSError as exc:
+        # A missing file raises `FileNotFoundError` and an unreadable or non-PEM
+        # one raises `ssl.SSLError`; both are `OSError` subclasses. Left as-is
+        # they surface as a traceback from the CLI's capture path instead of the
+        # documented refusal — a configuration fault is not a crash.
+        message = f"Cannot load CA bundle {ca_bundle}: {exc}"
+        raise ConfigError(message) from exc
     context.check_hostname = True
     context.verify_mode = ssl.CERT_REQUIRED
     return context

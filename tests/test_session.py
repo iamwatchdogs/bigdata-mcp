@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from bigdata_mcp.errors import BackendUnreachable
+from bigdata_mcp.errors import ConfigError
 from bigdata_mcp.errors import MissingCABundleError
 from bigdata_mcp.session import LIMIT_PER_HOST
 from bigdata_mcp.session import MAX_REDIRECTS
@@ -544,8 +545,13 @@ def test_build_ssl_context_rejects_an_absent_bundle() -> None:
 
 
 def test_a_missing_ca_bundle_fails_rather_than_falling_back() -> None:
-    """A bad bundle path must raise, never silently degrade to the system roots."""
-    with pytest.raises(FileNotFoundError, match="No such file"):
+    """A bad bundle path must raise, never silently degrade to the system roots.
+
+    The typed surface is `ConfigError` — the raw `FileNotFoundError` escaped the
+    capture CLI as a traceback, which is why the conversion exists — and the
+    chain preserves the cause for anyone diagnosing the path.
+    """
+    with pytest.raises(ConfigError, match="Cannot load CA bundle"):
         build_ssl_context("/nonexistent/ca-bundle.pem")
 
 
@@ -599,6 +605,20 @@ def test_an_https_request_is_refused_when_no_ca_bundle_is_configured() -> None:
 
     with pytest.raises(MissingCABundleError, match="CA bundle"):
         run_async(scenario())
+
+
+def test_an_unloadable_ca_bundle_is_a_config_error_not_a_crash() -> None:
+    """A missing or non-PEM bundle is a config fault, not an unhandled error.
+
+    `ssl.create_default_context(cafile=...)` raises `FileNotFoundError` for a
+    path that does not exist and `ssl.SSLError` for a file that is not PEM. Both
+    are `OSError` subclasses that `capture.main` does not catch, so a capture CLI
+    run with a bad `--ca-bundle` used to die with a traceback instead of the
+    documented exit 5. Mutation evidence: removing the try/except in
+    `build_ssl_context` turns this test red with the raw `FileNotFoundError`.
+    """
+    with pytest.raises(ConfigError, match="Cannot load CA bundle"):
+        build_ssl_context("/nonexistent/ca-bundle.pem")
 
 
 def test_the_connector_limit_is_explicit_not_aiohttps_unlimited_default() -> None:
