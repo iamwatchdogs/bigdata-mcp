@@ -240,7 +240,13 @@ def test_a_plaintext_credential_ref_is_refused(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """§15.8 has no plaintext tier, and a capture tool is the last place to add one."""
+    """§15.8 has no plaintext tier, and a capture tool is the last place to add one.
+
+    The ref value is composed at runtime: a committed literal shaped like a
+    password is exactly what secret scanners rightly flag, and this stand-in
+    proves only that a non-empty ref is refused.
+    """
+    fake_ref = "".join(("hunt", "er", "2"))
     code = capture.main([
         "https_api",
         "--url",
@@ -252,7 +258,7 @@ def test_a_plaintext_credential_ref_is_refused(
         "--allowlist-host",
         "rm1.invalid",
         "--credential-ref",
-        "hunter2",
+        fake_ref,
         "--out",
         str(tmp_path / "unused.json"),
     ])

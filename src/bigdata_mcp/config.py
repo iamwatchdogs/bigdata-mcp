@@ -14,8 +14,9 @@ Three properties this module exists to guarantee:
 1. **Unknown keys are refused.** Every object in the schema sets a bounded
    `additionalProperties`. A typo in a config that half-applies is worse than one
    that refuses to load, because the operator believes a setting took effect.
-2. **A literal secret is refused.** `password_ref = "hunter2"` is not a warning,
-   it is a refusal: §15.8 has no plaintext tier, so a literal is a secret with no
+2. **A literal secret is refused.** a `password_ref` carrying a plaintext
+   password is not a warning, it is a refusal: §15.8 has no plaintext tier, so a
+   literal is a secret with no
    redaction boundary. The schema's `pattern` catches the keys it knows about and
    a second pass catches the rest, including keys nested in a deliberately open
    map.

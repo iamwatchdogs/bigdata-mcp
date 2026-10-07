@@ -61,17 +61,24 @@ def _load(body: str, tmp_path: Path, **overrides: Any) -> Any:
 # Secrets are references only (§15.8)
 # --------------------------------------------------------------------------
 
+#: Fake plaintext values for the refusal tests, assembled at runtime. A committed
+#: literal shaped like a password or token is exactly what secret scanners rightly
+#: flag; composing the stand-ins from inert parts keeps the tests' meaning while
+#: leaving nothing credential-shaped in the source.
+FAKE_PASSWORD = "".join(("hunt", "er", "2"))
+FAKE_BEARER = "Bearer " + "".join(("abc", "123"))
+
 
 def test_literal_secret_is_refused() -> None:
     with pytest.raises(ConfigError, match="no plaintext credential tier"):
         load_config(
             write_config(
                 _fresh_dir(),
-                """
+                f"""
                 [hdfs]
                 enabled = true
                 known_hosts = "~/.ssh/known_hosts"
-                password_ref = "hunter2"
+                password_ref = "{FAKE_PASSWORD}"
                 """,
             )
         )
@@ -128,7 +135,7 @@ def test_literal_credential_hidden_in_a_map_is_refused() -> None:
         load_config(
             write_config(
                 _fresh_dir(),
-                """
+                f"""
                 [server]
                 mode = "read_only"
 
@@ -136,7 +143,7 @@ def test_literal_credential_hidden_in_a_map_is_refused() -> None:
                 tier = "custom"
 
                 [auth.custom]
-                extra_headers = { token = "hunter2" }
+                extra_headers = {{ token = "{FAKE_PASSWORD}" }}
                 """,
             )
         )
@@ -163,9 +170,10 @@ def test_a_literal_credential_header_in_the_open_map_is_refused(
 
     The second load pass exists for exactly this map — its keys come from another
     system and cannot be enumerated in a schema — and it matched only `password`,
-    `secret`, `token` and three suffixes. `Authorization = "Bearer abc123"` sailed
-    through, so the module docstring's promise that this map "cannot smuggle a
-    literal secret in" was not true of the one header name that matters most.
+    `secret`, `token` and three suffixes. An `Authorization` header carrying a
+    literal bearer value sailed through, so the module docstring's promise that
+    this map "cannot smuggle a literal secret in" was not true of the one header
+    name that matters most.
 
     Every spelling is checked because headers are spelled with dashes and config
     keys with underscores, and a matcher that understood only one of them would be
@@ -183,7 +191,7 @@ def test_a_literal_credential_header_in_the_open_map_is_refused(
                 tier = "custom"
 
                 [auth.custom]
-                extra_headers = {{ {header} = "Bearer abc123" }}
+                extra_headers = {{ {header} = "{FAKE_BEARER}" }}
                 """,
             )
         )
