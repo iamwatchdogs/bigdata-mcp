@@ -44,6 +44,7 @@ PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 CODECOV_PATH = REPO_ROOT / "codecov.yml"
 MAKEFILE_PATH = REPO_ROOT / "Makefile"
 CI_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+CONTRIBUTING_PATH = REPO_ROOT / "CONTRIBUTING.md"
 
 #: The coverage floor this repository commits to, in percent. Three
 #: configurations state it -- ``pyproject.toml`` (coverage.py's project total),
@@ -526,4 +527,44 @@ def test_the_per_file_gate_is_wired_where_the_suite_is_run() -> None:
     )
     assert workflow.index("coverage_gate.py") > workflow.index("--cov-report=xml"), (
         "the gate runs before the report that feeds it"
+    )
+
+
+def test_contributing_states_the_same_coverage_floor() -> None:
+    """The number a contributor reads must be the number the gates enforce.
+
+    ``CONTRIBUTING.md`` documents ``make test`` in prose. The prose carried the
+    pre-D9 floor (80%) for the whole branch that raised it to 95% -- found in
+    review of PR #4 -- so a reader following the document was told a gate
+    existed that the gates no longer run. This is the same one-number-many-places
+    contract as ``codecov.yml`` above, but for the copy a human reads, and
+    written as a *floor-consistency* assertion rather than a literal: changing
+    the floor for real means editing ``COVERAGE_FLOOR_PERCENT``, which this test
+    tracks automatically, instead of hunting a fourth copy.
+
+    The regex is tolerant of the phrasing a floor change implies (``at least``,
+    ``>=``, a new number) so a legitimate raise does not red this test while the
+    other three copies change -- but any claim *below* the floor, or no claim at
+    all, is a contradiction with the gates and must be an explicit edit.
+    """
+    text = CONTRIBUTING_PATH.read_text(encoding="utf-8")
+    stated = [
+        float(match.group(1))
+        for match in re.finditer(
+            r"coverage[^\n]*?(\d+(?:\.\d+)?)\s*%", text, re.IGNORECASE
+        )
+    ]
+    assert stated, (
+        "CONTRIBUTING.md no longer states a coverage figure for `make test`; "
+        "the floor contributors are held to must be readable from the "
+        "contributing guide, or the document and the gates disagree by omission"
+    )
+    too_low = sorted({s for s in stated if s < COVERAGE_FLOOR_PERCENT})
+    assert not too_low, (
+        f"CONTRIBUTING.md states coverage figure(s) {too_low}% but the enforced "
+        f"floor is {COVERAGE_FLOOR_PERCENT:g}% (pyproject.toml fail_under, "
+        "codecov.yml, and the per-file gate). A contributor told the floor is "
+        "lower than it is will treat a red suite as a mystery rather than as "
+        "their missing test. Update the prose to match, or raise the floor in "
+        "all four places in one commit"
     )
