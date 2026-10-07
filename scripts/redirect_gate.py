@@ -12,8 +12,9 @@ Two mechanisms enforce it, on purpose:
 
 * this gate, wired into `make checks` and the pre-commit stage, so it fails
   *before* the code is committed;
-* `tests/test_session.py::test_no_module_outside_session_touches_the_http_client`,
-  so it also runs in CI on every platform and is covered by the coverage floor.
+* `tests/test_session.py::test_an_import_of_the_client_outside_the_seam_fails`,
+  so import of a rogue module fails in CI on every platform and is covered by
+  the coverage floor.
 
 Either alone is enough; together, removing one is obvious.
 

@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import enum
 import ssl
+import sys
 from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
@@ -528,6 +529,59 @@ def _lower(headers: Mapping[str, str]) -> dict[str, str]:
     """
     return {key.lower(): value for key, value in headers.items()}
 
+
+_FORBIDDEN_BINDINGS = frozenset({
+    "aiohttp",
+    "ClientSession",
+    "TCPConnector",
+    "allow_redirects",
+})
+
+
+def _modules_that_skip_the_seam() -> tuple[str, ...]:
+    """Package modules that bound aiohttp's client pieces without using `Session`.
+
+    `scripts/redirect_gate.py` is the same fact, grepped at commit time over the
+    whole tree. This one is the import-time twin the spec's fallback names: it
+    proves the seam is exclusive while the gate cannot run — in a published
+    wheel, in a CI step that forgot the gate, in a notebook. Only package
+    modules are inspected, so `aiohttp`'s own internals and other packages
+    that build clients for their own reasons are not flagged.
+
+    Returns:
+        Package module names whose globals bound a client identifier directly.
+    """
+    offenders = []
+    for name, module in sys.modules.items():
+        if name == __name__ or not name.startswith("bigdata_mcp"):
+            continue
+        if set(module.__dict__) & _FORBIDDEN_BINDINGS:
+            offenders.append(name)
+    return tuple(sorted(offenders))
+
+
+def _check_the_seam() -> None:
+    """Fail the import if any package module bypassed `Session`.
+
+    Split from `_modules_that_skip_the_seam` so the scan and the refusal are
+    each reachable from a test: the refusal happens once, inside this module's
+    own import, and a suite that cannot reach it cannot prove it.
+
+    Raises:
+        ImportError: If a package module bound a client identifier directly.
+            The message names every offender, because a refusal that names
+            none is a failure the next reader cannot act on.
+    """
+    offenders = _modules_that_skip_the_seam()
+    if offenders:
+        message = (
+            "Only `bigdata_mcp/session.py` may drive an HTTP client, but these "
+            "modules bind aiohttp's pieces directly: " + ", ".join(offenders)
+        )
+        raise ImportError(message)
+
+
+_check_the_seam()
 
 __all__ = [
     "CREDENTIAL_HEADERS",
