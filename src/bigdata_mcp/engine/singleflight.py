@@ -257,14 +257,44 @@ class SingleFlight(Generic[T]):  # ruff: ignore[non-pep695-generic-class] — Co
 
         task: asyncio.Task[T] = asyncio.ensure_future(work())
         self._in_flight[key] = task
+        # The entry is removed when the *task* finishes, not when this caller stops
+        # waiting. `asyncio.shield` keeps the task running when its owner is
+        # cancelled, so a `finally` here would drop the entry while the work was
+        # still going -- and a caller arriving in that window would start a second
+        # `work()` for the same key, breaking the one-call-per-group guarantee the
+        # method exists to provide. It would also lose the failure: the owner is
+        # gone, so nothing would record it and a later caller would retry a call
+        # that had already failed.
+        task.add_done_callback(lambda done: self._retire(key, done))
         try:
             return await asyncio.shield(task)
         except Exception:
-            self._failures[key] = self._clock.now() + FAILURE_TTL_S
+            self._record_failure(key)
             raise
-        finally:
-            if self._in_flight.get(key) is task:
-                del self._in_flight[key]
+
+    def _retire(self, key: str, task: asyncio.Task[T]) -> None:
+        """Drop a finished task and record its failure, if any.
+
+        Runs on the task's completion rather than the caller's, so it happens
+        exactly once however the owner ends -- normally, cancelled, or never
+        awaiting again.
+
+        Args:
+            key: The key the task was running for.
+            task: The completed task.
+        """
+        if self._in_flight.get(key) is task:
+            del self._in_flight[key]
+        if not task.cancelled() and task.exception() is not None:
+            self._record_failure(key)
+
+    def _record_failure(self, key: str) -> None:
+        """Open the shared-failure window for `key`.
+
+        Args:
+            key: The key that failed.
+        """
+        self._failures[key] = self._clock.now() + FAILURE_TTL_S
 
     def _within_window(self, key: str) -> bool:
         """Whether a key failed recently enough to share.

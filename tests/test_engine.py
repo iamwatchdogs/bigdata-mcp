@@ -20,10 +20,7 @@ Mutation evidence, each applied and observed red before reverting:
 * E5 leave the gate's own occupancy accounting stale ->
   `test_the_gate_bounds_concurrency_and_never_exceeds_its_cap`
 * E6 drop the TTL expiry -> `test_an_expired_entry_is_not_served`
-* E7 remove the single-flight coalescing ->
-  `test_concurrent_identical_calls_share_one_backend_call`
-* E8 stop sharing failures ->
-  `test_a_failure_is_shared_rather_than_retried_by_every_waiter`
+* E7, E8, E13, E14, E15 are recorded in `test_singleflight.py`'s docstring
 * E9 remove the pre-permit deadline check ->
   `test_a_call_with_no_budget_left_never_reaches_the_executor`
 * F1 build the engine deadline without the injected clock ->
@@ -63,8 +60,6 @@ from bigdata_mcp.engine import FakeClock
 from bigdata_mcp.engine import HostGate
 from bigdata_mcp.engine import PoliteEngine
 from bigdata_mcp.engine import Probe
-from bigdata_mcp.engine import SharedFailure
-from bigdata_mcp.engine import SingleFlight
 from bigdata_mcp.engine import TtlCache
 from bigdata_mcp.engine.semaphore import derive_concurrency
 from bigdata_mcp.engine.singleflight import MAX_TTL_S
@@ -319,105 +314,6 @@ def test_invalidate_and_clear_drop_entries() -> None:
 def test_invalidate_on_an_absent_key_is_not_an_error() -> None:
     cache: TtlCache[str] = TtlCache(10, clock=FakeClock())
     cache.invalidate("never-there")
-
-
-# --------------------------------------------------------------------------
-# Single-flight
-# --------------------------------------------------------------------------
-
-
-async def test_concurrent_identical_calls_share_one_backend_call() -> None:
-    flight: SingleFlight[str] = SingleFlight(clock=FakeClock())
-    calls: list[int] = []
-
-    async def work() -> str:
-        calls.append(1)
-        await asyncio.sleep(0)
-        return "answer"
-
-    async def scenario() -> list[str]:
-        return list(await asyncio.gather(*(flight.do("k", work) for _ in range(8))))
-
-    assert await scenario() == ["answer"] * 8
-    assert len(calls) == 1
-    assert flight.coalesced == 7
-
-
-async def test_different_keys_do_not_coalesce() -> None:
-    flight: SingleFlight[str] = SingleFlight(clock=FakeClock())
-
-    async def work() -> str:
-        await asyncio.sleep(0)
-        return "answer"
-
-    async def scenario() -> None:
-        await asyncio.gather(flight.do("a", work), flight.do("b", work))
-
-    await scenario()
-    assert flight.coalesced == 0
-    assert flight.in_flight == 0
-
-
-async def test_a_failure_is_shared_rather_than_retried_by_every_waiter() -> None:
-    """N waiters each retrying is a thundering herd at a backend that said no."""
-    clock = FakeClock()
-    flight: SingleFlight[str] = SingleFlight(clock=clock)
-    attempts: list[int] = []
-
-    async def failing() -> str:
-        await asyncio.sleep(0)
-        attempts.append(1)
-        boom = "backend said no"
-        raise RuntimeError(boom)
-
-    async def scenario() -> None:
-        with pytest.raises(RuntimeError):
-            await flight.do("k", failing)
-        with pytest.raises(SharedFailure):
-            await flight.do("k", failing)
-
-    await scenario()
-    assert len(attempts) == 1
-
-
-async def test_the_shared_failure_window_expires() -> None:
-    """Past the window the work runs again; inside it, it would be a herd."""
-    clock = FakeClock()
-    flight: SingleFlight[str] = SingleFlight(clock=clock)
-    attempts: list[int] = []
-
-    async def failing() -> str:
-        await asyncio.sleep(0)
-        attempts.append(1)
-        boom = "backend said no again"
-        raise RuntimeError(boom)
-
-    with pytest.raises(RuntimeError):
-        await flight.do("k", failing)
-    assert flight.shared_failures == 1
-
-    clock.advance(30)
-    with pytest.raises(RuntimeError):
-        await flight.do("k", failing)
-    assert len(attempts) == 2
-    assert flight.shared_failures == 1
-
-
-async def test_forget_failures_clears_the_window() -> None:
-    flight: SingleFlight[str] = SingleFlight(clock=FakeClock())
-
-    async def failing() -> str:
-        await asyncio.sleep(0)
-        boom = "backend said no"
-        raise RuntimeError(boom)
-
-    async def scenario() -> None:
-        with pytest.raises(RuntimeError):
-            await flight.do("k", failing)
-        flight.forget_failures()
-
-    await scenario()
-    assert flight.shared_failures == 0
 
 
 # --------------------------------------------------------------------------
