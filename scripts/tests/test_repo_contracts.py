@@ -32,8 +32,11 @@ no test, because it occupies the slot where a real check would go.
 from __future__ import annotations
 
 import re
+import tomllib
 from functools import cache
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SPEC_PATH = REPO_ROOT / "SPEC.md"
@@ -333,35 +336,50 @@ def test_spec_bounds_the_always_loaded_tool_surface() -> None:
 
 
 @cache
-def _pyproject_text() -> str:
-    """Return ``pyproject.toml`` once per process, or fail loudly."""
-    assert PYPROJECT_PATH.is_file(), (
-        f"pyproject.toml not found at {PYPROJECT_PATH}; the floor it carries "
-        "cannot be asserted without it, and skipping would leave the number "
-        "unguarded"
-    )
-    return PYPROJECT_PATH.read_text(encoding="utf-8")
-
-
-@cache
-def _fail_under_percent() -> float:
-    """Return ``pyproject.toml``'s ``fail_under`` as a percentage.
+def _fail_under_percent(path: Path = PYPROJECT_PATH) -> float:
+    """Return ``pyproject.toml``'s ``[tool.coverage.report].fail_under``.
 
     One parser for two tests: the first asserts the value, the second compares it
     against Codecov's, and a pair of inlined searches is a pair of places for the
     pattern to drift apart.
 
+    Parsed as TOML rather than searched as text. This was a whole-file regex
+    returning the *first* ``fail_under`` line, which is a different question
+    from the one being asked: a future table carrying its own ``fail_under`` —
+    plausible in any tool's config block — would be asserted while
+    ``scripts/coverage_gate.py``, which parses the real table, read another
+    number. The two are one decision written twice, and a reader that can
+    disagree with the gate is a reader that grades the wrong file.
+    ``test_the_floor_is_read_from_the_report_table_not_the_first_match`` pins
+    that distinction.
+
+    Args:
+        path: The ``pyproject.toml`` to read, so the parse can be exercised
+            against a copy the repository does not have.
+
     Returns:
-        The floor, or an assertion failure if the key is absent — which would
-        leave coverage.py running with no floor at all, and is worth failing
-        over rather than defaulting.
+        The floor, as a percentage.
+
+    Raises:
+        AssertionError: If the file, table, or key is missing. Worth failing
+        over rather than defaulting, since coverage.py would then run with no
+        floor at all and nothing else here would necessarily notice.
     """
-    match = re.search(r"^fail_under\s*=\s*([0-9.]+)", _pyproject_text(), re.MULTILINE)
-    assert match is not None, (
-        "pyproject.toml has no [tool.coverage.report].fail_under; coverage.py "
-        "would then run with no floor at all"
+    assert path.is_file(), (
+        f"pyproject.toml not found at {path}; the floor it carries cannot be "
+        "asserted without it, and skipping would leave the number unguarded"
     )
-    return float(match.group(1))
+    try:
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+        report = config["tool"]["coverage"]["report"]
+        value = report["fail_under"]
+    except (KeyError, TypeError, tomllib.TOMLDecodeError) as exc:
+        message = (
+            "pyproject.toml has no [tool.coverage.report].fail_under; "
+            "coverage.py would then run with no floor at all"
+        )
+        raise AssertionError(message) from exc
+    return float(value)
 
 
 @cache
@@ -426,6 +444,34 @@ def test_the_project_coverage_floor_is_95_percent() -> None:
         f"fail_under is {floor:g}%, expected {COVERAGE_FLOOR_PERCENT:g}%; "
         "raise it back, or change COVERAGE_FLOOR_PERCENT and codecov.yml in the "
         "same commit -- never one alone"
+    )
+
+
+def test_the_floor_is_read_from_the_report_table_not_the_first_match(
+    tmp_path: Path,
+) -> None:
+    """A ``fail_under`` in an *earlier* table must not answer this question.
+
+    The regression this pins is a disagreement between the two readers that are
+    meant to be one number: the gate parses ``[tool.coverage.report]`` with
+    ``tomllib``, and until this test existed the contract helper searched the
+    whole file and returned the first match. Add a decoy key in a table that
+    sorts above the real one and the helper grades 95 while the gate enforces
+    something else — both green, neither wrong about its own input.
+
+    The decoy is deliberately ``95``, the number the other two tests want: the
+    old regex returned it and passed, which is precisely how a wrong reader
+    hides.
+    """
+    copy = tmp_path / "pyproject.toml"
+    copy.write_text(
+        "[tool.other]\nfail_under = 95\n\n[tool.coverage.report]\nfail_under = 12.5\n",
+        encoding="utf-8",
+    )
+
+    assert _fail_under_percent(copy) == pytest.approx(12.5), (
+        "the earlier table's fail_under won; the helper must answer for "
+        "[tool.coverage.report] specifically"
     )
 
 
