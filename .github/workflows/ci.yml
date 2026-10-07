@@ -180,7 +180,17 @@ jobs:
         run: uv sync --locked
 
       - name: Run linting
-        run: uv run ruff check src tests
+        # The three roots, spelled out to match `PY` in the Makefile. Passing
+        # `src tests` here skipped `scripts/` entirely, which was fine while every
+        # test lived under `tests/` and stopped being fine the moment some moved to
+        # `scripts/tests/` — those files would still be linted locally by
+        # `make lint-check` and silently unlinted in CI, which is the worst of both.
+        #
+        # Not left to ruff's default discovery either. With no paths it happens to
+        # reach the same 53 files today, but `[tool.ruff] testpaths` is a test-only
+        # setting, so a gate that leans on it is one config edit away from dropping
+        # `src/`. A CI gate should be readable rather than clever.
+        run: uv run ruff check src tests scripts
 
       - name: Run type checking
         # No path argument: `[tool.ty.src] include` in pyproject.toml owns the
