@@ -107,6 +107,21 @@ def test_help_states_the_transport_asymmetry() -> None:
     assert 'echo "exit=$?"' in recipe
 
 
+def test_the_recipe_does_not_record_a_failure_as_a_success() -> None:
+    """The `--exit-code` in the example must carry the printed status.
+
+    The recipe tells the operator to print `exit=$?` and then asks `wrap-ssh` to
+    record it. If the example hardcodes `--exit-code 0`, an operator who follows
+    it verbatim writes a failed `hdfs` command into the corpus as a success —
+    and a replay built on that fixture confidently answers with data the cluster
+    never produced. Mutation evidence: re-adding `--exit-code 0` turns this test
+    red, and no src/ change other than the recipe text can make it green.
+    """
+    recipe = capture.SSH_CLI_RECIPE
+    assert "--exit-code 0" not in recipe
+    assert '--exit-code <status that echo "exit=$?" printed>' in recipe
+
+
 def test_ssh_cli_subcommand_prints_the_recipe_and_exits_3(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

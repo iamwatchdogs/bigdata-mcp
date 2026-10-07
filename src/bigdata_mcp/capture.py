@@ -103,15 +103,22 @@ CAPTURE_COMMANDS: frozenset[str] = frozenset(
 WRAPPER_COMMAND = "wrap-ssh"
 
 #: §11.1's recipe, reproduced so the operator can paste it unchanged. The
-#: separate `echo "exit=$?"` is load-bearing: a shell capture that clobbers `$?`
-#: silently yields a corpus with no exit codes in it.
+#: separate `echo "exit=$?"` is load-bearing, and so is the instruction that
+#: follows it: `--exit-code` must carry the status the recipe printed, not a
+#: hardcoded 0. A recipe that records a failed command as a success fixture is a
+#: confidently wrong observation — the exact thing capture exists to prevent.
 SSH_CLI_RECIPE = """\
 Run this on the edge host, then wrap the two files as a fixture:
 
   hdfs dfs -count -q -v /warehouse/ 2>/tmp/err.txt >/tmp/out.txt ; echo "exit=$?"
 
+The status the echo printed is the real exit status. Use it verbatim for
+`--exit-code` — passing 0 unconditionally would record a failed command as a
+successful fixture:
+
   bigdata-mcp capture-fixtures wrap-ssh --operation 'hdfs dfs -count -q -v <p>' \\
-    --argv '["hdfs","dfs","-count","-q","-v","/warehouse/"]' --exit-code 0 \\
+    --argv '["hdfs","dfs","-count","-q","-v","/warehouse/"]' \\
+    --exit-code <status that echo "exit=$?" printed> \\
     --stdout /tmp/out.txt --stderr /tmp/err.txt \\
     --provenance 'laptop -> edge-host-alias' \\
     --out tests/fixtures/observed/hdfs-count.json
