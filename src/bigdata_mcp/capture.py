@@ -56,6 +56,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
+from typing import cast
 from urllib.parse import urlencode
 
 from bigdata_mcp import capture_mcp
@@ -78,26 +79,22 @@ if TYPE_CHECKING:
 #: gets skipped in CI for being slow.
 McpConnect = capture_mcp.McpConnect
 
-#: What `add_subparsers` hands back. Named because the private
-#: `argparse._SubParsersAction` is not something to annotate against in a module
-#: whose whole job is public API.
+#: What `add_subparsers` hands back; the private `argparse._SubParsersAction` is
+#: not something to annotate against in a module whose job is public API.
 Subparsers = Any
 
 EXIT_REFUSED = 5
 EXIT_EXISTS = 4
 EXIT_UNSUPPORTED_TRANSPORT = 3
 
-#: Transports whose capture is a single HTTP request through the session seam.
-#: `MCP_CLIENT` is not here: it is a stdio `tools/call`, not an HTTP exchange, and
-#: gets its own subcommand.
+#: Transports whose capture is one HTTP request through the session seam.
+#: `MCP_CLIENT` is absent: it is a stdio `tools/call` with its own subcommand.
 HTTP_TRANSPORTS: tuple[Transport, ...] = (Transport.HTTPS_API, Transport.WEB_SESSION)
 
-#: Every subcommand that captures a transport. `ssh_cli` is absent because it is
-#: deliberately uncapturable here, so the set is the enum minus that one member --
-#: the invariant `test_every_transport_has_a_capture_path` asserts, and the reason
-#: `_dispatch` can refuse an unknown command instead of falling through to
-#: `_capture` and reading `args.url` off a namespace without one. The `ssh_cli`
-#: subcommand itself only prints the manual recipe and exits 3.
+#: Every subcommand that captures a transport; `ssh_cli` is deliberately absent
+#: (uncapturable here) -- the invariant `test_every_transport_has_a_capture_path`
+#: asserts, and the reason `_dispatch` can refuse an unknown command. The
+#: `ssh_cli` subcommand itself only prints the manual recipe and exits 3.
 CAPTURE_COMMANDS: frozenset[str] = frozenset(
     transport.value for transport in HTTP_TRANSPORTS
 ) | {Transport.MCP_CLIENT.value}
@@ -105,18 +102,17 @@ CAPTURE_COMMANDS: frozenset[str] = frozenset(
 #: The subcommand that wraps output an operator captured by hand.
 WRAPPER_COMMAND = "wrap-ssh"
 
-#: §11.1's recipe, reproduced so the operator can paste it unchanged. The exit
-#: status is captured separately because `echo` clobbers `$?` otherwise, which is
-#: the kind of detail that silently yields a corpus with no exit codes in it.
+#: §11.1's recipe, reproduced so the operator can paste it unchanged. The
+#: separate `echo "exit=$?"` is load-bearing: a shell capture that clobbers `$?`
+#: silently yields a corpus with no exit codes in it.
 SSH_CLI_RECIPE = """\
 Run this on the edge host, then wrap the two files as a fixture:
 
   hdfs dfs -count -q -v /warehouse/ 2>/tmp/err.txt >/tmp/out.txt ; echo "exit=$?"
 
-  bigdata-mcp capture-fixtures wrap-ssh \\
-    --operation 'hdfs dfs -count -q -v <p>' \\
-    --argv '["hdfs","dfs","-count","-q","-v","/warehouse/"]' \\
-    --stdout /tmp/out.txt --stderr /tmp/err.txt --exit-code 0 \\
+  bigdata-mcp capture-fixtures wrap-ssh --operation 'hdfs dfs -count -q -v <p>' \\
+    --argv '["hdfs","dfs","-count","-q","-v","/warehouse/"]' --exit-code 0 \\
+    --stdout /tmp/out.txt --stderr /tmp/err.txt \\
     --provenance 'laptop -> edge-host-alias' \\
     --out tests/fixtures/observed/hdfs-count.json
 """
@@ -130,14 +126,13 @@ _TRANSPORT_EPILOG = (
     "              request uses, so TLS trust and redirect policy match.\n"
     "  web_session captured here, same seam.\n"
     "  mcp_client  captured here, over a real stdio tools/call.\n"
-    "  ssh_cli     NOT capturable from here: it needs an SSH session, and\n"
-    "              shelling out would put an SSH client on a capture\n"
-    "              tool's request path where §11.1's allowlist cannot\n"
-    "              reach it. `capture-fixtures ssh_cli` prints the recipe\n"
-    "              below and exits 3; run it, then use `wrap-ssh` to wrap\n"
-    "              the two files.\n\n"
-    "  tls_verify  It is a configuration error to capture over https without\n"
-    "              --ca-bundle; no default trust source will be invented.\n\n"
+    "  ssh_cli     NOT capturable: it needs an SSH session, and shelling out\n"
+    "              would put an SSH client on the request path where §11.1's\n"
+    "              allowlist cannot reach it. `capture-fixtures ssh_cli`\n"
+    "              prints the recipe below and exits 3; wrap the files with\n"
+    "              `wrap-ssh`.\n\n"
+    "  tls_verify  capturing over https without --ca-bundle is a config\n"
+    "              error; no default trust source is invented.\n\n"
     f"{SSH_CLI_RECIPE}"
 )
 
@@ -225,8 +220,8 @@ def _add_http_command(commands: Subparsers, transport: Transport) -> None:
         "--allowlist-host",
         required=True,
         help=(
-            "host the redirect policy is told about. Required rather than "
-            "inferred: an empty allowlist is a capture that cannot follow YARN HA"
+            "host the redirect policy is told about; required rather than "
+            "inferred, because an empty allowlist cannot follow YARN HA"
         ),
     )
     command.add_argument(
@@ -277,14 +272,13 @@ def main(
     Args:
         argv: Argument vector, or `None` to read `sys.argv`.
         connect: Builds the MCP client for `mcp_client`, or `None` for the real
-            stdio client. A seam so a test can drive the whole CLI -- dispatch,
-            validation, writing -- against an in-process server.
+            stdio client — the seam a test uses to drive the whole CLI
+            in-process.
 
     Returns:
-        0 on a written fixture, 3 for `ssh_cli` (the capture is always the
-        operator's: it prints the recipe) or for a command without a capture
-        path, 4 when the target exists and `--force` was absent, 5 when the
-        request or the arguments were refused, 2 for an argparse usage fault.
+        0 on a written fixture, 3 for `ssh_cli` (the recipe is the output), 4
+        when the target exists without `--force`, 5 when the request or the
+        arguments were refused, 2 for an argparse usage fault.
     """
     args = build_parser().parse_args(argv)
     if args.transport == Transport.SSH_CLI.value:
@@ -311,10 +305,8 @@ def _dispatch(
         The observed fixture.
 
     Raises:
-        ConfigError: If the command names no capture path. Argparse already refuses
-            an unknown command, so this catches a transport that reached the enum
-            without reaching a branch here -- a bug that would otherwise read an
-            attribute off a namespace that does not have it.
+        ConfigError: If the command names no capture path — a bug that would
+            otherwise read `args.url` off a namespace that does not have it.
     """
     if args.transport == WRAPPER_COMMAND:
         return _wrap_ssh(args)
@@ -341,13 +333,9 @@ def _capture(args: argparse.Namespace) -> Fixture:
         args: The parsed namespace.
 
     Returns:
-        The observed fixture.
-
-    Unusable parameters or a refused request surface as a `ConfigError`; a refused
-    redirect surfaces as a `PermissionError` naming the rule. Both are caught in
-    `main`, so a refusal is a message and an exit code rather than a traceback —
-    an operator running this on the edge host should never have to read Python
-    internals to find out why their capture did not happen.
+        The observed fixture. Refusals surface as `ConfigError` or
+        `PermissionError`, both caught in `main` and turned into a message and
+        an exit code rather than a traceback on the operator's edge host.
     """
     _refuse_an_unsent_method(args.method)
     _refuse_an_unresolved_credential(args.credential_ref)
@@ -458,6 +446,29 @@ def _read(path: Path | None) -> str:
         raise ConfigError(message) from exc
 
 
+def _parse_json(raw: str, field_name: str) -> object:
+    """Parse JSON text, naming `field_name` in the refusal if it is malformed.
+
+    One well-formedness check shared by every JSON-carrying capture flag.
+
+    Args:
+        raw: The JSON text, exactly as the operator passed it.
+        field_name: The flag the text came from, for the error message.
+
+    Returns:
+        The parsed value. Narrowing the type is the caller's job.
+
+    Raises:
+        ConfigError: If the text is not valid JSON, with the parser's line and
+            column so the fault is fixable.
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        message = f"--{field_name} is not valid JSON: {exc}"
+        raise ConfigError(message) from exc
+
+
 def argv_list(raw: str) -> list[str]:
     """Parse an argv list from JSON text.
 
@@ -470,11 +481,7 @@ def argv_list(raw: str) -> list[str]:
     Raises:
         ConfigError: If the text is not a non-empty JSON array of strings.
     """
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        message = f"--argv is not valid JSON: {exc}"
-        raise ConfigError(message) from exc
+    parsed = _parse_json(raw, "argv")
     if not isinstance(parsed, list) or not parsed:
         message = "--argv must be a non-empty JSON array (argv, never a shell string)"
         raise ConfigError(message)
@@ -497,15 +504,11 @@ def _json_object(raw: str, field_name: str) -> dict[str, Any]:
     Raises:
         ConfigError: If the text is not a JSON object.
     """
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        message = f"--{field_name} is not valid JSON: {exc}"
-        raise ConfigError(message) from exc
+    parsed = _parse_json(raw, field_name)
     if not isinstance(parsed, dict):
         message = f"--{field_name} must be a JSON object"
         raise ConfigError(message)
-    return dict(parsed)
+    return cast("dict[str, Any]", parsed)
 
 
 def _refuse_an_unsent_method(method: str) -> None:
@@ -530,16 +533,10 @@ def _refuse_an_unsent_method(method: str) -> None:
 def _refuse_an_unresolved_credential(reference: str) -> None:
     """Refuse `--credential-ref` rather than put the reference on the wire.
 
-    §15.8 has no plaintext tier and §2.3 mandate 3 says the loader carries a
-    reference verbatim and never resolves it — so this build has nothing that could
-    turn `keychain:bigdata-edge` into a usable `Authorization` value. Two things
-    went wrong by sending it anyway, and both are worse than a refusal:
-
-    * every authenticated capture returned 401, and the operator had no way to tell
-      that from an expired credential on the estate;
-    * the backend learned the secret-store *name*. Sending a reference to a server
-      that cannot use it hands an attacker the map to wherever the real credential
-      lives.
+    The module docstring carries the full reasoning. In short: §15.8 has no
+    plaintext tier and §2.3 mandate 3 says a reference is carried verbatim and
+    never resolved here, so sending one puts the secret-store name on the wire
+    and returns an indistinguishable 401 — both strictly worse than a refusal.
 
     Args:
         reference: The `--credential-ref` value, or an empty string.
