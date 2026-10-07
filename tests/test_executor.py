@@ -155,23 +155,14 @@ async def test_a_timed_out_child_is_dead_and_not_merely_cancelled(
     timeout.
 
     The child writes a file every 50 ms. If it were still running when this test
-    finished, the marker would keep changing — so the assertion is made after
+    finished, the marker would keep changing, so the assertion is made after
     giving it longer than the marker's interval to act.
 
-    Two things keep this honest, and both were learned from a red `macos-latest`
-    and `windows-latest` run.
-
-    **Wait for the marker rather than assume it.** The budget below has to be long
-    enough for the interpreter to start and reach its first write, and that is not
-    a fixed cost: measured at ~22 ms on an idle machine and long enough to exceed a
-    50 ms budget on a runner with three xdist workers competing for CPU. Polling
-    for the marker decouples the test from the runner's load; a fixed sleep does
-    not, and its failure mode is the child being killed during startup, which says
-    nothing about whether the executor killed it.
-
-    **Assert the marker exists before reading it.** Otherwise a child that never
-    started raises `FileNotFoundError` and the failure reads like a missing file
-    rather than the vacuous test it actually was.
+    The budget has to cover interpreter startup, which is not a fixed cost — see
+    `_SPAWN_GRACE_S` — and the marker is polled for rather than slept on, because
+    a fixed wait either fails on a loaded runner or is needlessly slow on an idle
+    one. Both of those were learned from a red `macos-latest` and `windows-latest`
+    run where the child was killed during startup and the test proved nothing.
     """
     marker = tmp_path / "still-alive"
     executor = SubprocessExecutor()
