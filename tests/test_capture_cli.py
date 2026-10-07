@@ -108,6 +108,17 @@ def test_help_states_the_transport_asymmetry() -> None:
     assert 'echo "exit=$?"' in recipe
 
 
+def test_ssh_cli_subcommand_prints_the_recipe_and_exits_3(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """§3.3: a transport that cannot be captured answers with the recipe, named."""
+    code = capture.main(["ssh_cli"])
+    assert code == capture.EXIT_UNSUPPORTED_TRANSPORT
+    out = capsys.readouterr().out
+    assert "hdfs dfs -count -q -v /warehouse/" in out
+    assert 'echo "exit=$?"' in out
+
+
 def test_capture_refuses_to_overwrite_without_force(tmp_path: Path) -> None:
     out = tmp_path / "already-there.json"
     out.write_text("{}\n", encoding="utf-8")

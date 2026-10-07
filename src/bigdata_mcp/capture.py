@@ -93,10 +93,11 @@ EXIT_UNSUPPORTED_TRANSPORT = 3
 HTTP_TRANSPORTS: tuple[Transport, ...] = (Transport.HTTPS_API, Transport.WEB_SESSION)
 
 #: Every subcommand that captures a transport. `ssh_cli` is absent because it is
-#: deliberately uncapturable here (see `SSH_CLI_RECIPE`), so the set is the enum
-#: minus that one member -- the invariant `test_every_transport_has_a_capture_path`
-#: asserts, and the reason `_dispatch` can refuse an unknown command instead of
-#: falling through to `_capture` and reading `args.url` off a namespace without one.
+#: deliberately uncapturable here, so the set is the enum minus that one member --
+#: the invariant `test_every_transport_has_a_capture_path` asserts, and the reason
+#: `_dispatch` can refuse an unknown command instead of falling through to
+#: `_capture` and reading `args.url` off a namespace without one. The `ssh_cli`
+#: subcommand itself only prints the manual recipe and exits 3.
 CAPTURE_COMMANDS: frozenset[str] = frozenset(
     transport.value for transport in HTTP_TRANSPORTS
 ) | {Transport.MCP_CLIENT.value}
@@ -132,7 +133,9 @@ _TRANSPORT_EPILOG = (
     "  ssh_cli     NOT capturable from here: it needs an SSH session, and\n"
     "              shelling out would put an SSH client on a capture\n"
     "              tool's request path where §11.1's allowlist cannot\n"
-    "              reach it. Use `wrap-ssh` on the operator's copy.\n\n"
+    "              reach it. `capture-fixtures ssh_cli` prints the recipe\n"
+    "              below and exits 3; run it, then use `wrap-ssh` to wrap\n"
+    "              the two files.\n\n"
     "  tls_verify  It is a configuration error to capture over https without\n"
     "              --ca-bundle; no default trust source will be invented.\n\n"
     f"{SSH_CLI_RECIPE}"
@@ -188,6 +191,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--provenance", required=True, help="machine and command, verbatim"
     )
     _add_output_arguments(wrap)
+    commands.add_parser(
+        Transport.SSH_CLI.value,
+        help=(
+            "not capturable from here; prints the exact manual recipe and "
+            "exits 3 on purpose"
+        ),
+    )
     return parser
 
 
@@ -271,11 +281,15 @@ def main(
             validation, writing -- against an in-process server.
 
     Returns:
-        0 on a written fixture, 3 for an uncapturable transport, 4 when the
-        target exists and `--force` was absent, 5 when the request or the
-        arguments were refused, 2 for an argparse usage fault.
+        0 on a written fixture, 3 for `ssh_cli` (the capture is always the
+        operator's: it prints the recipe) or for a command without a capture
+        path, 4 when the target exists and `--force` was absent, 5 when the
+        request or the arguments were refused, 2 for an argparse usage fault.
     """
     args = build_parser().parse_args(argv)
+    if args.transport == Transport.SSH_CLI.value:
+        sys.stdout.write(SSH_CLI_RECIPE)
+        return EXIT_UNSUPPORTED_TRANSPORT
     try:
         fixture = _dispatch(args, connect=connect)
     except (BigDataMcpError, PermissionError) as exc:
