@@ -1,4 +1,7 @@
-"""Contract tests over the repository-root ``SPEC.md``.
+"""Contract tests over the documents that decide what the code is *for*.
+
+Two things are guarded here: ``SPEC.md``, and the coverage policy split across
+``pyproject.toml`` and ``codecov.yml``.
 
 These guard a failure mode no other gate in this repository can see: a section
 of the specification disappearing during an edit. Everything else here --
@@ -32,7 +35,19 @@ import re
 from functools import cache
 from pathlib import Path
 
-SPEC_PATH = Path(__file__).resolve().parents[2] / "SPEC.md"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SPEC_PATH = REPO_ROOT / "SPEC.md"
+PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
+CODECOV_PATH = REPO_ROOT / "codecov.yml"
+MAKEFILE_PATH = REPO_ROOT / "Makefile"
+CI_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+
+#: The coverage floor this repository commits to, in percent. Three
+#: configurations state it -- ``pyproject.toml`` (coverage.py's project total),
+#: ``codecov.yml`` (Codecov's ``project`` status), and, by reading the first, the
+#: per-file gate in ``scripts/coverage_gate.py``. Asserted equal below so that no
+#: two can be edited apart.
+COVERAGE_FLOOR_PERCENT = 95.0
 
 #: Every top-level section of ``SPEC.md`` v1. The traceability table must map
 #: each of these, or explicitly account for it, so none can vanish unremarked.
@@ -309,4 +324,160 @@ def test_spec_bounds_the_always_loaded_tool_surface() -> None:
         "v2 commits to a bounded always-loaded surface: 13 curated built-ins "
         "plus six fixed meta-tools, so the count does not grow with the number "
         "of configured portals or proxied MCP servers.",
+    )
+
+
+# --------------------------------------------------------------------------
+# The coverage floor: one number, three configurations
+# --------------------------------------------------------------------------
+
+
+@cache
+def _pyproject_text() -> str:
+    """Return ``pyproject.toml`` once per process, or fail loudly."""
+    assert PYPROJECT_PATH.is_file(), (
+        f"pyproject.toml not found at {PYPROJECT_PATH}; the floor it carries "
+        "cannot be asserted without it, and skipping would leave the number "
+        "unguarded"
+    )
+    return PYPROJECT_PATH.read_text(encoding="utf-8")
+
+
+@cache
+def _fail_under_percent() -> float:
+    """Return ``pyproject.toml``'s ``fail_under`` as a percentage.
+
+    One parser for two tests: the first asserts the value, the second compares it
+    against Codecov's, and a pair of inlined searches is a pair of places for the
+    pattern to drift apart.
+
+    Returns:
+        The floor, or an assertion failure if the key is absent — which would
+        leave coverage.py running with no floor at all, and is worth failing
+        over rather than defaulting.
+    """
+    match = re.search(r"^fail_under\s*=\s*([0-9.]+)", _pyproject_text(), re.MULTILINE)
+    assert match is not None, (
+        "pyproject.toml has no [tool.coverage.report].fail_under; coverage.py "
+        "would then run with no floor at all"
+    )
+    return float(match.group(1))
+
+
+@cache
+def _codecov_text() -> str:
+    """Return ``codecov.yml`` once per process, or fail loudly."""
+    assert CODECOV_PATH.is_file(), (
+        f"codecov.yml not found at {CODECOV_PATH}; without it Codecov applies "
+        "its own defaults, which is the state this test exists to prevent"
+    )
+    return CODECOV_PATH.read_text(encoding="utf-8")
+
+
+def _codecov_status_target(status: str) -> float:
+    """Read one status block's ``target`` out of ``codecov.yml``.
+
+    The repository has no YAML parser available to tests (no ``pyyaml`` in the
+    lock, and adding a dependency to read ten lines of a file this repo owns is
+    the wrong trade), so this walks indentation instead: find ``<status>:``, then
+    the first ``target:`` nested more deeply than it. A regex over the whole file
+    would match whichever block came first and silently assert the wrong one.
+
+    Args:
+        status: The status name, e.g. ``project`` or ``patch``.
+
+    Returns:
+        The target as a float percentage.
+
+    Raises:
+        AssertionError: If the status or its target cannot be located, which is
+            a change to the file's shape rather than to its policy -- both need
+            a human, and one of them only needs a human.
+    """
+    lines = _codecov_text().splitlines()
+    header = re.compile(rf"^(\s*){re.escape(status)}:\s*$")
+    target = re.compile(r"^\s*target:\s*([0-9]+(?:\.[0-9]+)?)%")
+    for index, line in enumerate(lines):
+        match = header.match(line)
+        if match is None:
+            continue
+        indent = len(match.group(1))
+        for nested in lines[index + 1 :]:
+            if nested.strip() and len(nested) - len(nested.lstrip()) <= indent:
+                break
+            found = target.match(nested)
+            if found:
+                return float(found.group(1))
+        message = f"codecov.yml has a `{status}` status with no `target` percentage"
+        raise AssertionError(message)
+    message = f"codecov.yml has no `{status}` status"
+    raise AssertionError(message)
+
+
+def test_the_project_coverage_floor_is_95_percent() -> None:
+    """The decision, in the file coverage.py reads.
+
+    Asserted against the literal rather than against ``> 0`` or a range: a floor
+    that only has to be *some* number is not the floor this repository chose, and
+    the point of the test is to make the next edit to this line an explicit one.
+    """
+    floor = _fail_under_percent()
+    assert floor == COVERAGE_FLOOR_PERCENT, (
+        f"fail_under is {floor:g}%, expected {COVERAGE_FLOOR_PERCENT:g}%; "
+        "raise it back, or change COVERAGE_FLOOR_PERCENT and codecov.yml in the "
+        "same commit -- never one alone"
+    )
+
+
+def test_codecov_enforces_the_same_floor_as_pyproject() -> None:
+    """Both configurations state one number, and they must be *the same* one.
+
+    Two independent assertions of the literal (above and here) would let the pair
+    drift apart and both stay green. This one compares the parsed values, so a
+    change to either side alone turns this red -- which is the whole reason
+    `codecov.yml`'s comment names this test.
+    """
+    pyproject_floor = _fail_under_percent()
+    codecov_target = _codecov_status_target("project")
+    codecov_target = _codecov_status_target("project")
+
+    assert codecov_target == pyproject_floor, (
+        f"codecov.yml project target is {codecov_target:g}% but pyproject "
+        f"fail_under is {pyproject_floor:g}%; the two are meant to be one "
+        "decision written twice"
+    )
+    assert codecov_target == COVERAGE_FLOOR_PERCENT
+
+    patch_target = _codecov_status_target("patch")
+    assert patch_target == COVERAGE_FLOOR_PERCENT, (
+        f"codecov.yml patch target is {patch_target:g}%; PR #4 sat red on an "
+        "implicit 100% here while every local gate passed"
+    )
+
+
+def test_the_per_file_gate_is_wired_where_the_suite_is_run() -> None:
+    """A floor nobody runs is a comment.
+
+    The gate reads `fail_under` itself, so what needs guarding is the wiring: it
+    has to run after the suite produces the report, in both places that run the
+    suite for real. `make testmon` deliberately does not -- it runs a subset with
+    `--no-cov` and there is no report, which the gate treats as a failure rather
+    than a pass.
+    """
+    makefile = MAKEFILE_PATH.read_text(encoding="utf-8")
+    assert "coverage-per-file" in makefile, (
+        "the Makefile no longer defines or chains the per-file gate"
+    )
+    assert "@$(MAKE) -s coverage-per-file" in makefile, (
+        "`make test` runs pytest and stops; the gate after it was removed, so "
+        "the floor would only be checked by whoever remembered to run it"
+    )
+
+    workflow = CI_PATH.read_text(encoding="utf-8")
+    assert "scripts/coverage_gate.py" in workflow, (
+        "the CI coverage step no longer runs the per-file gate; a PR could drop "
+        "one file below the floor and every check would stay green"
+    )
+    assert workflow.index("coverage_gate.py") > workflow.index("--cov-report=xml"), (
+        "the gate runs before the report that feeds it"
     )

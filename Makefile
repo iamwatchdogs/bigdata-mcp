@@ -19,6 +19,7 @@ HYGIENE := trailing-whitespace end-of-file-fixer mixed-line-ending \
 .PHONY: help install update lock hooks uninstall hooks-update hooks-list \
         hooks-validate lint lint-check format format-check fmt fix typecheck \
         complexity actionlint workflows test testmon coverage coverage-html \
+        coverage-per-file \
         hygiene checks security zizmor osv gitleaks bandit redirect-gate \
         codacy codacy-install coderabbit \
         verify ci run build binary \
@@ -83,6 +84,9 @@ actionlint: ## lint GitHub Actions workflows (mirrors actionlint hook)
 
 test: ## Full pytest suite (coverage + xdist via pyproject addopts)
 	$(RUN) pytest
+	@# The per-file floor runs on the report this run just produced, so the gate
+	@# and the measurement can never disagree about which run they describe.
+	@$(MAKE) -s coverage-per-file
 
 testmon: ## pytest-testmon on changed files (mirrors pytest-testmon hook)
 	@# `--no-cov`: testmon runs a subset, so a coverage percentage over it is
@@ -103,6 +107,15 @@ coverage: ## Print terminal coverage report from last test run
 
 coverage-html: ## Generate htmlcov/ report from last test run
 	$(RUN) coverage html
+
+coverage-per-file: ## Fail if any measured file is under the per-file floor
+	@# Per-file, because `fail_under` is a project total and Codecov's statuses
+	@# are totals too -- a single file can fall to 50% while the other 24 hold
+	@# the number, and every gate stays green. The floor is read from
+	@# `fail_under`, so this target owns no number of its own. It is not in the
+	@# pre-commit stage: testmon runs a subset with `--no-cov` and there is no
+	@# report to read, which the gate treats as a failure rather than a pass.
+	$(PYTHON) scripts/coverage_gate.py
 
 ##@ Hygiene & gates (prek)
 

@@ -188,8 +188,21 @@ branch = true
 
 [tool.coverage.report]
 # A floor, not a target, and never lower it to make a failing run pass -- fix
-# the missing test instead. Raise toward 90 as the server implementation lands.
-fail_under = 80
+# the missing test instead.
+#
+# 95% is the number, and it lives here as the source of truth for two reasons.
+#
+# * `codecov.yml` states the same 95% for Codecov's `project` and `patch`
+#   statuses. `scripts/tests/test_repo_contracts.py` asserts the two agree, so
+#   neither can be changed alone.
+# * `scripts/coverage_gate.py` reads this value and applies it to every file
+#   individually. Neither coverage.py (a single `fail_under` float, compared
+#   against the total) nor Codecov (`project` and `patch` statuses, also totals)
+#   can enforce a per-file floor, so one file could fall to 50% while the other
+#   twenty-four held the number and every gate stayed green. The gate owns no
+#   percentage of its own -- `make coverage-per-file` and the CI coverage step
+#   both run it, and `make test` chains it after the run that produced the data.
+fail_under = 95
 show_missing = true
 # Nothing to exclude: `src` is on sys.path via pytest's `pythonpath` and the
 # `__main__` guard is exercised by runpy in tests/test_main.py.
