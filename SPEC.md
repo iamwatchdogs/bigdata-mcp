@@ -2051,7 +2051,7 @@ Recorded so they are not relitigated.
 ## 21. Traceability — every section of v1
 
 This table exists so that no section of v1 disappeared unremarked. It is
-asserted by `tests/test_repo_contracts.py`, which fails if a row goes missing, if
+asserted by `scripts/tests/test_repo_contracts.py`, which fails if a row goes missing, if
 a row numbers a section v1 did not have, or if a row cannot be parsed.
 
 **The four "verbatim" blocks are the reason this rewrite was worth doing rather

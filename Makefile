@@ -8,7 +8,7 @@ RUN    := $(UV) run
 PYTHON := $(RUN) python
 PREK   := prek
 RUFF   := $(RUN) ruff
-PY     := src tests
+PY     := src tests scripts
 
 # no-commit-to-branch is excluded: it guards `git commit`, not code quality.
 HYGIENE := trailing-whitespace end-of-file-fixer mixed-line-ending \

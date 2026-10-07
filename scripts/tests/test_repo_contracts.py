@@ -32,7 +32,7 @@ import re
 from functools import cache
 from pathlib import Path
 
-SPEC_PATH = Path(__file__).resolve().parent.parent / "SPEC.md"
+SPEC_PATH = Path(__file__).resolve().parents[2] / "SPEC.md"
 
 #: Every top-level section of ``SPEC.md`` v1. The traceability table must map
 #: each of these, or explicitly account for it, so none can vanish unremarked.

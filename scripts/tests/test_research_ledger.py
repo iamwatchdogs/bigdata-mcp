@@ -10,7 +10,7 @@ Nothing enforces that rule. A future edit that "tidies up" D1's conclusion, or
 restates D5's finding without its correction, would pass every gate in this
 repository and would destroy the one artefact that records why the project looks
 the way it does. That is the same class of failure
-``tests/test_repo_contracts.py`` guards in ``SPEC.md``, applied to the ledger.
+``scripts/tests/test_repo_contracts.py`` guards in ``SPEC.md``, applied to the ledger.
 
 Each assertion is mutation-verified: change the thing, watch the named test go
 red, restore it.
@@ -22,7 +22,7 @@ import re
 from functools import cache
 from pathlib import Path
 
-LEDGER_PATH = Path(__file__).resolve().parent.parent / "docs" / "research" / "README.md"
+LEDGER_PATH = Path(__file__).resolve().parents[2] / "docs" / "research" / "README.md"
 
 #: Every decision entry the ledger must carry, newest last. D6 is the scope
 #: realignment; D1-D5 predate it and must survive it unedited.

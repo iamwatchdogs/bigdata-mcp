@@ -23,8 +23,11 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-TESTS_DIR = REPO_ROOT / "tests"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+#: Both roots. This module scans the suite for non-local URLs, and the suite now
+#: spans two directories — scanning only `tests/` would leave every file under
+#: `scripts/tests/` unchecked while still reporting the rule as enforced.
+TEST_DIRS = (REPO_ROOT / "tests", REPO_ROOT / "scripts" / "tests")
 SPEC_PATH = REPO_ROOT / "SPEC.md"
 
 ESTATE_ACCESS_SENTINEL = "Development has no access to the target estate"
@@ -100,7 +103,9 @@ def test_fixture_ownership_is_split_between_implementer_and_owner() -> None:
 
 @pytest.mark.parametrize(
     "path",
-    sorted(p for p in TESTS_DIR.rglob("*.py") if p.is_file()),
+    sorted(
+        p for directory in TEST_DIRS for p in directory.rglob("*.py") if p.is_file()
+    ),
     ids=lambda p: str(p.relative_to(REPO_ROOT)),
 )
 def test_no_module_under_tests_targets_a_remote_host(path: Path) -> None:

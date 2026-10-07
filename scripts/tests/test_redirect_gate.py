@@ -1,12 +1,18 @@
 """Tests for `scripts/redirect_gate.py`, the gate that owns §4.2 item 2.
 
 This rule used to be asserted twice: once by the gate, and once by a test in
-`test_session.py` that re-implemented the gate's scan. Two implementations of one
-rule is one too many, and the copy was the weaker of the pair — it used `glob`
-where the gate uses `rglob`, so it missed every module in a subpackage, and it
-omitted `aiohttp.request` entirely. It also read source text to check a lint
+`tests/test_session.py` that re-implemented the gate's scan. Two implementations
+of one rule is one too many, and the copy was the weaker of the pair — it used
+`glob` where the gate uses `rglob`, so it missed every module in a subpackage, and
+it omitted `aiohttp.request` entirely. It also read source text to check a lint
 rule, which is the gate's job, not the product suite's. It is gone; these tests
-import the gate and exercise the gate.
+import the gate and exercise it.
+
+These live under `scripts/tests/` rather than `tests/` because the thing under test
+is a script in `scripts/`, not the package in `src/`. Keeping a test with the tool
+it covers is what stops `make test` from accumulating assertions about CI wiring.
+Because `scripts` is on pytest's `pythonpath`, the gate imports by name — no path
+munging, and `ty` resolves it.
 
 The gate's exit codes are the point of most of these. A gate that cannot tell
 "found something" from "could not look" reports a broken checkout as a code
@@ -39,81 +45,17 @@ form a "let me tidy this up" edit actually takes.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
+from redirect_gate import ALLOWED_MODULE
+from redirect_gate import BANNED_IDENTIFIERS
+from redirect_gate import ScanFailed
+from redirect_gate import find_violations
+from redirect_gate import main
 
-if TYPE_CHECKING:
-    from types import ModuleType
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 GATE_PATH = REPO_ROOT / "scripts" / "redirect_gate.py"
-
-
-def _load_gate() -> ModuleType:
-    """Import `scripts/redirect_gate.py` as a module.
-
-    Loaded by path rather than imported by name because `scripts/` is not a
-    package: it is a directory of tools, not something the product imports. Going
-    through `importlib` keeps `ty` resolving it -- a `sys.path` entry plus a bare
-    `from redirect_gate import ...` type-checks as an unresolved import, which is
-    an accurate complaint about the bare name and no use to anyone.
-
-    Returns:
-        The loaded gate module.
-
-    Raises:
-        RuntimeError: If `GATE_PATH` is not importable as a module, which would
-            mean the gate file was moved and this loader was not updated with it.
-    """
-    spec = importlib.util.spec_from_file_location("redirect_gate", GATE_PATH)
-    if spec is None or spec.loader is None:
-        message = f"cannot load the gate from {GATE_PATH}"
-        raise RuntimeError(message)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-GATE = _load_gate()
-
-# Reached through the module rather than re-annotated with the types `ty` expects:
-# a dynamically loaded module is `Any`, and writing `x: str = GATE.x` would assert
-# a type the checker cannot verify -- the annotation would be a claim, not a
-# constraint. The shapes are checked at runtime in
-# `test_the_gate_exposes_the_shape_its_tests_rely_on` instead.
-ALLOWED_MODULE = GATE.ALLOWED_MODULE
-BANNED_IDENTIFIERS = GATE.BANNED_IDENTIFIERS
-PACKAGE_DIR = GATE.PACKAGE_DIR
-ScanFailed = GATE.ScanFailed
-find_violations = GATE.find_violations
-main = GATE.main
-
-
-def test_the_gate_exposes_the_shape_its_tests_rely_on() -> None:
-    """The load succeeded and the attributes are the types this suite assumes.
-
-    Everything above reaches the gate through `Any`, so the types are checked here
-    rather than trusted from the annotations of the assignments above.
-
-    This does not catch a rename: the module-level aliases would raise
-    `AttributeError` at collection first, before this runs. What it catches is the
-    quieter failure — an attribute that still exists but is now, say, a set
-    rather than a tuple, which every test using it would iterate and pass.
-    """
-    assert isinstance(ALLOWED_MODULE, str)
-    assert ALLOWED_MODULE == "session.py"
-    assert isinstance(BANNED_IDENTIFIERS, tuple)
-    assert all(isinstance(name, str) for name in BANNED_IDENTIFIERS)
-    assert isinstance(PACKAGE_DIR, Path)
-    assert PACKAGE_DIR.is_dir(), "the gate is pointed at a directory that is gone"
-    assert issubclass(ScanFailed, RuntimeError)
-    for function in (find_violations, main):
-        assert callable(function)
 
 
 def test_the_real_package_is_clean() -> None:

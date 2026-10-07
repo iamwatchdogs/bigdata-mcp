@@ -8,7 +8,7 @@ is not a rule that could be forgotten — it is a shape the document cannot take
 
 The mapping between the config literals (`"read_only"` / `"read_write"`) and this
 enum is the one place those two spellings meet, and both are load-bearing: §16
-carries the lowercase literals and `tests/test_repo_contracts.py` asserts them
+carries the lowercase literals and `scripts/tests/test_repo_contracts.py` asserts them
 there.
 """
 

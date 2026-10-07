@@ -112,7 +112,9 @@ repos:
         # documented on that target.
         entry: make testmon
         language: system
-        files: ^(tests|src)/.*\.py$
+        # `scripts/` because the suite has two roots and a test under
+        # `scripts/tests/` is a test of a tool, not of `src/`.
+        files: ^(src|tests|scripts)/.*\.py$
         types: [python]
 
       - id: bandit

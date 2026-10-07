@@ -132,7 +132,11 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["unused-import", "undocumented-public-package"]
+# Both roots. The suite spans `tests/` and `scripts/tests/`, and the second exists
+# so that a test of a tool in `scripts/` lives with that tool rather than coupling
+# the product suite to CI wiring.
 "tests/**/*.py" = ["assert", "D", "ANN", "ARG"]
+"scripts/tests/**/*.py" = ["assert", "D", "ANN", "ARG"]
 # Executable tooling, not a library: run by `make` and by the pre-commit hook,
 # so a `__main__` guard and a `print`-based usage message are correct rather
 # than violations. S404/S603 are suppressed at the call site, where the argv is
@@ -171,8 +175,10 @@ max-returns = 6
 max-statements = 50
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src"]
+testpaths = ["tests", "scripts/tests"]
+# `src` for the package under test, `scripts` so a test there can import the tool
+# it is testing by name instead of rebuilding a path to reach it.
+pythonpath = ["src", "scripts"]
 addopts = "--cov=bigdata_mcp --cov-report=term-missing -v -n auto"
 
 [tool.coverage.run]
@@ -197,7 +203,7 @@ show_missing = true
 # than a quiet one.
 #
 # B101 assert_used — a pytest suite is built from `assert`. The ruff equivalent
-#   (S101) is suppressed for `tests/**` above for the same reason, and `make
+#   (S101) is suppressed for both test roots above for the same reason, and `make
 #   test` runs pytest, which is what evaluates those asserts.
 #
 # B404 import_subprocess — fires on ANY import of `subprocess`.
