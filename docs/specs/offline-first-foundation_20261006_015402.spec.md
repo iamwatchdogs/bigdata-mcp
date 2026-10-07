@@ -286,6 +286,17 @@ config loader and by every capability decision. C5 before C6, because the sessio
 tests want a corpus and a local server. C7 and C8 are independent of all of it and
 could run in parallel if there were two people.
 
+### 4.1 Two decisions taken during delivery, not in this spec
+
+Both arrived while C6–C8 were landing, both are the kind of thing a reader of
+this file six months from now would otherwise have to rediscover by reading a
+gate's source. Recorded here so the plan above is not read as the whole change.
+
+| Decision | What changed | Why it was not scoped out |
+|---|---|---|
+| **D9 — the coverage floor is 95%, and it is per-file** | `fail_under` 80 → 95 in `[tool.coverage.report]`, agreeing with `codecov.yml`'s 95, plus `scripts/coverage_gate.py` applied to every file individually | coverage.py's `fail_under` and Codecov's `project`/`patch` statuses are both *totals*. One file at 50% and twenty-four at 100% reads as 96% and every gate stays green, which is precisely the failure §17.2's hermetic-fixture work exists to prevent: a silently-undertested module looks like a tested one. `scripts/tests/test_repo_contracts.py` asserts the two numbers agree, so neither can be moved alone. |
+| **D10 — the suite has two roots** | `tests/` for the behaviour of `src/`, `scripts/tests/` for the tools in `scripts/`; `pyproject.toml` `testpaths`, `pythonpath`, and the per-file lint ignores cover both | `tests/` is for `src/`. A test that reads `SPEC.md`, `pyproject.toml`, the Makefile, or a gate's source is testing the repository's wiring, and keeping it in `tests/` couples the product suite to CI wiring — `make test` then fails for a reason that has nothing to do with the product, which is the recorded lesson in `docs/research/README.md` D5. A test for a script now lives beside that script, so a rename is obvious rather than a dangling import. |
+
 ---
 
 ## 5. Verification
@@ -360,3 +371,6 @@ format rather than consuming a portal. That is the point of the hybrid.
 | Synthetic fixtures | Committed, labelled, and documented as not validating a parser | §3.3 |
 | Order of work | C3 → C4 → C5 → C6 → C7 → C8 | §4 |
 | Whether to start adapters | No. Every adapter depends on the estate or the corpus | §2.2 |
+| Coverage floor | 95%, applied per file, not as a project total | §4.1 D9 |
+| Where a test lives | `tests/` for `src/`, `scripts/tests/` for a tool in `scripts/` | §4.1 D10 |
+| How `session.py`'s exclusivity is enforced | The grep gate *and* an import-time guard, either of which is sufficient alone | §3.4, §7 |
