@@ -21,6 +21,10 @@ Mutation evidence, each applied and observed red before reverting:
   `test_the_gate_bounds_concurrency_and_never_exceeds_its_cap`
 * E6 drop the TTL expiry -> `test_an_expired_entry_is_not_served`
 * E7, E8, E13, E14, E15 are recorded in `test_singleflight.py`'s docstring
+* H1 let the first caller's `use_cache` decide for everyone coalescing ->
+  `test_a_concurrent_bypass_is_not_decided_by_whoever_arrived_first`
+* H2 key the coalescing on the cache flag too, splitting every bypass into real
+  work -> `test_callers_that_agree_on_caching_still_coalesce`
 * E9 remove the pre-permit deadline check ->
   `test_a_call_with_no_budget_left_never_reaches_the_executor`
 * F1 build the engine deadline without the injected clock ->
@@ -431,6 +435,74 @@ async def test_the_cache_can_be_bypassed() -> None:
 
     await scenario()
     assert len(fake.calls) == 2
+
+
+async def test_a_concurrent_bypass_is_not_decided_by_whoever_arrived_first() -> None:
+    """A caller that bypassed the cache must not have its answer cached.
+
+    `use_cache` was carried by whichever caller started the shared task, so a
+    caller passing `use_cache=False` that coalesced onto a concurrent caching call
+    had its result written to the cache anyway. The bypass was silently ignored,
+    and the next caller was served the answer this one did not want remembered.
+
+    The two callers have to overlap. Run one after the other there is nothing to
+    coalesce onto, the bypass is honoured by accident, and the bug does not appear
+    — which is why the first version of this test, run sequentially, stayed green
+    against the old code.
+
+    The probe is the backend call count, not object identity: `FakeExecutor`
+    returns one shared `ExecResult` for every unconfigured command, so `is` would
+    compare the same object whether or not the cache answered.
+    """
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+
+    class Gated(FakeExecutor):
+        """A fake whose call blocks until the test lets it finish."""
+
+        @override
+        async def exec(self, argv: Sequence[str], deadline: Deadline) -> ExecResult:
+            """Hold the call open long enough for a second caller to arrive.
+
+            Args:
+                argv: The command.
+                deadline: The deadline, unused.
+
+            Returns:
+                The fake's usual result.
+            """
+            in_flight.set()
+            await release.wait()
+            return await super().exec(argv, deadline)
+
+    fake = Gated()
+    engine = PoliteEngine(fake, edge_cores=8)
+
+    caching = asyncio.ensure_future(engine.run("k", COUNT_ARGV))
+    await in_flight.wait()
+    bypassing = asyncio.ensure_future(engine.run("k", COUNT_ARGV, use_cache=False))
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(caching, bypassing)
+
+    await engine.run("k", COUNT_ARGV)
+    assert len(fake.calls) == 2, "the bypassed answer was served from the cache"
+
+
+async def test_callers_that_agree_on_caching_still_coalesce() -> None:
+    """The other half: the key change must not split every bypass into real work."""
+    fake = FakeExecutor()
+    engine = PoliteEngine(fake, edge_cores=8)
+
+    async def scenario() -> tuple[ExecResult, ExecResult]:
+        return await asyncio.gather(
+            engine.run("k", COUNT_ARGV, use_cache=False),
+            engine.run("k", COUNT_ARGV, use_cache=False),
+        )
+
+    first, second = await scenario()
+    assert first is second
+    assert len(fake.calls) == 1, "two bypassing callers ran the backend twice"
 
 
 async def test_different_keys_both_reach_the_executor() -> None:

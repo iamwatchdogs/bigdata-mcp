@@ -172,16 +172,25 @@ class PoliteEngine:
         """Run one command under the whole policy.
 
         Args:
-            key: The canonical key. Two calls with equal keys coalesce; two with
-                equal keys and `use_cache` set share the cached answer as well.
+            key: The canonical key. Two calls with equal keys and equal `use_cache`
+                coalesce onto one backend call.
             argv: The command. Never a shell string (§11.1).
-            use_cache: Whether the TTL cache may answer this call.
+            use_cache: Whether the TTL cache may answer this call, and whether the
+                result is written back to it.
 
         Returns:
             The result.
 
         A full queue raises `QueueFull` — nothing was allocated and the executor was
         never reached — and an exhausted budget raises `DeadlineExceeded`.
+
+        Every caller takes a queue slot, including the ones that go on to coalesce
+        onto another caller's work. That over-counts rather than under-counts, which
+        is the right direction: the depth cap then bounds *callers*, and executor
+        concurrency is bounded by the host gate as well as by this queue. Making the
+        slot conditional on not coalescing would require knowing whether a
+        concurrent call exists before admitting, which is the question admission
+        control exists to answer.
         """
         if use_cache:
             cached = self.cache.get(key)
@@ -194,9 +203,17 @@ class PoliteEngine:
             raise admission.refuse()
         self._counters.admitted += 1
 
+        # `use_cache` is part of the coalescing key, not just of the caller's
+        # intent. A caller that asked for the cache to be bypassed would otherwise
+        # join a task whose caching was decided by whoever arrived first, and its
+        # result would be written to the cache anyway — so the bypass would be
+        # silently ignored, and a later caller would then be served the answer that
+        # caller did not want cached. Two callers that disagree here do not
+        # coalesce, which costs one extra backend call and keeps the flag honest.
+        flight_key = key if use_cache else f"{key}\0nocache"
         try:
             return await self.flight.do(
-                key, lambda: self._guarded(key, argv, use_cache=use_cache)
+                flight_key, lambda: self._guarded(key, argv, use_cache=use_cache)
             )
         finally:
             self.queue.release()
