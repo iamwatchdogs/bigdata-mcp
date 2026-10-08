@@ -148,6 +148,14 @@ def capture(
         raise ConfigError(message)
 
     async def call() -> tuple[str, str | None, bool]:
+        """Invoke the tool and flatten the result into the three parts a fixture stores.
+
+        Returns:
+            The text content, the structured content as a JSON string or `None`,
+            and whether the server flagged the call as an error. `is_error` is
+            carried rather than raised: a tool that answers "here is why it
+            failed" is an observation to record, not a transport fault.
+        """
         async with connect(argv) as client:
             result = await client.call_tool(tool, arguments)
         return (

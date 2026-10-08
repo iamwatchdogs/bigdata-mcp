@@ -353,6 +353,17 @@ def _capture(args: argparse.Namespace) -> Fixture:
     transport = Transport(args.transport)
 
     async def call() -> tuple[int, str, str]:
+        """Fetch the URL through the session seam.
+
+        A closure rather than a module function because the session policy is
+        built entirely from `args`; hoisting it would mean passing six arguments
+        to express what is already in scope.
+
+        Returns:
+            The status, the decoded body, and the URL the body actually came
+            from. The last is the *resolved* URL after redirects, because §8.1's
+            `resolved_params` exists for a confidently wrong answer.
+        """
         async with Session(
             allowlist=frozenset({args.allowlist_host}),
             allow_http=args.url.startswith("http://"),
