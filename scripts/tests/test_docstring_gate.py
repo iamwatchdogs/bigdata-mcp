@@ -21,6 +21,22 @@ undocumented on the day this gate was added.
   `test_the_threshold_is_read_from_the_docstrings_table`
 * D6 widen `python_files` past `__pycache__` ->
   `test_a_generated_directory_is_not_scanned`
+* D7 drop the `math.isfinite` guard on the threshold ->
+  `test_a_threshold_the_gate_cannot_trust_is_refused_not_degraded`, the three
+  non-finite cases. The bug it pins is the interesting one: `actual < nan` is
+  always `False`, so a `nan` threshold made the gate report a half-documented
+  tree clean — the only config line that can turn it into a no-op without
+  touching a definition.
+* D8 route `--threshold` past `_checked_threshold` -> the same test's three
+  non-finite cases
+* D9 delete `scan`'s `findings.sort(...)` ->
+  `test_findings_are_ordered_by_file_then_line`
+
+D9 exists because that test was, until this ledger entry, a taxidermy test: it
+scanned the real tree, which is clean, so `findings == []` and the ordering
+assertion held for a `scan` that never sorted at all. Verified by reverting it
+and observing D9's mutation pass; it now drives three unsorted fixture paths
+directly, past `python_files`, so the sort under test is the one in `scan`.
 
 The assertions are written to hold at the threshold the repository currently
 carries and at any higher one: every synthetic file is either fully documented
@@ -357,6 +373,57 @@ def test_a_missing_threshold_is_unreadable_not_clean(tmp_path: Path) -> None:
         threshold_from_pyproject(tmp_path / "pyproject.toml")
 
 
+@pytest.mark.parametrize(
+    "poison",
+    [
+        pytest.param("nan", id="nan"),
+        pytest.param("inf", id="inf"),
+        pytest.param("-inf", id="negative-inf"),
+        pytest.param('"not a number"', id="nonnumeric-string"),
+        pytest.param("[]", id="nonnumeric-list"),
+    ],
+)
+def test_a_threshold_the_gate_cannot_trust_is_refused_not_degraded(
+    tmp_path: Path, poison: str
+) -> None:
+    """A threshold that cannot be compared fails the gate; it does not pass it.
+
+    This is the one configuration line that can turn the gate into a no-op
+    without touching a single definition. `actual < nan` is always `False`, and
+    `actual < -inf` likewise, so either value makes the gate report a tree with
+    half its definitions undocumented as **clean**. That is not a wrong answer,
+    it is the gate silently approving the thing it exists to prevent — the
+    failure mode `scripts/codacy_gate.py`'s docstring records from experience,
+    reachable here by a line an editor types by mistake.
+
+    `inf` and a nonnumeric value are refused too, for narrower reasons: the
+    first makes every tree fail however complete it is, and the second would
+    escape as an uncaught `ValueError` and exit 1 with a traceback where every
+    other unreadable-config case exits 2 with a reason. All four land on the
+    same exit status so a caller cannot tell them apart and does not have to.
+
+    Mutation evidence: removing the `math.isfinite` guard, or the
+    `_checked_threshold` call `main` routes `--threshold` through, leaves the
+    `nan` and `-inf` cases green with the gate reporting clean.
+    """
+    root = _repo(tmp_path, {"src/module.py": UNDOCUMENTED_FILE})
+    _write(root / "pyproject.toml", f"[tool.docstrings]\nthreshold = {poison}\n")
+
+    with pytest.raises(
+        ScanFailed, match=r"not finite|is not a number|must be a number"
+    ):
+        threshold_from_pyproject(root / "pyproject.toml")
+
+    if poison in {"nan", "inf", "-inf"}:
+        # Only the non-finite three get here: argparse's `type=float` already
+        # turns a nonnumeric `--threshold` into exit 2, so that half of the
+        # refusal is Python's and needs no test of ours. The non-finite three
+        # *are* accepted by `float()`, so the `=` form is what gets them past
+        # argparse and into `_checked_threshold`. Load-bearing syntax:
+        # `--threshold -inf` as two argv entries reads as a flag to argparse.
+        assert main(["--root", str(root), f"--threshold={poison}"]) == EXIT_UNSCANNABLE
+
+
 def test_the_repository_threshold_is_100() -> None:
     """The repository's own configured value, read the way `main` reads it.
 
@@ -367,20 +434,32 @@ def test_the_repository_threshold_is_100() -> None:
     assert threshold_from_pyproject(REAL_PYPROJECT) == pytest.approx(100)
 
 
-def test_findings_are_ordered_by_file_then_line() -> None:
-    """Two runs report offenders in the same order.
+def test_findings_are_ordered_by_file_then_line(tmp_path: Path) -> None:
+    """Findings come back sorted, whatever order the files were handed over in.
 
-    Without a sort, the order is `rglob`'s, which is filesystem-dependent, so a
-    diff of two runs is unreadable and a rendered report jumps around between
-    otherwise identical runs.
+    Driven with an unsorted fixture rather than the repository, because the
+    repository is clean: `python_files` sorts its result, so a real-tree scan
+    hands `scan` files already ordered and `findings == []` makes the assertion
+    about ordering vacuous — it holds for a `scan` that never sorts at all. The
+    paths go straight to `scan`, past `python_files`, so the sort under test is
+    the one in `scan` and nothing else.
+
+    Mutation evidence: deleting `scan`'s `findings.sort(...)` leaves this red on
+    the deliberately shuffled input, where the earlier real-tree version stayed
+    green.
     """
-    repo_root = REPO_ROOT
-    first = find_undocumented(python_files(repo_root=repo_root), repo_root)
-    second = find_undocumented(python_files(repo_root=repo_root), repo_root)
-    keys = [(str(f.path), f.lineno) for f in first]
+    out_of_order = [
+        _write(tmp_path / "src" / "b_second.py", UNDOCUMENTED_FILE),
+        _write(tmp_path / "src" / "a_first.py", UNDOCUMENTED_FILE),
+        _write(tmp_path / "src" / "c_third.py", UNDOCUMENTED_FILE),
+    ]
 
-    assert first == second
-    assert keys == sorted(keys)
+    findings = find_undocumented(out_of_order, repo_root=tmp_path)
+    names = [str(finding.path) for finding in findings]
+
+    assert len(names) == 3
+    assert names == sorted(names), f"findings came back in {names}, not sorted"
+    assert names[0].endswith("a_first.py")
 
 
 def test_the_exit_codes_are_distinct() -> None:

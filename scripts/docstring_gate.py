@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import math
 import sys
 import tomllib
 from pathlib import Path
@@ -103,6 +104,52 @@ class Finding(NamedTuple):
     name: str
 
 
+def _checked_threshold(value: object, source: str) -> float:
+    """Coerce a configured threshold to a finite percentage, or refuse it.
+
+    Three refusals, and they are not pedantry. A nonnumeric value would escape
+    as an uncaught `ValueError` and exit 1 with a traceback, where every other
+    unreadable-config case exits 2 with a reason. A `nan` threshold is the one
+    that matters: `actual < nan` is always `False`, so a tree with half its
+    definitions undocumented would be reported **clean**. `inf` would fail a tree
+    that is complete, which is merely wrong rather than dangerous, but a gate
+    that cannot distinguish "wrong number" from "can't read the config" is the
+    shape `scripts/codacy_gate.py`'s docstring records from experience.
+
+    Args:
+        value: The raw value, from TOML or from the command line.
+        source: Where it came from, named in the refusal message.
+
+    Returns:
+        The threshold as a finite float.
+
+    Raises:
+        ScanFailed: If it is not a number, or not finite.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        message = (
+            f"{source} must be a number, got {type(value).__name__} ({value!r}); "
+            "a threshold the gate cannot read is not a threshold it can enforce"
+        )
+        raise ScanFailed(message)
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError) as exc:
+        message = (
+            f"{source} is not a number ({value!r}); a threshold the gate cannot "
+            "read is not a threshold it can enforce"
+        )
+        raise ScanFailed(message) from exc
+    if not math.isfinite(threshold):
+        message = (
+            f"{source} is {value!r}, which is not finite; "
+            f"{value!r} makes `actual < threshold` always false and the gate "
+            "would report a half-documented tree as clean"
+        )
+        raise ScanFailed(message)
+    return threshold
+
+
 def threshold_from_pyproject(path: Path = PYPROJECT_PATH) -> float:
     """Read the required docstring coverage from `[tool.docstrings]`.
 
@@ -111,13 +158,14 @@ def threshold_from_pyproject(path: Path = PYPROJECT_PATH) -> float:
             constant so a test can point it at a copy of the tree.
 
     Returns:
-        The `threshold` value as a percentage.
+        The threshold value as a percentage.
 
     Raises:
-        ScanFailed: If the file, section, or key is missing. Raised rather than
-            defaulted: a threshold this gate invented is one nobody configured, and
-            silently skipping the check is worse than not having it — which is the
-            same reasoning `scripts/coverage_gate.py` gives for the coverage floor.
+        ScanFailed: If the file, section, or key is missing, or the value is not
+            a finite number. Raised rather than defaulted: a threshold this gate
+            invented is one nobody configured, and silently skipping the check is
+            worse than not having it — which is the same reasoning
+            `scripts/coverage_gate.py` gives for the coverage floor.
     """
     try:
         config = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -125,7 +173,7 @@ def threshold_from_pyproject(path: Path = PYPROJECT_PATH) -> float:
     except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as exc:
         message = f"cannot read [tool.docstrings].threshold from {path}"
         raise ScanFailed(message) from exc
-    return float(value)
+    return _checked_threshold(value, f"[tool.docstrings].threshold in {path}")
 
 
 def python_files(
@@ -380,8 +428,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        # The override goes through the same `_checked_threshold` as the file.
+        # A `--threshold nan` would otherwise be the one way to pass a bad value
+        # past the validation the fix above added, and the CLI is the path an
+        # operator reaches for first when a local check is wrong.
         threshold = (
-            args.threshold
+            _checked_threshold(args.threshold, "--threshold")
             if args.threshold is not None
             else threshold_from_pyproject(args.root / "pyproject.toml")
         )
