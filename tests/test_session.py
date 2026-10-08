@@ -613,6 +613,47 @@ def test_an_https_request_is_refused_when_no_ca_bundle_is_configured() -> None:
         run_async(scenario())
 
 
+def test_an_https_redirect_is_refused_when_no_ca_bundle_is_configured() -> None:
+    """A hop that upgrades to HTTPS inherits the same trust rule as the first hop.
+
+    `allow_http=True` lets a plain-HTTP request start without a CA bundle, because
+    there is nothing to verify. The scheme check then only ever ran on the initial
+    URL: a 302 to an `https://` target was fetched with no bundle configured, and
+    because `__aenter__` omits `ssl=` when there is no context, aiohttp verified it
+    against *its own* default roots. That is the substitution §3 and this module's
+    property 4 forbid, reached without any caller misconfiguration — the session
+    simply followed a hop it should have refused.
+
+    Mutation evidence: deleting the `_check_https_has_ca_bundle(current)` call at
+    the top of the hop loop turns this red with `BackendUnreachable` — the TLS
+    handshake's own failure against the self-signed certificate, which is the
+    signature of the fallback this test exists to rule out.
+    """
+    tls_server = LocalTlsServer()
+    tls_server.route("/x", lambda _path: text("secret"))
+    tls_server.start()
+    try:
+        plain = LocalHttpServer()
+        plain.route("/hop", lambda _p: redirect(tls_server.url("/x"), status=302))
+        plain.start()
+        try:
+
+            async def scenario() -> None:
+                async with Session(
+                    allowlist=frozenset({TRUSTED}),
+                    allow_http=True,
+                    ca_bundle=None,
+                ) as session:
+                    await session.get(plain.url("/hop"))
+
+            with pytest.raises(MissingCABundleError, match="CA bundle"):
+                run_async(scenario())
+        finally:
+            plain.stop()
+    finally:
+        tls_server.stop()
+
+
 def test_an_unloadable_ca_bundle_is_a_config_error_not_a_crash() -> None:
     """A missing or non-PEM bundle is a config fault, not an unhandled error.
 

@@ -323,6 +323,7 @@ class Session:
         hops = 0
         while True:
             try:
+                self._check_https_has_ca_bundle(current)
                 merged = self._headers_for(current, first_origin, headers)
                 async with self._raw().get(
                     current, headers=merged, allow_redirects=False
@@ -416,6 +417,26 @@ class Session:
             raise RuntimeError(message)
         return session
 
+    def _check_https_has_ca_bundle(self, url: str) -> None:
+        """Check that HTTPS URLs have a CA bundle configured.
+
+        Args:
+            url: The URL to check.
+
+        Raises:
+            MissingCABundleError: If an `https://` URL arrives with no CA bundle
+                configured.
+        """
+        scheme = urlsplit(url).scheme.lower()
+        if scheme == Scheme.HTTPS and self._ssl_context is None:
+            message = (
+                f"Cannot start an https request to {url}: no CA bundle is "
+                "configured for this session, and a default trust source is "
+                "not constructed. Pass ca_bundle to Session, or --ca-bundle "
+                "to capture-fixtures."
+            )
+            raise MissingCABundleError(message)
+
     def _check_initial_scheme(self, url: str) -> None:
         """Refuse a URL whose scheme is not permitted.
 
@@ -428,19 +449,15 @@ class Session:
 
         Raises:
             PermissionError: If the scheme is not one this session permits.
-            MissingCABundleError: If an `https://` URL arrives with no CA bundle
-                configured, instead of a default trust source being substituted.
+
+        A `MissingCABundleError` also escapes, from `_check_https_has_ca_bundle`,
+        so the CA-bundle rule is stated once and enforced on every hop rather than
+        only on the first URL. Naming it in prose rather than under `Raises:` is
+        also what `DOC502` wants: it is raised by the callee, not by this method.
         """
         scheme = urlsplit(url).scheme.lower()
         if scheme == Scheme.HTTPS or (scheme == Scheme.HTTP and self._allow_http):
-            if scheme == Scheme.HTTPS and self._ssl_context is None:
-                message = (
-                    f"Cannot start an https request to {url}: no CA bundle is "
-                    "configured for this session, and a default trust source is "
-                    "not constructed. Pass ca_bundle to Session, or --ca-bundle "
-                    "to capture-fixtures."
-                )
-                raise MissingCABundleError(message)
+            self._check_https_has_ca_bundle(url)
             return
         permitted = "http and https" if self._allow_http else "https only"
         shown = scheme or "(none)"
