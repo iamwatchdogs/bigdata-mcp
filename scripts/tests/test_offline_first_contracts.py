@@ -48,6 +48,15 @@ RESERVED_TLDS = frozenset({".invalid", ".test", ".example", ".localhost"})
 
 @cache
 def _spec_text() -> str:
+    """Return all of `SPEC.md`, read once per process.
+
+    Cached so the two section helpers below slice a single read. Neither is a test,
+    and an assertion about a section is only worth as much as the bytes it saw — so
+    the two sentinels must not be able to straddle a rewrite in progress.
+
+    Returns:
+        The whole specification, as text.
+    """
     return SPEC_PATH.read_text(encoding="utf-8")
 
 
@@ -69,6 +78,16 @@ def _environment_section() -> str:
 
 @cache
 def _testing_section() -> str:
+    """Return §17.2 only, for the assertions that name where a rule is written.
+
+    Scoped to the one section because the two sentinels have to be *separately*
+    asserted: `§3` states the constraint and `§17.2` states the rule it produces,
+    and a helper returning the whole document would let one satisfy the other and
+    leave the pair half-recorded without anything going red.
+
+    Returns:
+        The text of the `## 17.` section, up to the next `## `.
+    """
     lines = _spec_text().splitlines()
     start = next(i for i, line in enumerate(lines) if line.startswith("## 17. "))
     end = next(
@@ -156,6 +175,24 @@ def test_no_test_targets_a_non_local_host(path: Path) -> None:
 
 
 def _is_local_or_reserved(url: str) -> bool:
+    """Report whether a URL's host is loopback or an RFC 2606 reserved name.
+
+    The authority is split by hand rather than handed to `urlsplit`, because the
+    caller has already matched the span with a regex and the only question left is
+    which token the host is. The bracketed form is unwrapped before the port is
+    dropped: without that branch, splitting at the first colon would leave a bare
+    `[` for every IPv6 literal, and a hermetic test could not name the loopback
+    address at all.
+
+    Args:
+        url: A URL beginning with a scheme, as the caller's pattern matched it.
+
+    Returns:
+        True if the host is one of `LOCAL_HOST_TOKENS` or ends with one of
+        `RESERVED_TLDS`. The suffix test is what admits the reserved-name hosts the
+        suite already uses — `hdfs-node-1.data.test` is not in the loopback set,
+        but a `.test` host can never resolve to anything outside the machine.
+    """
     authority = url.split("://", 1)[1].split("/", 1)[0]
     host = authority.rsplit("@", 1)[-1]
     if host.startswith("[") and "]" in host:

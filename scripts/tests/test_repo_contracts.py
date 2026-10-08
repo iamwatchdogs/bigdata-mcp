@@ -119,10 +119,41 @@ def _table_cells(line: str) -> list[str]:
 
 
 def _is_table_row(line: str) -> bool:
+    """Report whether a line counts as a row of the table currently being scanned.
+
+    Indentation is tolerated because ``SPEC.md`` is hand-authored and a table
+    nested under a list item is still a table. More importantly, this predicate is
+    what *ends* the scan in ``_traceability_table_cells`` — the first line that is
+    not a row is taken to mean the table is over — so a stricter test here would
+    truncate the table silently and report every row below the cutoff as absent,
+    which reads like a content regression rather than a parsing one.
+
+    Args:
+        line: One line of the document.
+
+    Returns:
+        True if the line, once its leading whitespace is removed, opens with a
+        pipe.
+    """
     return line.lstrip().startswith("|")
 
 
 def _is_separator_row(line: str) -> bool:
+    """Report whether a row is markdown's ``|---|---:|`` divider rather than data.
+
+    Matched cell by cell because the divider is the only row in a markdown table
+    that carries no content, and it has to be skipped: it would otherwise be the
+    one row reported as a traceability entry that does not begin with a section
+    number. Requiring *every* cell to be dashes is what keeps a data row safe —
+    a cell of prose never matches, however it is punctuated.
+
+    Args:
+        line: One line of the table.
+
+    Returns:
+        True if each cell is dashes with at most one colon, which is the whole of
+        what ``_SEPARATOR_CELL`` accepts.
+    """
     return all(_SEPARATOR_CELL.match(cell) for cell in _table_cells(line))
 
 

@@ -254,7 +254,28 @@ def test_a_coverage_failure_is_reported_as_unreadable(
     """
 
     def fail(*_args: object, **_kwargs: object) -> object:
+        """Stand in for `coverage json` exiting non-zero with nothing on stdout.
+
+        Variadic because the gate's own argv is fixed and irrelevant here; what
+        the gate reads back is the whole contract.
+
+        Args:
+            *_args: The argv the gate would have spawned, unused.
+            **_kwargs: Anything else the gate passes, unused.
+
+        Returns:
+            A stand-in for `CompletedProcess` carrying `returncode` 1 and the
+            message coverage.py prints when the last run left no data.
+        """
+
         class Result:
+            """Carry the two fields the gate reads, and nothing else.
+
+            Built per call so the two subprocess-shaped tests in this module differ
+            only in `returncode` and `stdout` — the pair is one contract with one
+            field changed, not two contracts.
+            """
+
             returncode = 1
             stdout = ""
             stderr = "no data to report"
@@ -274,7 +295,27 @@ def test_a_stdout_that_is_not_json_is_reported_as_unreadable(
     report."""
 
     def junk(*_args: object, **_kwargs: object) -> object:
+        """Stand in for `coverage json` exiting *cleanly* with unparseable stdout.
+
+        Args:
+            *_args: The argv the gate would have spawned, unused.
+            **_kwargs: Anything else the gate passes, unused.
+
+        Returns:
+            A stand-in for `CompletedProcess` with `returncode` 0 and stdout that
+            is not JSON. The exit code is the point: coverage.py's own `analyze`
+            always exits 0 on a clean tree, so this is the shape a gate meets in
+            production, and a gate that only checks the code would report it clean.
+        """
+
         class Result:
+            """Carry a zero exit code beside output the gate cannot parse.
+
+            Same two fields as the sibling above with different values, which is
+            how these two tests stay comparable: the only difference a reader
+            should have to notice is the one being proved.
+            """
+
             returncode = 0
             stdout = "this is not json"
             stderr = ""
