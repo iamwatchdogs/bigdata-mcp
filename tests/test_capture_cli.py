@@ -134,6 +134,7 @@ def test_ssh_cli_subcommand_prints_the_recipe_and_exits_3(
 
 
 def test_capture_refuses_to_overwrite_without_force(tmp_path: Path) -> None:
+    """An existing fixture is evidence; the CLI refuses to clobber it silently."""
     out = tmp_path / "already-there.json"
     out.write_text("{}\n", encoding="utf-8")
     code = _wrap_ssh_argv(tmp_path, out=out, force=False)
@@ -142,6 +143,7 @@ def test_capture_refuses_to_overwrite_without_force(tmp_path: Path) -> None:
 
 
 def test_capture_overwrites_with_force(tmp_path: Path) -> None:
+    """`--force` is the operator's explicit consent to replace the evidence."""
     out = tmp_path / "already-there.json"
     out.write_text("{}\n", encoding="utf-8")
     code = _wrap_ssh_argv(tmp_path, out=out, force=True)
@@ -155,6 +157,7 @@ def test_capture_overwrites_with_force(tmp_path: Path) -> None:
 def test_a_capture_records_the_fields_that_prove_it_was_observed(
     tmp_path: Path,
 ) -> None:
+    """Observedness is provable from the fixture: source, time, provenance."""
     out = tmp_path / "captured.json"
     assert _wrap_ssh_argv(tmp_path, out=out) == 0
     fixture = parse_fixture(json.loads(out.read_text(encoding="utf-8")))
@@ -165,6 +168,7 @@ def test_a_capture_records_the_fields_that_prove_it_was_observed(
 
 
 def test_wrap_ssh_rejects_a_shell_string_argv(tmp_path: Path) -> None:
+    """A raw shell string is not an argv; wrapping one would record the wrong thing."""
     code = capture.main([
         "wrap-ssh",
         "--argv",
@@ -184,16 +188,19 @@ def test_wrap_ssh_rejects_a_shell_string_argv(tmp_path: Path) -> None:
 
 
 def test_wrap_ssh_rejects_a_non_array_argv() -> None:
+    """A JSON object is not an argv list, and is refused naming the rule."""
     with pytest.raises(ConfigError, match="non-empty JSON array"):
         capture.argv_list('{"a": 1}')
 
 
 def test_wrap_ssh_rejects_a_non_string_inside_the_argv() -> None:
+    """An argv entry that is not a string is refused, not coerced."""
     with pytest.raises(ConfigError, match="only strings"):
         capture.argv_list('["hdfs", 7]')
 
 
 def test_a_capture_reports_an_unreadable_captured_file(tmp_path: Path) -> None:
+    """A `--stdout` file that cannot be read is a refusal, not an empty fixture."""
     code = capture.main([
         "wrap-ssh",
         "--argv",
@@ -507,6 +514,7 @@ def test_a_written_fixture_ends_with_exactly_one_newline(tmp_path: Path) -> None
 def test_a_fixture_written_by_the_cli_reloads_through_the_loader(
     tmp_path: Path,
 ) -> None:
+    """The on-disk form and the loader agree: the writer's output is loadable."""
     out = tmp_path / "f.json"
     assert _wrap_ssh_argv(tmp_path, out=out) == 0
     assert isinstance(load_fixture(out), Fixture)
@@ -538,6 +546,7 @@ def test_params_must_be_a_json_object(tmp_path: Path) -> None:
 
 
 def test_params_that_are_not_json_at_all_are_refused(tmp_path: Path) -> None:
+    """A malformed `--params` is refused before any request is issued."""
     code = capture.main([
         "https_api",
         "--url",

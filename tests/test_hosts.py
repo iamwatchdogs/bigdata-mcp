@@ -60,7 +60,9 @@ def test_userinfo_is_not_mistaken_for_the_host() -> None:
     flag — the values are placeholders, not credentials.
     """
     userinfo = ":".join(("user", "pw"))
-    assert host_of(f"https://{userinfo}@edge-lm.example:8088/x") == ("edge-lm.example")
+    assert host_of("https://" + userinfo + "@edge-lm.example:8088/x") == (
+        "edge-lm.example"
+    )
 
 
 def test_an_ipv6_literal_keeps_its_colons() -> None:
