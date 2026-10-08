@@ -81,6 +81,13 @@ def _wait_for(marker: Path, timeout_s: float = _MARKER_WAIT_S) -> bool:
 
 
 def test_a_deadline_never_reports_negative_remaining() -> None:
+    """Overrunning the budget by a factor of six still reports zero, not minus 25.
+
+    The clock is advanced past the budget on purpose. A real deadline is passed to
+    `asyncio.timeout`, which rejects a negative duration outright — so the clamp
+    here is what turns "this ran long" into `DeadlineExceeded` instead of a
+    `ValueError` from inside asyncio naming the wrong thing entirely.
+    """
     clock = FakeClock(100.0)
     fresh = Deadline.starting_now(5.0, clock=clock.now)
     clock.advance(30.0)
@@ -89,6 +96,13 @@ def test_a_deadline_never_reports_negative_remaining() -> None:
 
 
 def test_a_sub_budget_is_clamped_to_what_is_left() -> None:
+    """A step asking for more than the deadline has left is given the remainder.
+
+    Without the clamp the *inner* timeout is what fires, and the caller is told the
+    sub-operation exceeded its budget rather than that the whole call ran out of
+    time — which points a reader at the wrong layer when the real cause is simply
+    that the request took longer than the client's 60 s.
+    """
     clock = FakeClock(100.0)
     deadline = Deadline.starting_now(5.0, clock=clock.now)
     clock.advance(3.0)
@@ -96,6 +110,12 @@ def test_a_sub_budget_is_clamped_to_what_is_left() -> None:
 
 
 def test_a_sub_budget_smaller_than_the_remainder_is_untouched() -> None:
+    """The clamp is a `min`, not a replacement — so it cannot starve every step.
+
+    The pair with the case above: a clamp written as `return self.remaining_s`
+    passes that test and hands every sub-operation the same remainder, turning a
+    five-step call into one step's budget five times over.
+    """
     clock = FakeClock(100.0)
     deadline = Deadline.starting_now(20.0, clock=clock.now)
     clock.advance(1.0)
@@ -108,6 +128,13 @@ async def test_a_call_with_no_budget_left_never_reaches_the_executor() -> None:
     engine = PoliteEngine(fake, budget_s=0.0)
 
     async def scenario() -> None:
+        """Await the run inside the scope that turns `DeadlineExceeded` into a pass.
+
+        A closure only so that the `await` and the `pytest.raises` that catches it
+        share one scope. `fake.calls` is asserted out here instead, where it reads
+        as its own claim: the refusal is worth nothing if it arrived after the
+        work had already been handed to the executor.
+        """
         with pytest.raises(DeadlineExceeded, match="budget"):
             await engine.run("k", COUNT_ARGV)
 
@@ -116,6 +143,13 @@ async def test_a_call_with_no_budget_left_never_reaches_the_executor() -> None:
 
 
 def test_the_deadline_message_names_the_operation_and_the_client_timeout() -> None:
+    """The refusal has to say which call ran out, not merely that something did.
+
+    `operation` is the label the caller supplies, so an agent holding several
+    in-flight calls cannot act on "deadline exceeded" alone. The 60 s clause is
+    §3's whole argument restated at the point of failure: the refusal is ours
+    firing ahead of the transport's, not the transport giving up.
+    """
     error = DeadlineExceeded("hdfs dfs -count", 20.0)
     message = str(error)
     assert "hdfs dfs -count" in message
@@ -135,6 +169,13 @@ async def test_a_real_timeout_raises_rather_than_returning_partial_output() -> N
     deadline = Deadline.starting_now(0.01)
 
     async def scenario() -> None:
+        """Await the sleeping child inside the scope that requires the refusal.
+
+        The child would outlive the test but for the deadline; nothing here can
+        assert that, so the closure carries only the one thing this test is about
+        — that the timeout surfaces as `DeadlineExceeded` rather than as output
+        that stopped early.
+        """
         with pytest.raises(DeadlineExceeded):
             await executor.exec(
                 [sys.executable, "-c", "import time; time.sleep(30)"], deadline
@@ -176,6 +217,13 @@ async def test_a_timed_out_child_is_dead_and_not_merely_cancelled(
     )
 
     async def scenario() -> None:
+        """Run the writing child under a budget it cannot outlast.
+
+        A closure so the timeout is caught and the marker polling below happens
+        only after the executor has said the child is finished — the ordering is
+        what turns this into a check on the child being dead rather than a check
+        on the exception.
+        """
         with pytest.raises(DeadlineExceeded):
             await executor.exec([sys.executable, "-c", program], deadline)
 
@@ -227,6 +275,12 @@ async def test_a_child_that_declines_sigterm_is_still_killed(tmp_path: Path) -> 
     )
 
     async def scenario() -> None:
+        """Run the SIGTERM-declining child to its death.
+
+        Nothing to assert inside: the escalation to `kill` is only observable after
+        the refusal has escaped and the child has had time to have ignored a polite
+        request, which is what the marker reads below.
+        """
         with pytest.raises(DeadlineExceeded):
             await executor.exec([sys.executable, "-c", program], deadline)
 
@@ -247,6 +301,13 @@ async def test_a_timeout_before_the_spawn_is_still_a_deadline() -> None:
     deadline = Deadline.starting_now(0.000001)
 
     async def scenario() -> None:
+        """Await a call whose budget is gone before `create_subprocess_exec` runs.
+
+        The child here does nothing and would have finished instantly, so the only
+        thing under test is that the deadline is consulted ahead of the spawn. A
+        check placed after the spawn would still raise on a fast machine and go
+        green for the wrong reason on a slow one.
+        """
         with pytest.raises(DeadlineExceeded):
             await executor.exec([sys.executable, "-c", "pass"], deadline)
 
@@ -254,10 +315,22 @@ async def test_a_timeout_before_the_spawn_is_still_a_deadline() -> None:
 
 
 async def test_a_real_command_returns_its_output() -> None:
+    """The happy path through the one executor in this module that spawns.
+
+    Everything else here proves a refusal, so nothing else would notice a
+    `SubprocessExecutor` that always raised. The trailing newline is stripped by
+    the assertion rather than by the executor, which keeps `stdout` verbatim for a
+    parser downstream that may care about it.
+    """
     executor = SubprocessExecutor()
     deadline = Deadline.starting_now(20.0)
 
     async def scenario() -> ExecResult:
+        """Make the one call that has to succeed for this test to mean anything.
+
+        Returns:
+            The `ExecResult` for a command that printed one line and exited zero.
+        """
         return await executor.exec([sys.executable, "-c", "print('hello')"], deadline)
 
     result = await scenario()
@@ -271,6 +344,13 @@ async def test_a_command_that_cannot_start_is_a_reportable_fact_not_a_crash() ->
     deadline = Deadline.starting_now(20.0)
 
     async def scenario() -> ExecResult:
+        """Ask for a binary that is not on this machine's PATH.
+
+        Returns:
+            The `ExecResult` for the missing binary. `-1` here is the *absence* of
+            a process status, and it is the caller's job to say so rather than to
+            guess from the number.
+        """
         return await executor.exec(["bigdata-mcp-no-such-binary-xyz"], deadline)
 
     result = await scenario()
@@ -287,12 +367,27 @@ def test_a_spawn_failure_is_not_a_success() -> None:
 
 
 async def test_a_command_that_fails_reports_its_exit_code() -> None:
+    """A backend's own exit code is passed through, not normalised to 1.
+
+    §11.3 records the measured HDFS behaviour this has to accommodate: data-plane
+    errors all return 1 and are indistinguishable from each other, while 255 means
+    a malformed command line or an unresolvable NameNode. So the executor must not
+    invent a code of its own — a `3` from a tool is that tool's signal, and
+    replacing it with `1` would collapse a class of failure into another. Both
+    streams are asserted too, because §11.3's advice is to read stderr rather than
+    branch on the code, and a capturing tool has to be able to carry it.
+    """
     executor = SubprocessExecutor()
     deadline = Deadline.starting_now(20.0)
 
     program = "import sys\nprint('out')\nprint('err', file=sys.stderr)\nsys.exit(3)\n"
 
     async def scenario() -> ExecResult:
+        """Run a child that writes to both streams and then exits 3.
+
+        Returns:
+            The `ExecResult`, with `exit_code` 3 and both streams populated.
+        """
         return await executor.exec([sys.executable, "-c", program], deadline)
 
     result = await scenario()

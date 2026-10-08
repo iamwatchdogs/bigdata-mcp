@@ -108,6 +108,24 @@ def files(mapping: dict[str, str]):
     """
 
     def read_text(path: str) -> str:
+        """Read from the mapping, raising the way a real missing file does.
+
+        An unmapped path raises rather than answering `""`, because empty text
+        takes the *parse* exit while a raise takes the read exit — and both would
+        land on the same `None`. Answering `""` would quietly stop exercising the
+        reader's `OSError` handler and reach the identical assertion by a different
+        route, leaving that clause unmeasured.
+
+        Args:
+            path: The path `detect` asked for.
+
+        Returns:
+            The contents, for a path the mapping has.
+
+        Raises:
+            FileNotFoundError: For any other path, exactly as a real reader
+                raises for a file that is not there.
+        """
         if path not in mapping:
             message = f"no such file: {path}"
             raise FileNotFoundError(message)
@@ -128,6 +146,22 @@ def commands(mapping: dict[str, str]):
     """
 
     def read_command(argv: list[str]) -> str:
+        """Answer by the last word of `argv`, and `""` for a query not scripted.
+
+        Keying on the final argument lets a fixture be written as the query name
+        alone — `sysctl -n vm.loadavg` reads the `vm.loadavg` entry — because the
+        flags are not what any of these tests are about.
+
+        An unscripted query answers `""` rather than raising, which is the exit a
+        command that ran and printed nothing takes. Raising would take the `OSError`
+        branch instead, and only one of the two would ever be measured.
+
+        Args:
+            argv: The command the module built.
+
+        Returns:
+            The scripted output, or `""` when the query is not in the mapping.
+        """
         return mapping.get(argv[-1], "")
 
     return read_command
@@ -145,6 +179,20 @@ def jvms(java: int = 0, hadoop: int = 0):
     """
 
     def count(name: str) -> int:
+        """Answer for the two process names the module asks about.
+
+        `detect` calls the counter once per name and adds the two results, so a
+        total has to be supplied across both — there is no "all java" notion to
+        answer with. Any other name is `0`, which is the honest "I looked at
+        nothing" the real counter reports when it cannot run, and which is safe
+        here precisely because a count is not a cap driver.
+
+        Args:
+            name: The process name to count.
+
+        Returns:
+            The fixture's count for that name, or 0.
+        """
         return {"java": java, "hadoop": hadoop}.get(name, 0)
 
     return count
@@ -169,11 +217,30 @@ def test_an_unsupported_platform_reports_none_never_zero() -> None:
 
 
 def test_an_unsupported_reading_is_not_usable_as_a_cap_driver() -> None:
+    """The property the engine actually consults, asserted on its own.
+
+    The property is exactly "a load figure exists", so a fabricated `0.0` — the
+    spec's "one to watch" — makes it true for a host nothing was measured on, and
+    the engine then proceeds *more* concurrent rather than less. The reading's
+    individual fields are covered by the test above; what is at stake here is the
+    derived flag, because that is the value a caller branches on.
+    """
     reading = detect(system="plan9")
     assert reading.is_usable_as_a_cap_driver is False
 
 
 def test_an_unsupported_platform_is_not_marked_supported() -> None:
+    """The `Support` member, which is a separate decision from the readings.
+
+    `detect` branches on `linux` and on `darwin`; `aix` matches neither and falls
+    through to the final return, so this covers the arm that *decides* the member
+    rather than a branch that happens to set it. Marking a platform with no source
+    supported (D3) would leave every consumer treating `None` readings as a
+    transient edge case rather than as this platform's permanent state.
+
+    The assertion is `is not SUPPORTED` rather than an exact set, because the enum
+    test below is what pins the set; between the two, both halves are held.
+    """
     reading = detect(system="aix")
     assert reading.support is not Support.SUPPORTED
 
@@ -196,6 +263,14 @@ def test_an_unparseable_loadavg_is_unsupported_not_zero() -> None:
 
 
 def test_a_missing_loadavg_file_is_unsupported_not_zero() -> None:
+    """An unreadable file and an unreadable *value* are two different exits.
+
+    Here the reader raises, so the file read yields nothing before anything is
+    parsed; the test above covers a line that arrives and fails to parse. Both
+    must leave no load figure, because a synthetic zero from either one would
+    remove the cap driver — and this pair is what keeps the reader's failure
+    handler from being covered only by the parse path.
+    """
     reading = detect(
         system="linux",
         read_text=files({}),
@@ -229,6 +304,18 @@ def test_detection_executes_nothing_without_an_injected_runner() -> None:
 
 
 def test_linux_divides_loadavg_by_nproc() -> None:
+    """The whole Linux contract in one reading: 1.50 over 4 cores is 0.375.
+
+    The first field of `/proc/loadavg` is a one-minute average for the *whole*
+    host, so the only figure that means the same thing on a 4-core laptop and a
+    64-core estate is that average divided by `nproc` — and the divisor is carried
+    through as `cores` because the engine derives its cap from it. The fixture's
+    second and third fields are deliberately different numbers, so an
+    implementation that read the wrong one could not land on 0.375 by accident.
+
+    `hadoop_jvms` sums the two process names, and is reported even here where the
+    rest of the footprint is a stub: it is our own, not the platform's.
+    """
     reading = detect(
         system="linux",
         read_text=files({"/proc/loadavg": LOADAVG}),
@@ -243,6 +330,15 @@ def test_linux_divides_loadavg_by_nproc() -> None:
 
 
 def test_linux_reads_mem_available_as_available_memory() -> None:
+    """`MemAvailable`, and not either of the two lines above it in the same file.
+
+    `MemFree` counts pages not in use, which excludes reclaimable page cache, so a
+    perfectly healthy host can report very little of it while having memory to
+    spare — the kernel added `MemAvailable` precisely to answer the question the
+    cap driver asks. `MemTotal` and `MemFree` are both planted in the fixture so
+    that reading either one is visible as a different number, and the figure is
+    divided by 1024 because the kernel reports kB.
+    """
     reading = detect(
         system="linux",
         read_text=files({"/proc/loadavg": LOADAVG, "/proc/meminfo": MEMINFO}),
@@ -252,6 +348,14 @@ def test_linux_reads_mem_available_as_available_memory() -> None:
 
 
 def test_linux_without_meminfo_reports_no_memory_rather_than_zero() -> None:
+    """Losing the memory reading must not lose the host.
+
+    The file is absent, so the memory probe returns at its "nothing was read"
+    guard. The second assertion is the one carrying the weight: the cap driver
+    reads the load figure alone, so a reading with no memory at all is still
+    usable. Treating "no memory" as disqualifying would silently stop the cap
+    applying on hosts whose load average is measured perfectly well.
+    """
     reading = detect(
         system="linux",
         read_text=files({"/proc/loadavg": LOADAVG}),
@@ -294,6 +398,20 @@ def test_macos_does_not_read_proc() -> None:
     touched: list[str] = []
 
     def read_text(path: str) -> str:
+        """Record every path asked for, then refuse to produce text for it.
+
+        The recording is the assertion; the refusal only guarantees that a read
+        cannot succeed if one is attempted. On macOS the two outcomes are
+        otherwise indistinguishable, because `/proc` really is absent — so a probe
+        that tried the Linux path and one that never looked would look identical to
+        anything but the list of paths touched.
+
+        Args:
+            path: The path the probe asked for.
+
+        Raises:
+            FileNotFoundError: Always, after recording the path.
+        """
         touched.append(path)
         message = f"macOS has no {path}"
         raise FileNotFoundError(message)
@@ -343,6 +461,23 @@ def test_macos_never_asks_for_a_memory_reading_at_all() -> None:
     asked: list[str] = []
 
     def runner(argv: Sequence[str]) -> str:
+        """Record every argv it is handed, and answer it — `hw.memsize` included.
+
+        The mapping deliberately holds an answer for the key the module must never
+        ask about. Without it this test would also pass for a probe that asked and
+        got nothing back; with it, an answer it could have used is shown going
+        unused, which is the stronger claim the source makes about that key being
+        wrong rather than merely unqueried.
+
+        Recording whole argv lines rather than just the query name is what lets
+        the assertion look for the key in any argument.
+
+        Args:
+            argv: The command the probe built.
+
+        Returns:
+            The scripted output for the final argument, or `""`.
+        """
         asked.extend(argv)
         return {
             "vm.loadavg": MACOS_LOADAVG,
@@ -362,6 +497,14 @@ def test_macos_never_asks_for_a_memory_reading_at_all() -> None:
 
 
 def test_a_supported_reading_is_usable_as_a_cap_driver() -> None:
+    """The other arm of the property: it means *measured*, not merely non-`None`.
+
+    This reading has no memory figure and no JVM count and is still usable, which
+    is what pins the property to the load field alone. Read against the unsupported
+    case above, the two halves are that the flag is exactly "a load figure exists"
+    — no other reading of it survives both, in particular not one that also
+    demanded the optional readings.
+    """
     reading = detect(
         system="linux",
         read_text=files({"/proc/loadavg": LOADAVG}),
@@ -434,6 +577,18 @@ def test_the_support_enum_is_closed_to_two_members() -> None:
 
 
 def test_the_source_enum_names_both_platforms() -> None:
+    """The values are text a reader can act on, so the set is pinned exactly.
+
+    `/proc/loadavg` is a path to go and check and `sysctl vm.loadavg` is a command
+    to re-run by hand; `doctor` prints whichever one produced a reading, so these
+    are operator-facing strings rather than internal identifiers and renaming one
+    changes what the report says. Pinning the set is also what stops a third
+    platform branch appearing in `detect` with no member to name it, which would
+    leave a reading whose origin cannot be reported at all.
+
+    `none` belongs in the set for the same reason: "not measurable here" has to be
+    nameable, or a reading with no source says nothing about why it is empty.
+    """
     assert {member.value for member in Source} == {
         "/proc/loadavg",
         "sysctl vm.loadavg",
@@ -515,6 +670,18 @@ def test_a_file_that_is_not_text_is_no_reading_at_all() -> None:
     decoder_error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, message)
 
     def not_text(_path: str) -> str:
+        """Raise the captured decode error, whatever it is asked for.
+
+        `UnicodeDecodeError` descends from `ValueError`, not from `OSError`, so it
+        cannot be caught by the reader's first clause: it reaches the second one.
+        A fixture raising `OSError` instead would leave that clause unmeasured
+        while the test stayed green, which is the whole reason the file that exists
+        but is not text is a separate case. The path is ignored because nothing
+        about it changes the refusal.
+
+        Args:
+            _path: The path, unread.
+        """
         raise decoder_error
 
     reading = detect(system="linux", read_text=not_text)

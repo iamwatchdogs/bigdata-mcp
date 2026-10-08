@@ -81,12 +81,44 @@ class _FakeClient:
     """An `McpConnect` result that answers with one text block."""
 
     async def __aenter__(self) -> Self:
+        """Enter the `async with` the capture wraps around `call_tool`.
+
+        Returns:
+            This client. The real `McpConnect` result is itself a context manager
+            that owns the stdio connection, so the fake has to match that shape
+            rather than being a bare object the capture would need a second path
+            for.
+        """
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
-        return None
+        """Close the context the capture opened.
+
+        A no-op: there is no stdio connection to tear down in-process, so this
+        exists only to match the real `McpConnect` result's shape and let the
+        capture's `async with` work against either. Ruff's `RET501` is what keeps
+        the body empty — an explicit `return None` here is a no-op statement, and
+        adding one to make room for this docstring is the trade ruff is pointing
+        at.
+
+        Args:
+            *_exc: The in-flight exception's type, value and traceback. Swallowed
+                deliberately: the fake is standing in for a connection, not for
+                the capture's error handling.
+        """
 
     async def call_tool(self, _tool: str, _arguments: dict[str, Any]) -> Any:
+        """Answer any relayed call with one text block and no error.
+
+        Underscore-prefixed because the value is irrelevant: the fixture this
+        produces is the same whatever the operator asked for, and pinning the
+        arguments here would make this look like a test of the request.
+
+        Returns:
+            A stand-in for `CallToolResult` with `structured_content` `None` and
+            `is_error` `False`, built by `type()` so it needs no SDK import that
+            the SDK's own version might rename.
+        """
         return type(
             "R",
             (),
@@ -120,6 +152,20 @@ def _registry(*, fails: bool = False) -> MCPServer:
     server = MCPServer(name="registry")
 
     def schema_get(name: str) -> str:
+        """Echo the argument back as JSON, so the fixture carries a known answer.
+
+        Args:
+            name: Whatever `{"name": ...}` the argv supplied.
+
+        Returns:
+            `{"schema": "<name>"}`, so the assertion downstream can name the exact
+            string rather than matching for a substring of it.
+
+        Raises:
+            RuntimeError: When the registry was built with `fails=True`. The SDK
+                turns this into an `isError` result rather than propagating it,
+                which is what the failure-capture test needs a tool to produce.
+        """
         if fails:
             message = "no such schema"
             raise RuntimeError(message)
@@ -141,6 +187,16 @@ def _mixed_content_registry() -> MCPServer:
     server = MCPServer(name="registry")
 
     def mixed(name: str) -> list[Any]:
+        """Answer with two blocks of different types from one tool.
+
+        Args:
+            name: Ignored, because the point is the block *types* and a tool that
+                ignored its argument would still be a legitimate tool.
+
+        Returns:
+            A text block and a real image block, so the capture has to join the
+            first and count the second.
+        """
         del name  # the tool takes an argument because every tool in this module does
         # 8 bytes of a real PNG signature so the SDK accepts it as image data
         # rather than rejecting the block and turning this into a test of nothing.
@@ -165,6 +221,16 @@ def _connector(server: MCPServer) -> Callable[[Sequence[str]], Client]:
     """
 
     def connect(_argv: Sequence[str]) -> Client:
+        """Build a client bound to `server`, discarding the argv it is handed.
+
+        Args:
+            _argv: The shell-split server command. Discarded because the server is
+                already in this process — but the parameter stays, because its
+                absence would make this satisfy `McpConnect` for the wrong reason.
+
+        Returns:
+            A client over the in-process server.
+        """
         return Client(server)
 
     return connect
@@ -201,6 +267,14 @@ def _mcp_argv(
 
 
 def test_an_mcp_capture_records_the_answer_the_tool_gave(tmp_path: Path) -> None:
+    """The tool's answer lands in `stdout`, and nothing else does.
+
+    §6.4's stdout-hygiene rule is what makes this field trustworthy: stdout is the
+    JSON-RPC channel and anything else written there corrupts a live session, so
+    the status prefix and the serialised `structured_content` both belong in
+    `stderr`. Putting the tool's text anywhere else would leave a corpus that
+    cannot be fed back into a test without stripping it first.
+    """
     out = tmp_path / "schema.json"
 
     code = capture.main(_mcp_argv(out), connect=_connector(_registry()))
@@ -259,6 +333,13 @@ def test_structured_content_is_kept_because_it_may_be_the_whole_answer(
 
 
 def test_an_mcp_capture_never_overwrites_without_force(tmp_path: Path) -> None:
+    """A relay that answers differently the second time cannot silently replace.
+
+    An MCP server behind a deploy can change its schema between two captures, and a
+    corpus that keeps only the newest answer has lost the record that it changed.
+    The byte-for-byte comparison is the point: returning 4 while still writing
+    would satisfy the exit-code assertion alone.
+    """
     out = tmp_path / "schema.json"
     capture.main(_mcp_argv(out), connect=_connector(_registry()))
     before = out.read_text(encoding="utf-8")
@@ -270,6 +351,13 @@ def test_an_mcp_capture_never_overwrites_without_force(tmp_path: Path) -> None:
 
 
 def test_mcp_arguments_that_are_not_a_json_object_are_refused(tmp_path: Path) -> None:
+    """`--arguments` is parsed before the call, not handed to the server to reject.
+
+    A JSON array is well-formed text, so an operator's typo gets as far as the
+    fixture unless something refuses it here. The absence of the output file is the
+    second half: a refusal that still wrote a fixture would leave a half-answer on
+    disk that `load_fixture` would happily accept.
+    """
     out = tmp_path / "schema.json"
 
     code = capture.main(
@@ -284,6 +372,15 @@ def test_mcp_arguments_that_are_not_a_json_object_are_refused(tmp_path: Path) ->
 def test_an_empty_mcp_command_is_refused_rather_than_spawning_nothing(
     tmp_path: Path,
 ) -> None:
+    """A whitespace-only `--command` is refused before anything is spawned.
+
+    `shlex.split` turns it into an empty list, so an unchecked argv would reach
+    `StdioServerParameters(command=argv[0])` and raise `IndexError` — a traceback
+    from a mistyped flag, where the only useful answer is "that command was
+    empty". Only the exit code is asserted, which is all there is to assert: the
+    refusal is raised inside `_dispatch`, so there is no later point at which a
+    file could be written.
+    """
     argv = _mcp_argv(tmp_path / "schema.json")
     argv[argv.index("--command") + 1] = "   "
 
@@ -350,6 +447,13 @@ def _relayed(**request: Any) -> dict[str, Any]:
 
 
 def test_a_relayed_call_is_recorded_by_tool_and_arguments() -> None:
+    """The `request` object is what makes a relayed fixture replayable.
+
+    A relay has no URL and no method, so the tool name and its arguments are the
+    entire record of what was asked. Asserting the *parsed* fixture rather than the
+    document is what proves the loader carried them through instead of the builder
+    having written them in.
+    """
     fixture = parse_fixture(_relayed())
 
     assert fixture.transport is Transport.MCP_CLIENT
@@ -357,11 +461,26 @@ def test_a_relayed_call_is_recorded_by_tool_and_arguments() -> None:
 
 
 def test_a_relayed_call_without_a_tool_is_refused() -> None:
+    """No tool name means nothing identifies the call, so it cannot be recorded.
+
+    Unlike the HTTP shape, `request.tool` has no fallback: the URL that identifies
+    an HTTPS call is meaningless on a relay, which is why `_check_mcp_request`
+    requires the tool explicitly rather than defaulting it. A fixture missing it
+    would replay as "some tool was called" — an answer nobody can act on.
+    """
     with pytest.raises(ConfigError, match=r"request\.tool"):
         parse_fixture(observed(transport="mcp_client", request={"arguments": {}}))
 
 
 def test_a_relayed_call_with_non_object_arguments_is_refused() -> None:
+    """`arguments` may be absent, but it may not be an array or a scalar.
+
+    A `tools/call` carries its arguments as a name-to-value object, so an array
+    describes a call the relay could not have made. The loader cannot tell "this
+    tool takes no arguments" from "the caller passed the wrong shape" — both arrive
+    with `arguments` missing or present — which is why the refusal names the field
+    by path instead of reporting a generic parse error.
+    """
     with pytest.raises(ConfigError, match=r"request\.arguments"):
         parse_fixture(_relayed(arguments=["not", "an", "object"]))
 
@@ -429,6 +548,14 @@ def test_the_real_stdio_client_splits_program_from_its_arguments(
     seen: list[StdioServerParameters] = []
 
     def record(params: StdioServerParameters) -> None:
+        """Stand in for `Client`, keeping the parameters the real one would get.
+
+        Recording rather than inspecting inside a mock is what lets the assertions
+        below read the SDK's own field names instead of a call signature.
+
+        Args:
+            params: What `_stdio_client` built.
+        """
         seen.append(params)
 
     monkeypatch.setattr(capture_mcp, "Client", record)

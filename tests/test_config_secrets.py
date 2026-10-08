@@ -70,6 +70,15 @@ FAKE_BEARER = "Bearer " + "".join(("abc", "123"))
 
 
 def test_literal_secret_is_refused() -> None:
+    """§15.8 has no plaintext tier, so a literal in a `_ref` field is a refusal.
+
+    The message states the rule rather than quoting a regex: the operator's next
+    step is to replace the value with a reference, and "does not match pattern"
+    does not tell them which shapes qualify. The stand-in value is assembled at
+    runtime, because a committed string shaped like a password is exactly what a
+    secret scanner rightly flags — and a scanner that cries wolf over the tests
+    trains people to ignore it on the day it finds something real.
+    """
     with pytest.raises(ConfigError, match="no plaintext credential tier"):
         load_config(
             write_config(
@@ -85,6 +94,15 @@ def test_literal_secret_is_refused() -> None:
 
 
 def test_keychain_reference_is_accepted() -> None:
+    """The accepting arm, asserted on the value rather than on the absence of an error.
+
+    A refusal-only test is satisfied just as happily by a loader that refuses
+    everything, references included — but §2.3 mandate 3 requires the reference to
+    be carried through verbatim and never resolved here. Comparing against the
+    shared constant pins that the string arrives unchanged: not resolved, not
+    normalised, no prefix stripped, so a resolver one tier down finds what it
+    expects.
+    """
     config = load_config(
         write_config(
             _fresh_dir(),
@@ -102,6 +120,19 @@ def test_keychain_reference_is_accepted() -> None:
 
 @pytest.mark.parametrize("prefix", ["keychain:", "exec:", "file:"])
 def test_every_resolver_prefix_is_accepted(prefix: str) -> None:
+    """The accepted set is exactly the three prefixes a resolver can open.
+
+    The set is written down twice — the loader's tuple and the schema's pattern —
+    and both have to agree with what a resolver can actually open. Parametrising
+    over the three is what catches the disagreement when a fourth is added to one
+    side only: the operator gets a config that loads and a reference nothing can
+    resolve.
+
+    `env:` is deliberately not among them. MCP stdio clients sanitise the
+    environment down to about six variables, so an env-based secret is quietly
+    unreliable here rather than merely discouraged, and it is refused rather than
+    ranked lowest.
+    """
     config = load_config(
         write_config(
             _fresh_dir(),

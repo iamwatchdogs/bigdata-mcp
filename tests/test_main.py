@@ -49,6 +49,24 @@ EXIT_UNKNOWN_SUBCOMMAND = 2
 
 
 def _repo_root() -> Path:
+    """Return the nearest ancestor directory that holds a `pyproject.toml`.
+
+    The entry-point script is addressed repo-relative
+    (`src/bigdata_mcp/main.py`), and `runpy.run_path` needs a real path to it.
+    Neither `__file__` nor the working directory can be assumed: pytest may be
+    invoked from anywhere, and an xdist worker does not share the parent's
+    directory. Walking up to the manifest is what makes these tests mean the same
+    thing under both.
+
+    Returns:
+        The first ancestor of this file that contains a `pyproject.toml`.
+
+    Raises:
+        RuntimeError: If no ancestor has one. That means the suite is running
+            outside its own checkout, where every path below would quietly be
+            wrong -- worth naming rather than defaulting to the cwd, which turns
+            a packaging fault into a file-not-found with a misleading message.
+    """
     for candidate in Path(__file__).resolve().parents:
         if (candidate / "pyproject.toml").is_file():
             return candidate
@@ -95,6 +113,30 @@ def test_entry_point_module_executes_as_a_script() -> None:
     # `Any` deliberately: typeshed models TraceFunction as a recursive alias a
     # narrower annotation cannot satisfy.
     def tracer(frame: Any, event: Any, arg: Any) -> Any:
+        """Record every `call` event for a function whose code object is `main`.
+
+        The filename and first line are kept rather than a flag, because the
+        dispatcher calls `capture.main` on the way through and that function has
+        the same `co_name`. A bare name filter would therefore record two calls
+        for one dispatch, and a boolean could not tell "twice" from "once, in
+        somebody else's module" -- so the pair is recorded and narrowed to this
+        file's path by the caller.
+
+        Any trace function already installed is chained to rather than replaced.
+        `sys.settrace` overwrites the global hook outright, so returning the
+        previous one keeps coverage measurement running; a test that silently
+        disabled it to prove a packaging fact would be a poor trade.
+
+        Args:
+            frame: The frame the event fired for.
+            event: The event name. Only `call` is of interest here.
+            arg: The event's payload, unused.
+
+        Returns:
+            Whatever the previously installed trace function returns for this
+            frame, or `None` -- which leaves per-frame tracing off for the frames
+            this test does not care about.
+        """
         if event == "call" and frame.f_code.co_name == "main":
             calls.append((frame.f_code.co_filename, frame.f_code.co_firstlineno))
         if previous_tracer is not None:
@@ -192,6 +234,20 @@ def test_capture_fixtures_reaches_the_capture_cli(tmp_path: Path) -> None:
 
 
 def test_an_unknown_subcommand_is_refused_with_its_exit_code() -> None:
+    """The dispatch matches the whole first argument, and says so with 2.
+
+    `capture-fixtures` is compared exactly, so `capture-fixtures-typo` reaches the
+    unknown branch rather than being quietly treated as the capture CLI. 2 is also
+    distinct from every code the capture CLI itself returns -- 3 unsupported
+    transport, 4 target exists without `--force`, 5 refused -- so a script can tell
+    "I mistyped the subcommand" from "the capture was refused", which is the only
+    reason a separate code is worth having.
+
+    Called in-process rather than through the script, because the return value is
+    the contract under test; whether it becomes a process exit status is the
+    neighbouring test's job, and asserting both here would leave neither free to
+    fail alone.
+    """
     assert main(["not-a-subcommand"]) == EXIT_UNKNOWN_SUBCOMMAND
 
 

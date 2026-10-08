@@ -64,6 +64,17 @@ async def test_the_gate_bounds_concurrency_and_never_exceeds_its_cap() -> None:
     order: list[int] = []
 
     async def hold(index: int) -> None:
+        """Hold one permit for 5 ms, then give it back.
+
+        Args:
+            index: Recorded in `order` on entry. No assertion reads that list;
+                the two that matter are on occupancy, and it is there to keep the
+                holders distinguishable in the source.
+
+        Six of these against a gate of two is the shape under test: at the peak
+        four of them are queued on the semaphore, which is exactly what a gate
+        that refused instead of waiting would not produce.
+        """
         async with gate.permit():
             order.append(index)
             await asyncio.sleep(0.005)
@@ -74,6 +85,15 @@ async def test_the_gate_bounds_concurrency_and_never_exceeds_its_cap() -> None:
 
 
 def test_a_gate_below_one_is_refused() -> None:
+    """A cap below one is refused at construction, with a message that says why.
+
+    The engine cannot build one — `derive_concurrency`'s floor is 2 — but the
+    class is public and takes whatever integer it is handed. A zero-limit gate
+    would be an `asyncio.Semaphore(0)`, so every caller would block on a permit
+    that can never be released: the failure would surface as a server that has
+    stopped answering rather than as a configuration error. The `match` pins the
+    phrase that names which number was wrong.
+    """
     with pytest.raises(ValueError, match="at least 1"):
         _ = HostGate(0)
 
@@ -93,6 +113,13 @@ def test_a_gate_reports_how_many_permits_are_free() -> None:
     assert gate.available == 2, "an idle gate must report every permit free"
 
     async def scenario() -> int:
+        """Read `available` from inside a held permit.
+
+        Returns:
+            The free count with one of two permits out — the only moment the
+            subtraction is observable, since an idle gate and a released one
+            both report the cap.
+        """
         async with gate.permit():
             return gate.available
 
@@ -113,6 +140,13 @@ def test_len_of_a_gate_is_its_configured_cap() -> None:
     gate = HostGate(3)
 
     async def scenario() -> None:
+        """Read `len(gate)` while a permit is held.
+
+        The occupied moment is the one that tells the two readings apart. A cap
+        answers 3 whether or not anyone is inside; an occupancy would answer 2
+        here and 3 a moment later. A check made only at rest could not say which
+        of the two it was looking at.
+        """
         async with gate.permit():
             assert len(gate) == 3, "the cap must not move with occupancy"
 
@@ -145,6 +179,13 @@ async def test_a_permit_is_released_when_the_body_raises() -> None:
     """A leaked permit degrades a server into a single-threaded one that looks fine."""
 
     async def scenario() -> int:
+        """Fail inside a permit, then report what the gate believes is held.
+
+        Returns:
+            The occupancy once the exception has propagated out of the permit
+            scope. `Permit.__aexit__` is the only code that decrements, so the
+            raising path is the one way a permit goes missing for good.
+        """
         gate = HostGate(1)
         with pytest.raises(RuntimeError):
             await _raise_inside(gate)
@@ -154,7 +195,23 @@ async def test_a_permit_is_released_when_the_body_raises() -> None:
 
 
 async def test_the_peak_is_recorded_so_a_cap_that_never_bites_is_visible() -> None:
+    """The high-water mark is kept, and it outlives the occupancy.
+
+    `peak` is raised in `__aenter__` and never lowered, so after one permit it
+    reads 1 while `in_flight` is already back to 0. Asserting only the occupancy
+    would pass against a gate that tracked nothing at all, because 0 is under
+    every cap — the same reason the engine's stress test reads `peak` rather
+    than `depth`.
+    """
+
     async def scenario() -> tuple[int, int]:
+        """Take and release one permit on a gate of four, then read both counts.
+
+        Returns:
+            The peak reached and the occupancy afterwards — 1 and 0. Read after
+            the scope closes, which is what makes the pair a peak-and-rest
+            reading rather than a live one.
+        """
         gate = HostGate(4)
         async with gate.permit():
             pass
@@ -170,6 +227,18 @@ async def test_the_stress_harness_never_lets_permits_go_negative() -> None:
     engine = PoliteEngine(FakeExecutor(), edge_cores=4, queue_cap=64)
 
     async def one(_i: int) -> str:
+        """Run one command through the engine and hand back its stdout.
+
+        Args:
+            _i: Used only to build a distinct cache key, so none of the sixty
+                callers coalesces and every one of them takes and gives back a
+                permit of its own.
+
+        Returns:
+            The fake's `stdout`, which is empty for every one of these calls. The
+            assertions are about permits, not about output, so nothing is
+            compared against it.
+        """
         return (await engine.run(f"k{_i}", ("true",))).stdout
 
     await asyncio.gather(*(one(index) for index in range(60)))
