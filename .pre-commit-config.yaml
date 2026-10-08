@@ -105,6 +105,28 @@ repos:
         pass_filenames: false
         files: ^(src|tests|scripts)/.*\.py$
 
+      - id: docstring-gate
+        name: "docstring coverage: every definition documented"
+        # Routed through `make docstrings` so the hook and the Makefile cannot
+        # drift, the same routing `pytest-testmon` below uses.
+        #
+        # Same `files:` pattern as the redirect gate, and for a sharper version of
+        # the same reason: the gate reads the whole tree from the threshold in
+        # `[tool.docstrings]`, so a hook narrowed to `^(src|tests)/` would skip
+        # the very file most likely to weaken it (`scripts/docstring_gate.py`).
+        #
+        # This is the deterministic half of a rule `.coderabbit.yaml` also states.
+        # That check reviews a diff, so a definition that loses its docstring
+        # stops being reviewed the moment it ages out of the range; the tree sat
+        # at 71% while the PR reported one narrow finding. Neither replaces the
+        # other, and `scripts/tests/test_repo_contracts.py` asserts their
+        # thresholds agree.
+        entry: make docstrings
+        language: system
+        pass_filenames: false
+        files: ^(src|tests|scripts)/.*\.py$
+        types: [python]
+
       - id: pytest-testmon
         name: pytest-testmon on changed Python files
         # Routed through `make testmon` so the hook and the Makefile cannot

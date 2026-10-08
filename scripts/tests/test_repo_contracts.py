@@ -37,6 +37,7 @@ from functools import cache
 from pathlib import Path
 
 import pytest
+from docstring_gate import SCAN_ROOTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SPEC_PATH = REPO_ROOT / "SPEC.md"
@@ -599,3 +600,188 @@ def test_contributing_states_the_same_coverage_floor() -> None:
         "their missing test. Update the prose to match, or raise the floor in "
         "all four places in one commit"
     )
+
+
+#: The docstring threshold this repository commits to, in percent. Two
+#: configurations state it -- `pyproject.toml`, which the deterministic
+#: `scripts/docstring_gate.py` reads, and `.coderabbit.yaml`, whose docstring
+#: pre-merge check CodeRabbit runs on the diff. Asserted equal below, so neither
+#: can be edited alone.
+DOCSTRING_THRESHOLD_PERCENT = 100
+
+#: The YAML block in `.coderabbit.yaml` whose `threshold` is the CodeRabbit half.
+CODERABBIT_DOCSTRINGS_BLOCK = "docstrings:"
+
+
+@cache
+def _docstrings_threshold_percent(path: Path = PYPROJECT_PATH) -> float:
+    """Return `[tool.docstrings].threshold` from `pyproject.toml`.
+
+    Args:
+        path: The `pyproject.toml` to read.
+
+    Returns:
+        The threshold as a float percentage.
+
+    Raises:
+        AssertionError: If the table or key is missing. Written as an assertion
+            rather than an exception because a missing threshold is a state the
+            gate turns into exit 2, and this test's job is to notice that first.
+    """
+    assert path.is_file(), f"pyproject.toml not found at {path}"
+    try:
+        value = tomllib.loads(path.read_text(encoding="utf-8"))["tool"]["docstrings"]
+        threshold = value["threshold"]
+    except (KeyError, TypeError, tomllib.TOMLDecodeError) as exc:
+        message = (
+            "pyproject.toml has no [tool.docstrings].threshold; "
+            "scripts/docstring_gate.py would exit 2 on every run"
+        )
+        raise AssertionError(message) from exc
+    return float(threshold)
+
+
+@cache
+def _coderabbit_text() -> str:
+    """Return `.coderabbit.yaml` once per process, or fail loudly.
+
+    Returns:
+        The file's text.
+
+    The missing-file case is asserted inline rather than listed in `Raises:`,
+    because `DOC502` only accepts an exception the function raises itself and this
+    one is raised by the `assert`. The reason it is an assertion at all is above:
+    CodeRabbit's checks are what pair with the gate's, so a deleted config would
+    leave the repository's strictness stated in exactly one place, undetected.
+    """
+    path = REPO_ROOT / ".coderabbit.yaml"
+    assert path.is_file(), (
+        ".coderabbit.yaml not found; the docstring threshold CodeRabbit enforces "
+        "cannot be asserted without it, and skipping would leave this half of the "
+        "contract unguarded"
+    )
+    return path.read_text(encoding="utf-8")
+
+
+def _coderabbit_docstrings_threshold() -> float:
+    """Read the `threshold` under `.coderabbit.yaml`'s `docstrings:` block.
+
+    There is no YAML parser available to tests -- same reason
+    `_codecov_status_target` gives -- so this walks indentation under the
+    `docstrings:` header, which is also what stops it matching some *other*
+    `threshold` key in a file that carries one per check.
+
+    Returns:
+        The threshold as a float percentage.
+
+    Raises:
+        AssertionError: If the block or its `threshold` cannot be located. That is
+            a change to the config's shape rather than to its policy, and both
+            need a human -- but only one of them needs one urgently.
+    """
+    lines = _coderabbit_text().splitlines()
+    header = re.compile(r"^(\s*)docstrings:\s*$")
+    threshold = re.compile(r"^\s*threshold:\s*([0-9]+(?:\.[0-9]+)?)")
+    for index, line in enumerate(lines):
+        match = header.match(line)
+        if match is None:
+            continue
+        indent = len(match.group(1))
+        for nested in lines[index + 1 :]:
+            if nested.strip() and len(nested) - len(nested.lstrip()) <= indent:
+                break
+            found = threshold.match(nested)
+            if found:
+                return float(found.group(1))
+        block = CODERABBIT_DOCSTRINGS_BLOCK
+        message = f".coderabbit.yaml has an `{block}` block with no `threshold`"
+        raise AssertionError(message)
+    message = ".coderabbit.yaml has no `docstrings` pre-merge check"
+    raise AssertionError(message)
+
+
+def test_the_docstring_threshold_is_100_percent() -> None:
+    """The decision, in the file the gate reads.
+
+    Asserted against the literal rather than against `> 0` or a range: a floor
+    that only has to be *some* number is not the floor this repository chose, and
+    the point of the test is to make the next edit to this line an explicit one.
+    100 rather than the usual 80 is the same decision `[tool.coverage.report]`
+    records: a partial threshold is an invitation to leave the remainder
+    undocumented.
+    """
+    assert _docstrings_threshold_percent() == pytest.approx(
+        DOCSTRING_THRESHOLD_PERCENT
+    ), (
+        f"pyproject [tool.docstrings].threshold is "
+        f"{_docstrings_threshold_percent():g}%, expected "
+        f"{DOCSTRING_THRESHOLD_PERCENT:g}%; contract tests are also written in "
+        "prose, so a partial threshold would let that drift"
+    )
+
+
+def test_coderabbit_enforces_the_same_docstring_threshold() -> None:
+    """Both configurations state one number, and they must be *the same* one.
+
+    Two independent assertions of the literal would let the pair drift apart and
+    both stay green. This one compares the parsed values, so a change to either
+    side alone turns it red.
+
+    The two are not duplicates. CodeRabbit's reviews a *diff*, so a definition
+    that loses its docstring stops being reviewed once it ages out of a pull
+    request's range; the gate here reads the whole tree on every commit. That is
+    the gap, and the pair agreeing is what keeps the stricter of the two from
+    silently becoming the only one.
+    """
+    threshold = _coderabbit_docstrings_threshold()
+    assert threshold == pytest.approx(DOCSTRING_THRESHOLD_PERCENT)
+    assert threshold == pytest.approx(_docstrings_threshold_percent())
+
+
+def test_the_docstring_gate_is_wired_into_the_commit_stage() -> None:
+    """A threshold nobody runs locally is a comment.
+
+    The gate is the deterministic half, so it has to run at the point where the
+    change is one keystroke from being undone -- not only on the pull request,
+    which is precisely the layer that missed 71% coverage of `tests/`.
+
+    Asserted against the wiring rather than the exit code alone: the script
+    already works, and what has regressed before in this repository is the hook
+    being removed from the stage rather than the script being broken.
+    """
+    makefile = MAKEFILE_PATH.read_text(encoding="utf-8")
+    assert "docstrings:" in makefile, (
+        "the Makefile no longer defines the docstring target"
+    )
+    assert "scripts/docstring_gate.py" in makefile, (
+        "the Makefile's docstring target no longer runs the gate; the threshold "
+        "would be enforced nowhere"
+    )
+
+    config = (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    assert "docstring-gate" in config, (
+        "the docstring gate is no longer in the pre-commit stage; a contributor "
+        "would only meet it on the pull request, which is the layer whose diff "
+        "scope is what left the tree at 71%"
+    )
+    hook = config.index("docstring-gate")
+    assert "make docstrings" in config, (
+        "the hook no longer routes through `make docstrings`, so the hook and the "
+        "Makefile can drift -- the same failure `pytest-testmon` documents"
+    )
+    assert hook < config.index("pytest-testmon")
+
+
+def test_the_docstring_gate_covers_the_same_roots_as_the_linters() -> None:
+    """The gate reads `src`, `tests` and `scripts`, and never a narrower set.
+
+    A root dropped from the gate is a root silently removed from the rule, which
+    is the failure mode this whole gate exists to close: a check that reports
+    clean because it stopped looking is worse than one that fails loudly.
+
+    Mutation evidence: D2 above, applied to the gate. Here it is the
+    configuration that is mutated -- deleting `"scripts"` from `SCAN_ROOTS` --
+    which keeps every other test green because the gate would still have read
+    two roots of the three.
+    """
+    assert set(SCAN_ROOTS) == {"src", "tests", "scripts"}

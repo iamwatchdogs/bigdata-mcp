@@ -209,6 +209,23 @@ show_missing = true
 # Nothing to exclude: `src` is on sys.path via pytest's `pythonpath` and the
 # `__main__` guard is exercised by runpy in tests/test_main.py.
 
+[tool.docstrings]
+# The source of truth for `scripts/docstring_gate.py`, in the same shape and for
+# the same reason `[tool.coverage.report].fail_under` is: one number, one file the
+# gate can parse with `tomllib`.
+#
+# 100, not the 80 that is the usual default, and never lowered to make a failing
+# run pass -- document the function instead. `.coderabbit.yaml` states the same
+# value for CodeRabbit's docstring pre-merge check, and
+# `scripts/tests/test_repo_contracts.py` asserts the two agree.
+#
+# The two are not duplicates. CodeRabbit's reviews a diff, so a function that
+# loses its docstring stops being reviewed the moment it ages out of a pull
+# request's range; the gate here reads the whole tree on every commit. The tree sat
+# at 71% while PR #4 reported one narrow finding, which is what a diff-scoped
+# check costs.
+threshold = 100
+
 [tool.bandit]
 # Codacy reported Bandit on every PR as an advisory finding that nothing failed
 # on, and its config has since been removed from this repository, so the signal

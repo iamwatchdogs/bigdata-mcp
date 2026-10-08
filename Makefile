@@ -17,13 +17,13 @@ HYGIENE := trailing-whitespace end-of-file-fixer mixed-line-ending \
            check-added-large-files
 
 .PHONY: help install update lock hooks uninstall hooks-update hooks-list \
-        hooks-validate lint lint-check format format-check fmt fix typecheck \
-        complexity actionlint workflows test testmon coverage coverage-html \
-        coverage-per-file \
-        hygiene checks security zizmor osv gitleaks bandit redirect-gate \
-        codacy codacy-install coderabbit \
-        verify ci run build binary \
-        remote clean clean-all
+         hooks-validate lint lint-check format format-check fmt fix typecheck \
+         complexity actionlint workflows test testmon coverage coverage-html \
+         coverage-per-file docstrings \
+         hygiene checks security zizmor osv gitleaks bandit redirect-gate \
+         docstring-gate codacy codacy-install coderabbit \
+         verify ci run build binary \
+         remote clean clean-all
 
 ##@ Setup
 
@@ -130,6 +130,19 @@ security: ## Pre-push gate: zizmor + osv-scanner + gitleaks + codacy + coderabbi
 
 redirect-gate: ## Assert only session.py may construct an HTTP client (§4.2 item 2)
 	$(PYTHON) scripts/redirect_gate.py
+
+docstrings: ## Report every function, class or module with no docstring
+	@# Reads the whole tree, not a diff: CodeRabbit's docstring pre-merge check is
+	@# scoped to "functions touched by this diff", so a function that loses its
+	@# docstring later is never examined again. That is how `tests/` reached 71%
+	@# while the pull request reported one narrow finding.
+	$(PYTHON) scripts/docstring_gate.py
+
+docstring-gate: docstrings ## Fail when definition coverage is under the threshold
+	@# Two names because the check is used in two senses: as a report
+	@# (`make docstrings`, tame output, exit 0 or 1) and as a gate that must not
+	@# report success when it could not read a file. The script owns both; this
+	@# alias only exists so the pre-commit hook can name the strict reading.
 
 bandit: ## Python security analysis (commit-time gate)
 	$(PREK) run bandit --all-files
