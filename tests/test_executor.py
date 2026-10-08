@@ -22,6 +22,7 @@ from a short one.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import time
 from typing import TYPE_CHECKING
@@ -42,23 +43,35 @@ if TYPE_CHECKING:
 
 #: How long a test child is given to start and reach its first marker write. Not
 #: a property of the executor — it is the cost of launching an interpreter, and it
-#: is only a lower bound on a loaded runner. Measured ~22 ms idle; 1.0 s is chosen
-#: so three xdist workers on a shared core cannot turn a slow interpreter into a
-#: red test. The marker poll below is what actually proves liveness; this only has
-#: to be long enough not to be the thing that fails.
-_SPAWN_GRACE_S = 1.0
+#: is only a lower bound on a loaded runner. Measured ~22 ms idle on a macOS
+#: workstation and up to ~2 s on an emulated CI container; 5 s is chosen so that
+#: the interpreter's own startup cannot be the thing that turns a green suite red.
+#: The suite already went red twice for exactly this reason — once on
+#: `macos-latest`, once on `windows-latest` — when a 1 s budget killed the child
+#: before its first write and the test proved nothing. The cost of that is a red
+#: CI on a repository whose whole posture is that its gates must mean something,
+#: which is dearer than the five seconds per test this costs.
+_SPAWN_GRACE_S = 5.0
 
-#: How long to wait for a marker to appear before calling the child a non-starter.
-_MARKER_WAIT_S = 5.0
+#: How long to wait for a marker to appear before calling the child a
+#: non-starter. Only reachable as a failure now: the deadline below outlasts it,
+#: so a child that has not written by the time the budget expires has genuinely
+#: failed to start rather than been slow to.
+_MARKER_WAIT_S = 20.0
+
+#: How long the marker must hold still for the child to count as dead. The child
+#: rewrites every 50 ms, so a tenth of this is already six intervals.
+_QUIESCENCE_HOLD_S = 0.5
 
 
-def _wait_for(marker: Path, timeout_s: float = _MARKER_WAIT_S) -> bool:
-    """Poll until `marker` exists, rather than assuming it does.
+async def _wait_for(marker: Path, timeout_s: float = _MARKER_WAIT_S) -> bool:
+    """Await the child's first write, rather than assuming it beat the clock.
 
-    A `time.sleep` of a guessed length is either too short on a loaded runner or
-    needlessly slow on an idle one. Polling returns as soon as the child has proven
-    it is alive and gives up with a definite answer rather than a bare
-    `FileNotFoundError` further down.
+    `await asyncio.sleep` rather than a blocking `time.sleep`, because the
+    `exec` call driving the child's own deadline is on this loop — a blocking
+    poll would starve it, kill the child through the deadline, and then be
+    looking for a marker the child never got to write. That is the exact shape of
+    the failure this helper exists to prevent.
 
     Args:
         marker: The file the child writes.
@@ -71,8 +84,34 @@ def _wait_for(marker: Path, timeout_s: float = _MARKER_WAIT_S) -> bool:
     while time.monotonic() < give_up_at:
         if marker.exists():
             return True
-        time.sleep(0.01)
+        await asyncio.sleep(0.01)
     return marker.exists()
+
+
+async def _settled(marker: Path, hold_s: float = _QUIESCENCE_HOLD_S) -> bool:
+    """Report whether the child has stopped writing, by watching it do so.
+
+    A single pair of reads proves nothing: a 50 ms write interval sampled twice
+    can land on the same value by luck, which would pass a live child. So the
+    value is sampled repeatedly and the file has to be *unchanged for the whole
+    hold* — the only reading that distinguishes "dead" from "read twice quickly".
+
+    Args:
+        marker: The file the child writes.
+        hold_s: How long the value must hold before it counts as settled.
+
+    Returns:
+        True if the marker stopped changing for `hold_s`, False if it kept
+        moving. `False` is the child-is-still-alive answer, and it is a failure
+        for the caller.
+    """
+    previous = marker.read_text()
+    deadline = time.monotonic() + hold_s
+    while time.monotonic() < deadline:
+        await asyncio.sleep(min(0.05, max(deadline - time.monotonic(), 0.0)))
+        if marker.read_text() != previous:
+            return False
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -200,10 +239,15 @@ async def test_a_timed_out_child_is_dead_and_not_merely_cancelled(
     giving it longer than the marker's interval to act.
 
     The budget has to cover interpreter startup, which is not a fixed cost — see
-    `_SPAWN_GRACE_S` — and the marker is polled for rather than slept on, because
-    a fixed wait either fails on a loaded runner or is needlessly slow on an idle
-    one. Both of those were learned from a red `macos-latest` and `windows-latest`
-    run where the child was killed during startup and the test proved nothing.
+    `_SPAWN_GRACE_S` — and the marker is awaited rather than slept on, because a
+    fixed wait either fails on a loaded runner or is needlessly slow on an idle
+    one.
+
+    Awaiting the marker *before* awaiting the deadline is the load-bearing
+    ordering. The old shape awaited the deadline first and only then looked for a
+    marker, which cannot tell "the executor killed it" from "the child was killed
+    during startup and never wrote": by the time the poll ran, the child was
+    already gone. Holding the two apart means a red run says one thing.
     """
     marker = tmp_path / "still-alive"
     executor = SubprocessExecutor()
@@ -219,24 +263,27 @@ async def test_a_timed_out_child_is_dead_and_not_merely_cancelled(
     async def scenario() -> None:
         """Run the writing child under a budget it cannot outlast.
 
-        A closure so the timeout is caught and the marker polling below happens
-        only after the executor has said the child is finished — the ordering is
-        what turns this into a check on the child being dead rather than a check
-        on the exception.
+        The `exec` call is a task so the marker can be watched while it runs:
+        the child has to be proven alive first, and only then is the deadline
+        allowed to be what ends it.
         """
-        with pytest.raises(DeadlineExceeded):
-            await executor.exec([sys.executable, "-c", program], deadline)
+        task = asyncio.create_task(
+            executor.exec([sys.executable, "-c", program], deadline)
+        )
+        try:
+            assert await _wait_for(marker), (
+                "the child never reached its first write while its budget was "
+                "still running, so nothing was proven about whether the executor "
+                "killed it"
+            )
+            with pytest.raises(DeadlineExceeded):
+                await task
+        finally:
+            if not task.done():
+                task.cancel()
 
     await scenario()
-    assert _wait_for(marker), (
-        "the child never reached its first write, so nothing was proven about "
-        "whether the executor killed it"
-    )
-    # Two intervals: one to prove it was alive before, one to prove it stopped.
-    time.sleep(0.15)
-    first = marker.read_text()
-    time.sleep(0.15)
-    assert marker.read_text() == first, (
+    assert await _settled(marker), (
         "the child was still running after the deadline expired"
     )
 
@@ -277,22 +324,62 @@ async def test_a_child_that_declines_sigterm_is_still_killed(tmp_path: Path) -> 
     async def scenario() -> None:
         """Run the SIGTERM-declining child to its death.
 
-        Nothing to assert inside: the escalation to `kill` is only observable after
-        the refusal has escaped and the child has had time to have ignored a polite
-        request, which is what the marker reads below.
+        The `exec` call is a task so the marker can be awaited while it runs: the
+        child must be proven alive before the deadline is allowed to end it, or a
+        killed-during-startup child reads identically to one that declined a signal
+        and was escalated anyway.
         """
-        with pytest.raises(DeadlineExceeded):
-            await executor.exec([sys.executable, "-c", program], deadline)
+        task = asyncio.create_task(
+            executor.exec([sys.executable, "-c", program], deadline)
+        )
+        try:
+            assert await _wait_for(marker), (
+                "the child never reached its first write while its budget was "
+                "still running, so nothing was proven about whether SIGTERM was "
+                "escalated to kill"
+            )
+            with pytest.raises(DeadlineExceeded):
+                await task
+        finally:
+            if not task.done():
+                task.cancel()
 
     await scenario()
-    assert _wait_for(marker), (
-        "the child never reached its first write, so nothing was proven about "
-        "whether SIGTERM was escalated to kill"
+    assert await _settled(marker), "a child that ignores SIGTERM survived"
+
+
+async def test_a_live_child_is_reported_as_still_alive(tmp_path: Path) -> None:
+    """`_settled` has to distinguish "dead" from "read twice before it wrote again".
+
+    The helper is what the two deadline tests rest on for their second half, and a
+    version that answered "settled" for anything would let a child survive its
+    timeout while both tests stayed green — the assertion would be measuring the
+    helper rather than the executor. So it is driven directly here, against a
+    marker that is provably still moving, rather than only against one that is
+    dead.
+
+    Mutation evidence: replacing `_settled`'s loop with `return True` leaves this
+    test red while the two deadline tests above stay green, which is exactly the
+    hole it exists to close.
+    """
+    marker = tmp_path / "live"
+    program = (
+        "import pathlib, time\n"
+        f"marker = pathlib.Path({str(marker)!r})\n"
+        "while True:\n"
+        "    marker.write_text(str(time.time()))\n"
+        "    time.sleep(0.05)\n"
     )
-    time.sleep(0.2)
-    first = marker.read_text()
-    time.sleep(0.2)
-    assert marker.read_text() == first, "a child that ignores SIGTERM survived"
+    process = await asyncio.create_subprocess_exec(sys.executable, "-c", program)
+    try:
+        assert await _wait_for(marker), "the marker child never started"
+        assert not await _settled(marker, hold_s=0.3), (
+            "a still-writing child was reported as settled; the deadline tests' "
+            "second assertion would then pass for a child that survived"
+        )
+    finally:
+        process.kill()
+        await process.wait()
 
 
 async def test_a_timeout_before_the_spawn_is_still_a_deadline() -> None:
