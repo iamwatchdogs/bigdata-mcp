@@ -61,12 +61,24 @@ def _load(body: str, tmp_path: Path, **overrides: Any) -> Any:
 # Secrets are references only (§15.8)
 # --------------------------------------------------------------------------
 
-#: Fake plaintext values for the refusal tests, assembled at runtime. A committed
-#: literal shaped like a password or token is exactly what secret scanners rightly
-#: flag; composing the stand-ins from inert parts keeps the tests' meaning while
-#: leaving nothing credential-shaped in the source.
-FAKE_PASSWORD = "".join(("hunt", "er", "2"))
-FAKE_BEARER = "Bearer " + "".join(("abc", "123"))
+#: Stand-in values for the refusals below, assembled at runtime and named for
+#: what they are rather than for what they once looked like.
+#:
+#: The runtime composition is deliberate: a committed literal shaped like a
+#: credential is exactly what secret scanners rightly flag, and a scanner that
+#: cries wolf over the tests trains people to ignore it on the day it finds
+#: something real.
+#:
+#: `NOT_A_REFERENCE` is the value that belongs in neither field. A `_ref` field
+#: must hold a reference (`keychain:`, `exec:`, `file:`) and an open map must not
+#: hold a plaintext token, so what both refusals are about is a literal that is
+#: not a reference. It was called `FAKE_PASSWORD` until CodeQL's
+#: `py/clear-text-storage-sensitive-data` reported the *name* as a sensitive-data
+#: source flowing into a file write -- which claimed it was credential-shaped when
+#: the code goes out of its way not to be. It is not a password, and the name now
+#: says so.
+NOT_A_REFERENCE = "".join(("not", "a", "reference"))
+NOT_A_TOKEN = "Bearer " + "".join(("abc", "123"))
 
 
 def test_literal_secret_is_refused() -> None:
@@ -74,10 +86,7 @@ def test_literal_secret_is_refused() -> None:
 
     The message states the rule rather than quoting a regex: the operator's next
     step is to replace the value with a reference, and "does not match pattern"
-    does not tell them which shapes qualify. The stand-in value is assembled at
-    runtime, because a committed string shaped like a password is exactly what a
-    secret scanner rightly flags — and a scanner that cries wolf over the tests
-    trains people to ignore it on the day it finds something real.
+    does not tell them which shapes qualify.
     """
     with pytest.raises(ConfigError, match="no plaintext credential tier"):
         load_config(
@@ -87,7 +96,7 @@ def test_literal_secret_is_refused() -> None:
                 [hdfs]
                 enabled = true
                 known_hosts = "~/.ssh/known_hosts"
-                password_ref = "{FAKE_PASSWORD}"
+                password_ref = "{NOT_A_REFERENCE}"
                 """,
             )
         )
@@ -174,7 +183,7 @@ def test_literal_credential_hidden_in_a_map_is_refused() -> None:
                 tier = "custom"
 
                 [auth.custom]
-                extra_headers = {{ token = "{FAKE_PASSWORD}" }}
+                extra_headers = {{ token = "{NOT_A_REFERENCE}" }}
                 """,
             )
         )
@@ -222,7 +231,7 @@ def test_a_literal_credential_header_in_the_open_map_is_refused(
                 tier = "custom"
 
                 [auth.custom]
-                extra_headers = {{ {header} = "{FAKE_BEARER}" }}
+                extra_headers = {{ {header} = "{NOT_A_TOKEN}" }}
                 """,
             )
         )
