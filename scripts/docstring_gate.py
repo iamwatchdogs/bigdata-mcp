@@ -160,13 +160,96 @@ def python_files(
     return sorted(found)
 
 
-def scan(paths: list[Path], repo_root: Path = REPO_ROOT) -> tuple[list[Finding], int]:
-    """Count the definitions in `paths` and report the ones lacking a docstring.
+def _definitions(tree: ast.Module) -> list[tuple[int, str, str]]:
+    """Return `(lineno, kind, name)` for every definition in a parsed module.
 
     `ast.walk` rather than a top-level visitor, so a closure nested inside a test
     counts exactly as a module-level function does. That is the stricter of the
-    two readings and the one the branch was brought up to; a docstring on the
-    outer test does not document the helper it depends on.
+    two readings and the one this repository is held to: a docstring on the outer
+    test does not document the helper its behaviour depends on.
+
+    Args:
+        tree: The parsed module.
+
+    Returns:
+        One entry per class and function, in the order `walk` yields them.
+    """
+    return [
+        (
+            node.lineno,
+            "async def" if isinstance(node, ast.AsyncFunctionDef) else _kind(node),
+            node.name,
+        )
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    ]
+
+
+def _scan_file(path: Path, repo_root: Path) -> tuple[list[Finding], int]:
+    """Read one file and report what it holds that is undocumented.
+
+    Args:
+        path: The file to read.
+        repo_root: The root findings are reported relative to.
+
+    Returns:
+        `(findings, measured)` for this file. `measured` includes the module
+        itself, so a file with no definitions is not a file with nothing to check.
+
+    Raises:
+        ScanFailed: If the file cannot be read or does not parse. A `SyntaxError`
+            here would otherwise read as a clean file: ruff is the gate that owns
+            syntax, and it failing first is what should stop this one reaching a
+            parse error at all.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeDecodeError) as exc:
+        message = f"cannot parse {_relative(path, repo_root)}: {exc}"
+        raise ScanFailed(message) from exc
+
+    relative = _relative(path, repo_root)
+    findings: list[Finding] = []
+    if ast.get_docstring(tree) is None:
+        findings.append(Finding(relative, 1, "module", "<module>"))
+    measured = 1
+    for lineno, kind, name in _definitions(tree):
+        measured += 1
+        node = _find(tree, name, lineno)
+        if node is not None and ast.get_docstring(node) is None:
+            findings.append(Finding(relative, lineno, kind, name))
+    return findings, measured
+
+
+def _find(
+    tree: ast.Module, name: str, lineno: int
+) -> ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | None:
+    """Locate the definition node matching a name and line.
+
+    Args:
+        tree: The parsed module.
+        name: The definition's name.
+        lineno: Its line, which is what disambiguates a name reused by two
+            definitions in the same module.
+
+    Returns:
+        The node, or `None` when nothing matches. `None` is returned rather than
+        raised on because a mismatch here is a bug in this gate, and reporting the
+        scope as documented is the reading that fails loudly on the next finding
+        rather than silently dropping one.
+    """
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.name == name
+            and node.lineno == lineno
+        ):
+            return node
+    return None
+
+
+def scan(paths: list[Path], repo_root: Path = REPO_ROOT) -> tuple[list[Finding], int]:
+    """Count the definitions in `paths` and report the ones lacking a docstring.
 
     Args:
         paths: The files to read.
@@ -176,42 +259,16 @@ def scan(paths: list[Path], repo_root: Path = REPO_ROOT) -> tuple[list[Finding],
         `(findings, measured)` — every undocumented module, class or function
         ordered by file, and how many definitions were considered in all.
 
-    Raises:
-        ScanFailed: If a file cannot be read or does not parse. A `SyntaxError`
-            here would otherwise read as a clean file: ruff is the gate that owns
-            syntax, and it failing first is what should stop this one reaching a
-            parse error at all.
+    A `ScanFailed` from `_scan_file` passes through uncaught, so a file that
+    cannot be read fails the scan rather than being quietly dropped: this gate
+    reads every file or reports that it could not.
     """
     findings: list[Finding] = []
     measured = 0
     for path in paths:
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (OSError, SyntaxError, UnicodeDecodeError) as exc:
-            message = f"cannot parse {_relative(path, repo_root)}: {exc}"
-            raise ScanFailed(message) from exc
-        measured += 1
-        if ast.get_docstring(tree) is None:
-            findings.append(
-                Finding(_relative(path, repo_root), 1, "module", "<module>")
-            )
-        for node in ast.walk(tree):
-            if not isinstance(
-                node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-            ):
-                continue
-            measured += 1
-            if ast.get_docstring(node) is None:
-                findings.append(
-                    Finding(
-                        _relative(path, repo_root),
-                        node.lineno,
-                        "async def"
-                        if isinstance(node, ast.AsyncFunctionDef)
-                        else _kind(node),
-                        node.name,
-                    )
-                )
+        file_findings, file_measured = _scan_file(path, repo_root)
+        findings.extend(file_findings)
+        measured += file_measured
     findings.sort(key=lambda finding: (str(finding.path), finding.lineno))
     return findings, measured
 
@@ -265,6 +322,35 @@ def _relative(path: Path, repo_root: Path) -> Path:
         return path
 
 
+def _report(findings: list[Finding], actual: float, threshold: float) -> int:
+    """Print the findings and return the exit status they earn.
+
+    Args:
+        findings: Every undocumented definition found, already ordered.
+        actual: The measured percentage of definitions documented.
+        threshold: The required percentage.
+
+    Returns:
+        `EXIT_UNDOCUMENTED`, because every call to this is a short tree.
+    """
+    print(
+        f"docstring gate: {len(findings)} undocumented definition(s); "
+        f"{actual:.2f}% documented, {threshold:g}% required:",
+        file=sys.stderr,
+    )
+    for finding in findings:
+        print(
+            f"  {finding.path}:{finding.lineno}: {finding.kind} {finding.name}",
+            file=sys.stderr,
+        )
+    print(
+        "every function, class and module carries a docstring; document "
+        "what the name cannot say rather than restating it",
+        file=sys.stderr,
+    )
+    return EXIT_UNDOCUMENTED
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the gate.
 
@@ -308,22 +394,7 @@ def main(argv: list[str] | None = None) -> int:
     actual = (measured - len(findings)) / measured * 100 if measured else 100.0
 
     if actual < threshold:
-        print(
-            f"docstring gate: {len(findings)} undocumented definition(s); "
-            f"{actual:.2f}% documented, {threshold:g}% required:",
-            file=sys.stderr,
-        )
-        for finding in findings:
-            print(
-                f"  {finding.path}:{finding.lineno}: {finding.kind} {finding.name}",
-                file=sys.stderr,
-            )
-        print(
-            "every function, class and module carries a docstring; document "
-            "what the name cannot say rather than restating it",
-            file=sys.stderr,
-        )
-        return EXIT_UNDOCUMENTED
+        return _report(findings, actual, threshold)
 
     print(
         f"docstring gate: clean, {measured} definitions all documented "

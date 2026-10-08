@@ -270,7 +270,15 @@ def test_the_session_timeout_raises_a_typed_error_not_a_bare_timeout(
     try:
         with pytest.raises(BackendUnreachable) as caught:
             run_async(scenario())
+        # The budget must be *named*, not just the fault class. Both arms of
+        # `_as_unreachable` produce a detail containing "TimeoutError", so
+        # matching on that alone passes whether or not the dispatch reached the
+        # timeout arm at all — `type(exc).__name__` would let a broken router
+        # report a class name where the caller budget was spent. Assertion
+        # evidence: mutating `isinstance(exc, TimeoutError)` to `False` leaves
+        # this test red, where it stayed green against the class-name check.
         assert "TimeoutError" in str(caught.value.detail)
+        assert "0.2s budget" in str(caught.value.detail)
     finally:
         release.set()
 
@@ -1041,6 +1049,13 @@ def test_an_unreachable_endpoint_becomes_a_taxonomy_error() -> None:
     with pytest.raises(BackendUnreachable) as caught:
         run_async(scenario())
     assert "127.0.0.1:1" in str(caught.value)
+    # The fault class is asserted because `_as_unreachable` routes everything
+    # that is not the session's own timeout through `type(exc).__name__`. A
+    # detail holding no class name at all would mean that arm stopped naming the
+    # fault it classified -- it would still carry the endpoint, so the assertion
+    # above cannot see it. Evidence: replacing the `__name__` with a constant
+    # leaves this line red.
+    assert str(caught.value.detail) == "ClientConnectorError"
 
 
 def test_using_the_session_outside_its_context_manager_is_refused() -> None:

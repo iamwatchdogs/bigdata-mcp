@@ -304,13 +304,13 @@ class Session:
         Returns:
             The response, with `url` set to where the body actually came from.
 
-        Raises:
-            BackendUnreachable: If the endpoint could not be reached, naming the
-                URL attempted and the transport fault class. `aiohttp` types never
-                escape this method — §5.2 requires a clean tool error, never a
-                library exception reaching an adapter. The session's own timeout
-                budget is included: its builtin `TimeoutError` is not an
-                `aiohttp.ClientError`, so it is converted here too.
+        A `BackendUnreachable` escapes when the endpoint cannot be reached.
+        `aiohttp` types never escape this method — §5.2 requires a clean tool
+        error, never a library exception reaching an adapter — and the session's
+        own timeout budget is included: its builtin `TimeoutError` is not an
+        `aiohttp.ClientError`. Both go through `_as_unreachable`, which names the
+        endpoint and the fault class. Named in prose rather than under `Raises:`
+        because it is raised by that callee, not by this method.
 
         A `PermissionError` also escapes, from `_check_initial_scheme`,
         `_check_host_allowed`, or `_next_hop`, but only ever with a message naming
@@ -334,19 +334,36 @@ class Session:
                         self._refuse(RedirectRefusal.TOO_MANY_HOPS, current)
                     current = self._next_hop(raw.headers.get("Location"), current)
                     hops += 1
-            except TimeoutError as exc:
-                # The session's own `ClientTimeout(total=...)` raises the builtin
-                # `TimeoutError`, which is *not* an `aiohttp.ClientError`. Left
-                # uncaught it would escape as a bare library exception — exactly
-                # what §5.2 forbids — so it joins the same typed error.
-                raise BackendUnreachable(
-                    endpoint=current,
-                    detail=f"TimeoutError after {self._timeout_s:.1f}s budget",
-                ) from exc
-            except aiohttp.ClientError as exc:
-                raise BackendUnreachable(
-                    endpoint=current, detail=type(exc).__name__
-                ) from exc
+            except (TimeoutError, aiohttp.ClientError) as exc:
+                raise self._as_unreachable(current, exc) from exc
+
+    def _as_unreachable(self, current: str, exc: Exception) -> BackendUnreachable:
+        """Convert a transport fault into the typed error §5.2 requires.
+
+        Deliberately not per-`except`-arm inline construction: the hop loop had
+        already grown past the length this repository's complexity gate allows,
+        and the two arms differed only in the `detail` they built. Combining them
+        also means a third transport fault joins one dispatch instead of adding a
+        fourth arm to a `while True`.
+
+        `TimeoutError` is in the union because the session's own
+        `ClientTimeout(total=...)` raises the builtin, which is *not* an
+        `aiohttp.ClientError` — left unconverted it would escape as a bare library
+        exception, exactly what §5.2 forbids.
+
+        Args:
+            current: The URL being attempted, named in the error.
+            exc: The fault the hop loop caught.
+
+        Returns:
+            A `BackendUnreachable` naming the endpoint and the fault class.
+        """
+        if isinstance(exc, TimeoutError):
+            return BackendUnreachable(
+                endpoint=current,
+                detail=f"TimeoutError after {self._timeout_s:.1f}s budget",
+            )
+        return BackendUnreachable(endpoint=current, detail=type(exc).__name__)
 
     def _headers_for(
         self,
