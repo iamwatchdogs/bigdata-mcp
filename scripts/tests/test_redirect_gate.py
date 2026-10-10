@@ -36,6 +36,9 @@ applied and observed failing before reverting:
   `test_modules_in_subpackages_are_scanned`
 * R6 exempt by *path* substring, so any nested `session.py` escapes ->
   `test_a_nested_session_py_is_not_the_seam`
+* R7 drop the two import shapes, or ban the bare word `aiohttp` instead of the
+  import forms -> `test_an_aiohttp_import_outside_the_seam_is_reported`,
+  `test_a_mention_of_aiohttp_that_is_not_an_import_is_not_a_violation`
 
 A sixth test was written for this fix and then deleted: one asserting the
 exemption still holds when `package_dir` arrives spelled `./bigdata_mcp`. It could
@@ -219,3 +222,60 @@ def test_every_banned_identifier_is_reported_with_its_line(tmp_path: Path) -> No
         assert f"offender.py:{index}: {identifier}" in reported, (
             f"{identifier} was not reported with its line"
         )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "import aiohttp",
+        "import aiohttp as aio",
+        "from aiohttp import ClientSession",
+        "from aiohttp import ClientTimeout as Timeout",
+    ],
+    ids=["plain", "aliased", "from", "from-aliased"],
+)
+def test_an_aiohttp_import_outside_the_seam_is_reported(
+    tmp_path: Path, statement: str
+) -> None:
+    """Importing the HTTP library at all is the seam leak, not just calling it.
+
+    The call forms were already banned and a module with no call still leaks:
+    `aiohttp.ClientTimeout(total=1)` names nothing this list carries, and
+    `aiohttp.formdata.FormData` names nothing either. The import is what makes
+    the module a second home for HTTP client code, so the gate refuses the
+    import and the aliased spellings an editor's autocomplete produces.
+
+    Four spellings rather than one because `aiohttp` is reachable through
+    `from` as well as `import`, and a from-import can alias the name away — a
+    substring on `aiohttp.request` alone would miss every one of these.
+    """
+    package = tmp_path / "bigdata_mcp"
+    package.mkdir()
+    (package / "leak.py").write_text(f"{statement}\nVALUE = 1\n", encoding="utf-8")
+
+    reported = find_violations(package)
+
+    assert reported, f"{statement} escaped the seam"
+    assert "leak.py" in reported[0]
+
+
+def test_a_mention_of_aiohttp_that_is_not_an_import_is_not_a_violation(
+    tmp_path: Path,
+) -> None:
+    """The gate bans the import forms, not the word.
+
+    Prose about `aiohttp` is how the seam's rule gets documented in the first
+    place, and a module explaining why it no longer touches `aiohttp` is the
+    best module under the rule. Banning the bare word would fail a comment,
+    which teaches the next reader to delete the comment.
+    """
+    package = tmp_path / "bigdata_mcp"
+    package.mkdir()
+    (package / "notes.py").write_text(
+        "# This module used to build an `aiohttp` client; see session.py for\n"
+        "# why it no longer reaches for the raw HTTP library at all.\n"
+        "VALUE = 1\n",
+        encoding="utf-8",
+    )
+
+    assert find_violations(package) == []

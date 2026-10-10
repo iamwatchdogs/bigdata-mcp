@@ -46,14 +46,25 @@ __all__ = [
     "main",
 ]
 
-#: The identifiers that mean "a raw HTTP client is being built here". `session.get`
-#: is deliberately absent: `Session.get` is the public, policy-carrying entry point,
-#: and banning the substring would forbid the correct call as well as the wrong one.
+#: The identifiers and import shapes that mean "a raw HTTP client is being built
+#: here". `session.get` is deliberately absent: `Session.get` is the public,
+#: policy-carrying entry point, and banning the substring would forbid the
+#: correct call as well as the wrong one.
+#:
+#: The two import shapes are here because an identifier list only catches a call
+#: that is *made*: a module can import `aiohttp` and then reach it through a
+#: name this list does not carry — `ClientTimeout`, `ClientSession(**kwargs)`
+#: built by a helper, `aiohttp.formdata` — and the first call that would trip an
+#: identifier never has to appear in the file. The import is the seam leak: a
+#: module that pulls the HTTP library in is a second home for HTTP client code
+#: whether or not it calls anything yet.
 BANNED_IDENTIFIERS: tuple[str, ...] = (
     "ClientSession",
     "TCPConnector",
     "allow_redirects",
     "aiohttp.request",
+    "import aiohttp",
+    "from aiohttp",
 )
 
 
