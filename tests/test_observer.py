@@ -28,11 +28,14 @@ Mutation evidence, each applied and observed red before reverting:
   `test_macos_does_not_read_proc`
 * D7 treat an unparseable loadavg as zero ->
   `test_an_unparseable_loadavg_is_unsupported_not_zero`
-* D7b strip the braces off `sysctl vm.loadavg` ->
-  `test_macos_reads_the_braced_vm_loadavg_the_kernel_actually_prints` goes GREEN,
-  which is how this real bug was found: the mutation that was supposed to prove
-  the "default runner executes nothing" test bite instead exposed that the parser
-  could not read macOS output at all.
+* D7b read a bare `split()[0]` instead of stripping the braces off
+  `sysctl -n vm.loadavg` -> `test_macos_does_not_read_proc`, which is the test
+  carrying the braced `MACOS_LOADAVG` fixture. This is the one entry that went
+  the other way when it was first written: the fixture then had the braces
+  stripped too, so the mutation stayed green and *that* is how the defect was
+  found — the parser reported every real macOS host `unsupported`. Both halves
+  were fixed together: the braces are stripped now, and the fixture is braced,
+  so the mutation turns this test red.
 * D8 default to a real subprocess runner ->
   `test_detection_executes_nothing_without_an_injected_runner`
 * D9 make an unusable reading look usable as a cap driver ->
@@ -69,6 +72,7 @@ these — the same gap `capture_mcp.py` had, reached the same way.
 from __future__ import annotations
 
 import platform as platform_module
+import sys
 from typing import TYPE_CHECKING
 
 import pytest
@@ -567,8 +571,21 @@ def test_describe_host_substitutes_unknown_for_a_blank_reading(
 
 
 def test_has_command_reports_capability_rather_than_failing_at_first_use() -> None:
-    """§15.6's pattern: capability checks are reported, not discovered."""
+    """§15.6's pattern: capability checks are reported, not discovered.
+
+    Both directions, because the negative alone is satisfied by an
+    implementation that always answers `False` — a `has_command` that reports
+    "absent" for `sysctl` would tell the operator their macOS host cannot
+    measure load, which is the same silent capability loss the observer is built
+    to prevent. The interpreter is the positive case: it is on `PATH` by
+    definition, since this process is running from it.
+    """
     assert has_command("this-command-does-not-exist-xyz") is False
+    assert has_command(sys.executable) is True, (
+        "a command this process is running from was reported absent, so "
+        "`has_command` cannot be trusted to report a capability it was asked "
+        "about"
+    )
 
 
 def test_the_support_enum_is_closed_to_two_members() -> None:

@@ -27,14 +27,16 @@ a convention; a rule that also exists in the import path is a structural fact.
 subprocess test below exit 0 instead of 3, with the refusal's stderr carried
 into the failure so the cause is named rather than guessed at).
 
-**Why the child is spawned as `python` rather than `sys.executable`.** The only
-reason is Opengrep's `dangerous-subprocess-use-audit` rule, which exempts a
-literal command and reports anything else, the `sys.executable` form included.
-`shutil.which` above resolves the same name through the same PATH, so the check
-and the call cannot disagree, and a bare name from the project venv is the
-interpreter that already has `pytest` importable. The full note is at the call
-site; a repo-wide contract test in `scripts/tests/test_repo_contracts.py` fails
-if the `sys.executable` spelling ever comes back.
+**Why the child is spawned as `sys.executable` and not as a literal `python`.**
+The rule that decided it is Opengrep's `dangerous-subprocess-use-audit`, which
+exempts a *literal* command and reports anything else — the `sys.executable` form
+included — so this spelling carries a `# nosemgrep` naming the rule and the
+reason at the call site, and `scripts/tests/test_subprocess_literals.py` checks
+that the marker names both. The reason the literal was abandoned is in the call
+site's own comment block: on the Windows runner it resolved to the
+`actions/setup-python` interpreter, which has none of this suite's packages, and
+the failure surfaced as `No module named 'pytest'` under a correct-looking exit
+code. Two rounds of CI produced that evidence.
 
 **Why the offender list is built from `sys.modules` rather than from source.**
 The guard asks what is *bound*, which is the question that matters: a module can
