@@ -363,7 +363,13 @@ def _capture(args: argparse.Namespace) -> Fixture:
     _refuse_an_unsent_method(args.method)
     _refuse_an_unresolved_credential(args.credential_ref)
     params = _json_object(args.params, "params")
-    url = args.url.rstrip("/") + args.path
+    # A leading `/` is supplied when the operator left it off rather than
+    # assumed. `url.rstrip("/") + path` joins with no separator, so
+    # `--path ws/v1/cluster/info` produces `https://rm1:8088ws/v1/...` — the port
+    # swallows the path, the authority stops existing, and the refusal names a
+    # host the operator never wrote.
+    path = args.path if args.path.startswith("/") else f"/{args.path}"
+    url = args.url.rstrip("/") + path
     if params:
         url = f"{url}?{urlencode(params)}"
     transport = Transport(args.transport)

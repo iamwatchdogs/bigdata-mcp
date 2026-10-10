@@ -448,6 +448,42 @@ def test_no_params_means_no_query_string(
     assert "?" not in str(load_fixture(out).request["url"])
 
 
+def test_a_path_without_a_leading_slash_reaches_the_path_it_names(
+    server: LocalHttpServer, tmp_path: Path
+) -> None:
+    """`--path ws/v1/...` is a typo the operator can make, not a host they wrote.
+
+    The URL is joined with no separator, so a path missing its leading `/` used
+    to produce an authority that did not exist — the port swallowed the path, and
+    the refusal named a host the operator never typed. Asserted on the server's
+    access log: the request has to *arrive* for the join to be right.
+    """
+    server.route("/ws/v1/cluster/info", lambda _p: json_reply({}))
+    out = tmp_path / "captured.json"
+
+    code = capture.main([
+        "https_api",
+        "--url",
+        server.url(),
+        "--source-id",
+        "yarn_rm",
+        "--operation",
+        "info",
+        "--allowlist-host",
+        "127.0.0.1",
+        "--path",
+        "ws/v1/cluster/info",
+        "--out",
+        str(out),
+    ])
+
+    assert code == 0, "a path without its leading slash was not served"
+    assert server.recorded == ["/ws/v1/cluster/info"], (
+        f"the joined URL did not name the route: {server.recorded}"
+    )
+    assert str(load_fixture(out).request["url"]).endswith("/ws/v1/cluster/info")
+
+
 def test_a_capture_refuses_a_body_the_byte_cap_cut(
     server: LocalHttpServer, tmp_path: Path
 ) -> None:
