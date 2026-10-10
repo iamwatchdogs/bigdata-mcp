@@ -13,7 +13,11 @@ authors = [
 # checking never verified, and the CI matrix only tests 3.14.
 requires-python = ">=3.14"
 dependencies = [
-    "aiohttp>=3.13.3",
+    # §4 pins this at ≥3.14.1 for CVE-2026-54280, which leaked the response
+    # body on a mid-body disconnect — the streaming-abort path this server
+    # takes on every deadline. `scripts/tests/test_repo_contracts.py` asserts
+    # this floor against the spec's, so the two cannot drift apart.
+    "aiohttp>=3.14.1",
     # C4 (§14.3): the strict load validates the PARSED TOML against
     # schemas/config.schema.json with additionalProperties:false. Hand-rolling
     # that would put a second, divergent definition of the rules in the tree.

@@ -332,6 +332,48 @@ def test_spec_declares_both_posture_modes() -> None:
     )
 
 
+def test_the_aiohttp_floor_is_the_pin_the_spec_gives_for_it() -> None:
+    """The CVE pin in §4 is the reason for the floor, so the two must agree.
+
+    §4 pins `aiohttp` at ≥3.14.1 because CVE-2026-54280 leaks the response body
+    on a mid-body disconnect, which is the streaming-abort path this server takes
+    on every deadline. Nothing else in the tree compares that number to
+    `pyproject.toml`'s: the dependency line sat at `>=3.13.3` while the spec,
+    the sole record of *why*, said 3.14.1 — and `uv` happily resolves a
+    3.13.x that carries the CVE.
+
+    Mutation evidence: reverting the floor in `pyproject.toml` to `>=3.13.3`
+    turns this red, as does loosening the pin in the spec's table — either way
+    the two numbers disagree and the CVE reasoning is no longer enforced
+    anywhere.
+    """
+    spec = _spec_text()
+    pinned_row = next(
+        line
+        for line in spec.splitlines()
+        if line.strip().startswith("|") and _table_cells(line)[:1] == ["`aiohttp`"]
+    )
+    pinned = _table_cells(pinned_row)[1]
+    version = pinned.lstrip("≥>=").strip()
+    assert re.fullmatch(r"\d+\.\d+(\.\d+)?", version), (
+        f"the spec's §4 dependency table pins `aiohttp` as {pinned!r}, which this "
+        "check cannot read as a version. A pin nobody can parse is a pin nobody "
+        "enforces"
+    )
+
+    pyproject = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+    requirement = next(
+        dependency
+        for dependency in pyproject["project"]["dependencies"]
+        if dependency.startswith("aiohttp")
+    )
+    assert requirement == f"aiohttp>={version}", (
+        f"pyproject.toml declares {requirement!r} while §4 pins `{version}`. The "
+        "spec's number exists because of CVE-2026-54280 on the streaming-abort "
+        "path; a lower floor resolves a release that still carries it"
+    )
+
+
 def test_spec_commits_to_custom_port_family_and_mcp_aggregation() -> None:
     """Assert both capabilities absent from v1 are committed to in writing.
 
