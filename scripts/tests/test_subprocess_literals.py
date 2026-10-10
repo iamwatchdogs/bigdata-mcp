@@ -37,7 +37,8 @@ rule and say *why*, in a line the checker can see.
 
 What is checked, per `subprocess` call whose command is `sys.executable`:
 
-* a `nosemgrep` marker naming this rule, on the same line or the line above, and
+* a `nosemgrep` marker naming this rule, on the call's own line or in the comment
+  block directly above it, and
 * a justification after the `--`, not a bare marker
 
 A suppression that names the rule without a reason, or a reason without the rule,
@@ -50,6 +51,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import TypeGuard
 
 from docstring_gate import python_files
 
@@ -62,6 +64,120 @@ SUBPROCESS_METHODS = frozenset({"run", "call", "check_call", "check_output", "Po
 
 #: The rule a suppression has to name to count as naming anything.
 AUDIT_RULE = "dangerous-subprocess-use-audit"
+
+
+def _command_argument(node: ast.Call) -> ast.expr | None:
+    """The argv expression a `subprocess` call was handed.
+
+    `args` is the first parameter of every entry point in `SUBPROCESS_METHODS`,
+    so a caller can hand it over positionally or by name. Which of the two it
+    used changes nothing about what the audit rule reports, so this looks in
+    both places and a `subprocess.run(args=[sys.executable, ...])` is checked
+    exactly as its positional spelling is.
+
+    Args:
+        node: The `subprocess` call to read.
+
+    Returns:
+        The argv expression, or `None` when the call has no statically visible
+            one -- `subprocess.run(*argv)`, say, where `argv[0]` is unknown.
+    """
+    if node.args:
+        return node.args[0]
+    return next(
+        (keyword.value for keyword in node.keywords if keyword.arg == "args"),
+        None,
+    )
+
+
+def _suppressed_marker(node: ast.Call, lines: list[str]) -> str:
+    """The `nosemgrep` text a reader would honour for this call, if any.
+
+    Two positions are honoured -- the call's own first line, and the run of
+    comment lines directly above it -- and that is the whole of the window. A
+    marker below the call, or nested in a multi-line call, sits on a line the
+    finding does not start on, and a marker further up with a statement between
+    it and the call is attached to that statement instead. Either kind is a
+    suppression for some other line, and reading it as this call's is how a
+    site ends up believing it is covered when nothing silences it.
+
+    Args:
+        node: The `subprocess` call whose marker is needed.
+        lines: The module's source lines, read by index.
+
+    Returns:
+        The marker text, or `""` when no honoured position carries one.
+    """
+    start = node.lineno - 1
+    if not 0 <= start < len(lines):
+        return ""
+    honoured = [start]
+    above = start - 1
+    while above >= 0 and lines[above].lstrip().startswith("#"):
+        honoured.append(above)
+        above -= 1
+    return "\n".join(
+        lines[index] for index in sorted(honoured) if "nosemgrep" in lines[index]
+    )
+
+
+def _names_the_rule_with_a_reason(marker: str) -> bool:
+    """Whether a marker silences this rule *and* says what it is doing here.
+
+    A marker that names the rule without a reason, or carries a reason without
+    naming the rule, is the half-marked kind that later reads as permission:
+    the next reader cannot tell which tool it was meant for, or why.
+
+    Args:
+        marker: The marker text, from `_suppressed_marker`.
+
+    Returns:
+        `True` when the marker names `AUDIT_RULE` before a `--` separator with
+            a nonempty justification after it.
+    """
+    _before, directive, tail = marker.partition("nosemgrep")
+    if not directive:
+        return False
+    rules, separator, reason = tail.partition("--")
+    return AUDIT_RULE in rules and bool(separator) and bool(reason.strip())
+
+
+def _is_sys_executable(command: ast.expr) -> bool:
+    """Whether an argv expression is `sys.executable` itself.
+
+    Args:
+        command: One argv expression -- the call's whole command, or the first
+            element of it once an argv list has been opened.
+
+    Returns:
+        `True` when the expression is exactly `sys.executable`.
+    """
+    return (
+        isinstance(command, ast.Attribute)
+        and command.attr == "executable"
+        and isinstance(command.value, ast.Name)
+        and command.value.id == "sys"
+    )
+
+
+def _is_subprocess_argv_call(node: ast.AST) -> TypeGuard[ast.Call]:
+    """Whether a node is a `subprocess` entry point taking an argv.
+
+    Args:
+        node: The node the walk is visiting.
+
+    Returns:
+        `True` for `subprocess.run` and its siblings under that spelling only --
+            `sh.subprocess.run` and `asyncio.create_subprocess_exec` are different
+            calls to different rules.
+    """
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in SUBPROCESS_METHODS
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "subprocess"
+    )
 
 
 def _interpreter_rooted_commands(
@@ -81,32 +197,22 @@ def _interpreter_rooted_commands(
     """
     offenders: list[tuple[str, int, str]] = []
     for node in ast.walk(tree):
-        if not (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in SUBPROCESS_METHODS
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "subprocess"
-            and node.args
-        ):
+        if not _is_subprocess_argv_call(node):
             continue
-        command = node.args[0]
+        command = _command_argument(node)
+        if command is None:
+            continue
         # An argv list or tuple is the exempt form, and only its *first* element
         # is what the rule looks at -- which is why `scripts/bandit_gate.py` can
         # append a splat of paths and still be exempt.
         if isinstance(command, ast.List | ast.Tuple) and command.elts:
             command = command.elts[0]
-        if (
-            isinstance(command, ast.Attribute)
-            and command.attr == "executable"
-            and isinstance(command.value, ast.Name)
-            and command.value.id == "sys"
-        ):
-            # The `nosemgrep` marker is allowed on the call's own line or
-            # anywhere in the comment block directly above it. Both are ordinary
-            # suppressible places, and a marker on the line *below* is not one.
-            window = lines[max(node.lineno - 12, 0) : node.lineno + 1]
-            marker = "\n".join(line for line in window if "nosemgrep" in line)
+        if _is_sys_executable(command):
+            # The `nosemgrep` marker is allowed on the call's own line or in the
+            # comment block directly above it, and nothing further: a marker on
+            # the line below, or inside a multi-line call, is attached to
+            # another line and silences nothing here.
+            marker = _suppressed_marker(node, lines)
             offenders.append(("", node.lineno, marker))
     return offenders
 
@@ -114,10 +220,16 @@ def _interpreter_rooted_commands(
 def test_every_interpreter_rooted_command_carries_a_reason() -> None:
     """No `sys.executable` command is silent about the finding it cannot avoid.
 
-    Mutation evidence: stripping the ` nosemgrep: dangerous-subprocess-use-audit`
-    prefix from `tests/test_seam_guard.py`, leaving the justification, turns this
-    red -- a reason that names no rule reads as a note, not a suppression, and
-    the next reader cannot tell which tool it was meant for.
+    Mutation evidence, three changes each of which turns this red:
+
+    * stripping the ` nosemgrep: dangerous-subprocess-use-audit` prefix from
+      `tests/test_seam_guard.py`, leaving the justification -- a reason that
+      names no rule reads as a note, not a suppression, and the next reader
+      cannot tell which tool it was meant for;
+    * dropping the `-- argv is this process's own ...` justification and leaving
+      a bare marker -- a silencing that says nothing about why;
+    * moving that marker below the call -- a line the finding does not start on,
+      which suppresses nothing.
     """
     unjustified: list[str] = []
     suppressed: list[str] = []
@@ -130,7 +242,7 @@ def test_every_interpreter_rooted_command_carries_a_reason() -> None:
         ):
             location = f"{relative}:{lineno}"
             suppressed.append(location)
-            if AUDIT_RULE not in marker:
+            if not _names_the_rule_with_a_reason(marker):
                 unjustified.append(location)
 
     assert suppressed, (
