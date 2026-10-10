@@ -51,6 +51,7 @@ from bigdata_mcp.errors import ConfigError
 from bigdata_mcp.posture import Posture
 from bigdata_mcp.posture import portal_schema
 from tests.support.config_files import KNOWN_HOSTS
+from tests.support.config_files import REF_KEYCHAIN
 from tests.support.config_files import fresh_dir as _fresh_dir
 from tests.support.config_files import write_config
 
@@ -509,6 +510,39 @@ def test_redirect_allowlist_covers_every_configured_https_source() -> None:
         )
     )
     assert config.redirect_allowlist == {"rm1.invalid", "rm2.invalid", "solr1.invalid"}
+
+
+def test_a_solr_table_can_carry_the_credential_reference_it_declares() -> None:
+    """The schema models `[solr] password_ref`, so the dataclass must hold it.
+
+    `SolrConfig` enumerated four of the schema's five keys, so a schema-valid
+    `[solr]` table carrying `password_ref` died in `SolrConfig(**_table(...))`
+    with `TypeError: unexpected keyword argument` — a config the validator had
+    just passed, refused by the model that is supposed to describe it. The
+    reference is what a `basic` Solr authenticates with, and §15.8's whole shape
+    depends on there being a field to put it in.
+    """
+    config = load_config(
+        write_config(
+            _fresh_dir(),
+            """
+            [server]
+            mode = "read_only"
+
+            [solr]
+            enabled = true
+            base_urls = ["https://solr1.invalid:8983/solr"]
+            credential_shape = "basic"
+            password_ref = "keychain:bigdata-edge"
+            """,
+        )
+    )
+
+    assert config.solr is not None
+    assert config.solr.password_ref == REF_KEYCHAIN, (
+        "the reference the loader validated did not reach the model; a schema key "
+        "with no field behind it is a key that silently changes nothing"
+    )
 
 
 def test_the_redirect_allowlist_reads_an_ipv6_literal_host() -> None:

@@ -82,12 +82,16 @@ class SolrConfig:
         fail_if_open: Refuse to run against an unauthenticated Solr. An open Solr
             on a network this server can reach is a data-exfiltration path, and
             silently serving from one is the wrong default.
+        password_ref: Credential reference for the `basic` shape. Never a literal
+            (§15.8). Absent takes no part: the schema models it with a `$ref`,
+            so omitting it is the no-credential state and not a `TypeError`.
     """
 
     enabled: bool
     base_urls: tuple[str, ...] = ()
     credential_shape: str = "bearer"
     fail_if_open: bool = True
+    password_ref: str = ""
 
 
 @dataclass(frozen=True, slots=True)
