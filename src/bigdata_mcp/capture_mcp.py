@@ -1,4 +1,4 @@
-"""Capturing a relayed MCP `tools/call` as a fixture.
+r"""Capturing a relayed MCP `tools/call` as a fixture.
 
 §7.3 makes `mcp_client` a first-class transport, so the corpus has to be able to
 hold one, and the only honest way to fill it is to actually make the call. This
@@ -27,6 +27,18 @@ the tool as having returned nothing. The prefix is JSON so a reader can tell the
 status line from output the tool produced.
 
 Non-text content blocks are dropped with a count rather than silently.
+
+A command that cannot be started, and a server that starts and then will not answer,
+are translated by `_raise_typed_failure` into the two typed refusals — `ConfigError`
+for what the operator typed, `BackendUnreachable` for what the estate did not
+answer — because a raw library exception from a capture run is what `capture.main`
+exists to keep off the operator's terminal.
+
+`--command` is split with POSIX `shlex` rules, where an unquoted backslash escapes
+the character after it. A Windows path has to be quoted before it reaches here:
+`shlex.join` produces that spelling, and an operator who pastes a bare
+`D:\repo\python.exe` gets `D:repopython.exe` back and a launch failure that
+names no path they recognise.
 """
 
 from __future__ import annotations
@@ -40,6 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
+from typing import NoReturn
 
 from mcp import Client
 from mcp import MCPError
@@ -133,69 +146,22 @@ def capture(
         source_id: The upstream server this relay belongs to.
         operation: The call, as a label.
         provenance: Where this was captured, or `None` to describe the call itself.
-        connect: Builds the client, or `None` for the real stdio client. Injected so
-            a test can connect an in-process server rather than spawning one.
+        connect: The client seam; `None` builds the real stdio client.
 
     Returns:
         The observed fixture.
 
-    Raises:
-        ConfigError: If `command` is empty once the shell has had it, or names a
-            program that could not be started at all.
-        BackendUnreachable: If the server started and then would not answer --
-            a handshake that died, a transport that closed, a protocol fault.
-
-    `command` is split with POSIX `shlex` rules, where an unquoted `\\` escapes
-    the character after it. A Windows path therefore has to be quoted before it
-    reaches here -- `shlex.join` produces that spelling, and an operator who
-    pastes a bare `D:\repo\python.exe` gets `D:repopython.exe` back and a
-    launch failure that names no path they recognise.
+    A `--command` that is empty once the shell has had it is refused by
+    `_prepare`, which is where that `ConfigError` leaves from.
     """
-    if connect is None:
-        connect = _stdio_client
-    argv = shlex.split(command)
-    if not argv:
-        message = "--command was empty once the shell had it"
-        raise ConfigError(message)
-
-    async def call() -> tuple[str, str | None, bool]:
-        """Invoke the tool and flatten the result into the three parts a fixture stores.
-
-        Returns:
-            The text content, the structured content as a JSON string or `None`,
-            and whether the server flagged the call as an error. `is_error` is
-            carried rather than raised: a tool that answers "here is why it
-            failed" is an observation to record, not a transport fault.
-        """
-        async with connect(argv) as client:
-            result = await client.call_tool(tool, arguments)
-        return (
-            _text_of(result.content),
-            _structured_of(result.structured_content),
-            result.is_error,
-        )
-
+    connect, argv = _prepare(command, connect)
     try:
-        text, structured, is_error = asyncio.run(call())
-    except OSError as exc:
-        # The command never started: a missing binary, a directory without +x,
-        # a path that is not a program. That is what the operator typed, so it
-        # is the same refusal an empty `--command` raises -- `main` catches
-        # `BigDataMcpError` and answers exit 5, where a raw `FileNotFoundError`
-        # used to escape as a traceback.
-        message = f"{shlex.join(argv)} could not be started: {exc}"
-        raise ConfigError(message) from exc
-    except (MCPError, ExceptionGroup) as exc:
-        # The server started and then would not answer. `ExceptionGroup` is
-        # here because a stdio child that exits during the handshake surfaces
-        # through anyio's TaskGroup rather than as an `MCPError`, and an
-        # unconverted library exception from a capture run is exactly what
-        # `capture.main` exists to keep off the operator's terminal.
-        raise BackendUnreachable(
-            endpoint=f"mcp_client {shlex.join(argv)}",
-            detail=_transport_detail(exc),
-        ) from exc
-    return _fixture(
+        text, structured, is_error = asyncio.run(
+            _relay_call(connect, argv, tool, arguments)
+        )
+    except (OSError, MCPError, ExceptionGroup) as exc:
+        _raise_typed_failure(exc, shlex.join(argv))
+    return _recorded(
         _Call(
             tool=tool,
             arguments=arguments,
@@ -271,6 +237,118 @@ def _stdio_client(argv: Sequence[str]) -> Client:
         the context manager is entered.
     """
     return Client(StdioServerParameters(command=argv[0], args=list(argv[1:])))
+
+
+def _recorded(
+    call: _Call,
+    text: str,
+    structured: str | None,
+    *,
+    is_error: bool,
+) -> Fixture:
+    """Build the fixture from what the relay answered.
+
+    Split out of `capture` for the same reason `Session._request`'s hop loop was:
+    the function does two things — it asks the server and it records the answer —
+    and the recording half is a pure mapping from one shape to another. Naming it
+    separately keeps `capture` short enough to read as one pass.
+
+    Args:
+        call: What was asked for.
+        text: The result's text blocks, joined.
+        structured: The rendered `structured_content`, or `None`.
+        is_error: Whether the server marked the result an error.
+
+    Returns:
+        The observed fixture.
+    """
+    return _fixture(call, text, structured, is_error=is_error)
+
+
+def _prepare(command: str, connect: McpConnect | None) -> tuple[McpConnect, list[str]]:
+    """Split the command and resolve the client seam it names.
+
+    Args:
+        command: The server command as a shell-quoted string.
+        connect: The caller's seam, or `None` for the real stdio client.
+
+    Returns:
+        The client seam to use and the shell-split argv.
+
+    Raises:
+        ConfigError: If `command` is empty once the shell has had it.
+    """
+    argv = shlex.split(command)
+    if not argv:
+        message = "--command was empty once the shell has had it"
+        raise ConfigError(message)
+    return (connect or _stdio_client), argv
+
+
+async def _relay_call(
+    connect: McpConnect,
+    argv: Sequence[str],
+    tool: str,
+    arguments: dict[str, Any],
+) -> tuple[str, str | None, bool]:
+    r"""Invoke the tool and flatten the result into the three parts a fixture stores.
+
+    Args:
+        connect: Builds the client for `argv`.
+        argv: The server command, already split.
+        tool: The tool name to call.
+        arguments: The call's arguments.
+
+    Returns:
+        The text content, the structured content as a JSON string or `None`, and
+        whether the server flagged the call as an error. `is_error` is carried
+        rather than raised: a tool that answers "here is why it failed" is an
+        observation to record, not a transport fault.
+    """
+    async with connect(argv) as client:
+        result = await client.call_tool(tool, arguments)
+    return (
+        _text_of(result.content),
+        _structured_of(result.structured_content),
+        result.is_error,
+    )
+
+
+def _raise_typed_failure(exc: BaseException, argv_text: str) -> NoReturn:
+    """Raise the typed failure a launch or transport fault names.
+
+    A command that could not be started is the operator's own mistake — a
+    missing binary, a directory without `+x`, a path that is not a program — so
+    it raises the `ConfigError` an empty `--command` raises, and `main` answers
+    exit 5 where a raw `FileNotFoundError` used to escape as a traceback. A
+    command that *started* and then would not answer raises `BackendUnreachable`,
+    because §8.2 row 5 is the class for an endpoint that does not answer.
+
+    `ExceptionGroup` is in the second family because a stdio child that exits
+    during the handshake surfaces through anyio's TaskGroup rather than as an
+    `MCPError`, and an unconverted library exception from a capture run is
+    exactly what `capture.main` exists to keep off the operator's terminal.
+
+    It raises rather than returning, so `capture`'s control flow ends in the
+    `except` without the caller reading a value it has to re-raise — and so the
+    `from exc` chain keeps the original fault for whoever debugs the capture
+    itself.
+
+    Args:
+        exc: The fault the SDK raised.
+        argv_text: The shell-quoted command, quoted for the message.
+
+    Raises:
+        ConfigError: If the command could not be started at all.
+        BackendUnreachable: If the command started and then would not answer.
+    """
+    if isinstance(exc, OSError):
+        message = f"{argv_text} could not be started: {exc}"
+        raise ConfigError(message) from exc
+    raise BackendUnreachable(
+        endpoint=f"mcp_client {argv_text}",
+        detail=_transport_detail(exc),
+    ) from exc
 
 
 def _transport_detail(exc: BaseException) -> str:

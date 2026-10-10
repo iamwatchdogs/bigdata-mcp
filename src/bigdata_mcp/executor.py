@@ -362,9 +362,8 @@ class SubprocessExecutor:
                 `_terminate`, because a timeout that leaves the work running is not
                 a timeout.
             asyncio.CancelledError: Re-raised when the *caller* goes away, after
-                the child is killed. Not converted and not swallowed: a
-                cancellation that stops here would leave the task looking healthy
-                while its caller is gone, and the work still running on the host.
+                the child is killed — swallowed, it would leave the task looking
+                healthy while its caller was gone.
         """
         process: asyncio.subprocess.Process | None = None
         try:
