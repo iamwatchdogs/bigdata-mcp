@@ -293,3 +293,76 @@ def test_a_credential_reference_inside_an_open_map_is_accepted() -> None:
         )
     )
     assert config.posture is Posture.READ_ONLY
+
+
+def test_the_alias_skip_stops_at_the_table_boundary() -> None:
+    """A near-miss sibling is not skipped.
+
+    `_is_field_alias` matches the table or a dot-separated entry *under* it, not
+    the bare prefix: `field_aliases_v2` is a different table a future schema edit
+    can add, and a prefix comparison would silently exempt it forever.
+    `auth.custom` is closed today, so nothing in the loader can reach the
+    difference — which is exactly why it needs a direct test rather than a config
+    file to prove it.
+    """
+    from bigdata_mcp.config import _FIELD_ALIAS_PREFIX
+    from bigdata_mcp.config import _is_field_alias
+
+    table = _FIELD_ALIAS_PREFIX
+
+    assert _is_field_alias(table), "the alias table itself is skipped"
+    assert _is_field_alias(f"{table}.access_token"), "entries under it are skipped"
+    assert not _is_field_alias(f"{table}_v2.token"), (
+        "a sibling table sharing a prefix must still be scanned"
+    )
+    assert not _is_field_alias(f"{table}x.token"), (
+        "a prefix without the dot boundary must still be scanned"
+    )
+
+
+def test_a_field_alias_name_is_not_a_literal_credential() -> None:
+    """`field_aliases` holds names, and every one of them looks like a key.
+
+    The table maps this server's canonical field onto the name the IdP spells it
+    with, so `access_token = "at"` is a name on both sides of the `=` — the key
+    is this server's own field, the value is the IdP's. The leaf-key rule that
+    keeps `extra_headers` closed cannot tell the two maps apart and refused the
+    whole table, which left §16's example config unable to load at all.
+
+    Skipped by *path*, not by loosening the matcher: the same alias spellings
+    under `extra_headers` are still literals and still refused, which is what
+    keeps the exemption from becoming the way to write a token to disk.
+    """
+    config = load_config(
+        write_config(
+            _fresh_dir(),
+            """
+            [server]
+            mode = "read_only"
+
+            [auth]
+            tier = "custom"
+
+            [auth.custom]
+            field_aliases = { access_token = "at", client_id = "cid" }
+            """,
+        )
+    )
+    assert config.posture is Posture.READ_ONLY
+
+    with pytest.raises(ConfigError, match="no plaintext credential tier"):
+        load_config(
+            write_config(
+                _fresh_dir(),
+                """
+                [server]
+                mode = "read_only"
+
+                [auth]
+                tier = "custom"
+
+                [auth.custom]
+                extra_headers = { access_token = "at" }
+                """,
+            )
+        )

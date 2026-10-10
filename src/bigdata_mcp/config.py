@@ -81,6 +81,14 @@ _SECRET_KEY_NAMES: frozenset[str] = frozenset({
     "token",
 })
 
+#: The prefix of the one table whose keys *and* values are other systems' field
+#: names. `auth.custom.field_aliases` maps this server's canonical field name
+#: onto the name the configured IdP spells it with, so an entry like
+#: `access_token = "at"` is a name on either side of the `=`, and a literal
+#: secret could only hide in the side the IdP chose. Refusing the whole table
+#: is what lets §16's example config use it at all.
+_FIELD_ALIAS_PREFIX = "auth.custom.field_aliases"
+
 #: Leaf key suffixes that name a credential. `authorization` is here rather than
 #: in the exact set because every header spelling of it ends that way —
 #: `Authorization`, `Proxy-Authorization`, `X-Authorization` — and that is the one
@@ -252,6 +260,12 @@ def _reject_literal_secrets(document: dict[str, Any]) -> None:
     deliberately open map such as `auth.custom.extra_headers`, where the keys come
     from another system and cannot be enumerated in a schema.
 
+    `auth.custom.field_aliases` is the other open map and the opposite case: it
+    holds *names*, both halves of it, so every entry in it looks like a
+    credential under the leaf-key rule and none of them is one. Skipped here,
+    with `_FIELD_ALIAS_PREFIX` naming why, rather than by loosening the matcher
+    that keeps `extra_headers` closed.
+
     Args:
         document: The parsed TOML.
 
@@ -260,12 +274,30 @@ def _reject_literal_secrets(document: dict[str, Any]) -> None:
             so the operator knows which line to edit.
     """
     for dotted, leaf_key, value in _walk(document):
+        if _is_field_alias(dotted):
+            continue
         if not isinstance(value, str) or not _is_secret_key(leaf_key):
             continue
         if value.startswith(SECRET_REF_PREFIXES):
             continue
         message = f"{dotted}: {_LITERAL_CREDENTIAL_RULE} (got a literal value)"
         raise ConfigError(message)
+
+
+def _is_field_alias(dotted: str) -> bool:
+    """Whether a dotted path is an entry of the field-alias table.
+
+    The boundary is the `_FIELD_ALIAS_PREFIX` plus a dot, not the prefix
+    itself: `auth.custom.field_aliases` is the table, `auth.custom.field_aliases_x`
+    would be a sibling somebody adds later and skipping it would be a hole.
+
+    Args:
+        dotted: The dotted path of one flattened leaf.
+
+    Returns:
+        `True` for an entry under the alias table.
+    """
+    return dotted == _FIELD_ALIAS_PREFIX or dotted.startswith(f"{_FIELD_ALIAS_PREFIX}.")
 
 
 def _is_secret_key(key: str) -> bool:
