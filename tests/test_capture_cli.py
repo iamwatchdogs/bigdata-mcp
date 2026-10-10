@@ -154,6 +154,49 @@ def test_capture_overwrites_with_force(tmp_path: Path) -> None:
     )
 
 
+def test_an_existing_out_is_refused_before_the_request_is_sent(
+    server: LocalHttpServer, tmp_path: Path
+) -> None:
+    """Exit 4 costs a `stat`, not a round trip to the cluster.
+
+    The existence check used to live only in `_write`, which runs after
+    `_dispatch` — so an operator pointing a capture at last week's fixture paid
+    for the HTTP request, waited for the answer, and only then learned the
+    destination was occupied. Nothing about the refusal depends on what the
+    cluster would have said, so nothing justifies asking it.
+
+    Asserted against the server's access log rather than the exit code: a
+    pre-flight check that ran and let the request through anyway would still
+    exit 4, which is the failure this test exists to catch.
+    """
+    server.route("/info", lambda _p: json_reply({"state": "RUNNING"}))
+    out = tmp_path / "already-there.json"
+    out.write_text('{"schema_version": 1}\n', encoding="utf-8")
+
+    code = capture.main([
+        "https_api",
+        "--url",
+        server.url(),
+        "--source-id",
+        "yarn_rm",
+        "--operation",
+        "info",
+        "--allowlist-host",
+        "127.0.0.1",
+        "--path",
+        "/info",
+        "--out",
+        str(out),
+    ])
+
+    assert code == capture.EXIT_EXISTS
+    assert server.recorded == [], (
+        f"the request was sent for a capture that could not be written: "
+        f"{server.recorded}"
+    )
+    assert out.read_text(encoding="utf-8") == '{"schema_version": 1}\n'
+
+
 def test_a_capture_records_the_fields_that_prove_it_was_observed(
     tmp_path: Path,
 ) -> None:

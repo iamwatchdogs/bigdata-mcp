@@ -291,6 +291,14 @@ def main(
     if args.transport == Transport.SSH_CLI.value:
         sys.stdout.write(SSH_CLI_RECIPE)
         return EXIT_UNSUPPORTED_TRANSPORT
+    # Before the request, not after it. The refusal has nothing to do with what
+    # the cluster would answer, and paying for the round trip to learn that last
+    # week's file is still there is a trip the operator never asked for. `_write`
+    # keeps the same check: this one can lose a race it cannot see, and a second
+    # guard costs a `stat`.
+    if args.out.exists() and not args.force:
+        sys.stderr.write(_existing_target_message(args.out))
+        return EXIT_EXISTS
     try:
         fixture = _dispatch(args, connect=connect)
     except (BigDataMcpError, PermissionError) as exc:
@@ -417,8 +425,34 @@ def _wrap_ssh(args: argparse.Namespace) -> Fixture:
     )
 
 
+def _existing_target_message(out: Path) -> str:
+    """The refusal printed when a destination holds evidence already.
+
+    One message in one place, because the check now happens twice: before the
+    request is sent, and again at the write. Two copies of "already exists"
+    would let them drift, and the operator's only clue about why a capture did
+    nothing is the sentence that came back.
+
+    Args:
+        out: The destination path.
+
+    Returns:
+        The message, newline-terminated like every other CLI diagnostic here.
+    """
+    return (
+        f"error: {out} already exists. A captured fixture is evidence; "
+        "replacing one destroys the record of what changed. Pass --force if "
+        "you meant it.\n"
+    )
+
+
 def _write(fixture: Fixture, out: Path, *, force: bool) -> int:
     """Write a fixture, refusing to clobber without `--force`.
+
+    The existence check is a second guard rather than the only one: `main`
+    asks the same question before it sends a request, so an operator who points
+    a capture at last week's fixture learns so without waiting for the cluster
+    to answer.
 
     Args:
         fixture: The fixture to write.
@@ -429,11 +463,7 @@ def _write(fixture: Fixture, out: Path, *, force: bool) -> int:
         0 on success, 4 when the file exists and `force` is false.
     """
     if out.exists() and not force:
-        sys.stderr.write(
-            f"error: {out} already exists. A captured fixture is evidence; "
-            "replacing one destroys the record of what changed. Pass --force if "
-            "you meant it.\n"
-        )
+        sys.stderr.write(_existing_target_message(out))
         return EXIT_EXISTS
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(fixture.dumps(), encoding="utf-8")
