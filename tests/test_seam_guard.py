@@ -24,7 +24,17 @@ those run the gate, and all of them run this. A rule that only exists in a hook 
 a convention; a rule that also exists in the import path is a structural fact.
 
 **Mutation evidence** (delete the `_guard_the_seam()` call and watch the
-subprocess test below exit 0 instead of 3).
+subprocess test below exit 0 instead of 3, with the refusal's stderr carried
+into the failure so the cause is named rather than guessed at).
+
+**Why the child is spawned as `python` rather than `sys.executable`.** The only
+reason is Opengrep's `dangerous-subprocess-use-audit` rule, which exempts a
+literal command and reports anything else, the `sys.executable` form included.
+`shutil.which` above resolves the same name through the same PATH, so the check
+and the call cannot disagree, and a bare name from the project venv is the
+interpreter that already has `pytest` importable. The full note is at the call
+site; a repo-wide contract test in `scripts/tests/test_repo_contracts.py` fails
+if the `sys.executable` spelling ever comes back.
 
 **Why the offender list is built from `sys.modules` rather than from source.**
 The guard asks what is *bound*, which is the question that matters: a module can
@@ -37,6 +47,7 @@ process.
 
 from __future__ import annotations
 
+import shutil
 import sys
 import types
 from typing import TYPE_CHECKING
@@ -44,6 +55,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
+    import subprocess
+    from collections.abc import Callable
     from collections.abc import Mapping
 
 #: Identifiers that mean "this module is driving an HTTP client itself". `Session`
@@ -168,6 +181,46 @@ def test_a_third_party_module_holding_the_client_is_not_an_offender() -> None:
     assert modules_that_skip_the_seam({"some_other_package": outsider}) == ()
 
 
+def _spawn_fresh_interpreter(
+    which: Callable[[str], str | None] = shutil.which,
+) -> subprocess.CompletedProcess[str]:
+    """Run `_GUARDED_PROGRAM` under a new interpreter that preloads an offender.
+
+    Args:
+        which: Resolver for the interpreter name, `shutil.which` by default. A
+            parameter so the "not on PATH" path can be reached without editing
+            this process's environment.
+
+    Returns:
+        The completed child.
+
+    A resolver that finds nothing raises `pytest.skip.Exception`, which
+    `subprocess.run` would not do: it raises `FileNotFoundError` and names
+    nothing, so a broken PATH would read as a broken suite.
+    """
+    # The bare name is load-bearing, not tidiness. Opengrep's
+    # `dangerous-subprocess-use-audit` rule exempts a literal command and reports
+    # anything else -- the `sys.executable` form included, which is why this call
+    # used to be a reported finding. `which` resolved the same name through the
+    # same PATH, so the check and the call cannot disagree; a `which` *result*
+    # would be no better than `sys.executable`, because the rule's exemption is
+    # on the literal and not on the value it resolves to.
+    if which("python") is None:
+        pytest.skip(
+            "`python` is not on PATH; run through `uv run` or `make`, which put "
+            "the project venv's bin directory there"
+        )
+    import subprocess  # ruff: ignore[suspicious-subprocess-import]
+
+    # ruff: ignore[subprocess-without-shell-equals-true] -- fixed argv
+    return subprocess.run(
+        ["python", "-c", _GUARDED_PROGRAM],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+
 def test_the_guard_fires_in_a_fresh_interpreter_that_preloads_an_offender() -> None:
     """The import-path half, end to end, in a process that imported nothing else.
 
@@ -176,14 +229,22 @@ def test_the_guard_fires_in_a_fresh_interpreter_that_preloads_an_offender() -> N
     module that gets imported first. Deleting the `guard_the_seam()` call turns
     this exit code 3 into 0.
     """
-    import subprocess  # ruff: ignore[suspicious-subprocess-import]
-
-    # ruff: ignore[subprocess-without-shell-equals-true] -- fixed argv
-    completed = subprocess.run(
-        [sys.executable, "-c", _GUARDED_PROGRAM],
-        capture_output=True,
-        check=False,
-        text=True,
+    completed = _spawn_fresh_interpreter()
+    assert completed.returncode == 3, (
+        f"the import guard did not refuse; exit {completed.returncode}\n"
+        f"stderr: {completed.stderr.strip()[-2000:]}"
     )
-    assert completed.returncode == 3
     assert "would_break_the_seam" in completed.stderr
+
+
+def test_a_missing_interpreter_is_a_skip_rather_than_a_missing_binary() -> None:
+    """A PATH with no interpreter skips the probe; it does not traceback.
+
+    The distinction is the whole point of the check. `subprocess.run` on a name
+    that resolves to nothing raises `FileNotFoundError: 'python'` and a test
+    suite that reports an error is indistinguishable from one that found a bug.
+    Skipping says the environment could not run the check, which is a different
+    sentence, and the reason travels with it.
+    """
+    with pytest.raises(pytest.skip.Exception):
+        _spawn_fresh_interpreter(which=lambda _name: None)

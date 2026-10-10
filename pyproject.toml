@@ -150,14 +150,15 @@ ignore = [
 # everywhere else -- a stray print in the engine is a stdout-purity failure, and
 # SPEC.md §6.2 requires stdout to be exactly one JSON object.
 "src/bigdata_mcp/capture.py" = ["T20"]
-# S607 (partial-path argv) applies to exactly three call sites, all in the
-# repository's own gates, which spell their argv inline so Opengrep's
-# `dangerous-subprocess-use-audit` sees a literal. The bare name is deliberate:
-# a `sys.executable`-relative argv is not exempt either, and an absolute path
-# would silence the check by hardcoding one machine's install prefix. Each call
-# is preceded by a `shutil.which` check, and pre-commit prepends the hook's venv
-# `bin` to `PATH`, so check and call resolve to the same binary. Scoped per file
-# so the next script spawning a bare name has to come back and say why.
+# S607 (partial-path argv) applies to exactly four call sites, all of which
+# spell their argv inline so Opengrep's `dangerous-subprocess-use-audit` sees a
+# literal. The bare name is deliberate: a `sys.executable`-relative argv is not
+# exempt either, and an absolute path would silence the check by hardcoding one
+# machine's install prefix. Each call is preceded by a `shutil.which` check, and
+# the tooling that runs them (pre-commit, `uv run`, `make`) puts the target's
+# venv `bin` on `PATH`, so check and call resolve to the same binary. Scoped per
+# file so the next script spawning a bare name has to come back and say why.
+"tests/test_seam_guard.py" = ["start-process-with-partial-path"]
 "scripts/coderabbit_advisory.py" = ["start-process-with-partial-path"]
 "scripts/bandit_gate.py" = ["subprocess-without-shell-equals-true", "start-process-with-partial-path"]
 "scripts/codacy_gate.py" = ["subprocess-without-shell-equals-true", "start-process-with-partial-path"]
