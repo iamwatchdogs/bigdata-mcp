@@ -583,6 +583,96 @@ async def test_a_concurrent_bypass_is_not_decided_by_whoever_arrived_first() -> 
     assert len(fake.calls) == 2, "the bypassed answer was served from the cache"
 
 
+async def test_the_retry_hint_reports_the_hold_the_queue_actually_had() -> None:
+    """§8.2 row 4 promises a retry-after, and it used to always promise 0.0.
+
+    `run` released its slot without the hold duration, so the queue's `_wait_s`
+    stayed at zero and `QueueFull.retry_after_s` — the number in the message a
+    refused caller reads — was `0.0` for every refusal. "Come back now" is the
+    one answer guaranteed to be refused, which is worse than saying nothing.
+
+    Three calls, because the hint is a *mean over completed holds*: the first
+    has to finish holding before any refusal can quote it, and a refusal needs a
+    slot someone is still holding. Two of the three are the test's own
+    sequencing and one is the event under test, which is why the fake gates its
+    second call open rather than racing the scheduler.
+
+    The clock is the engine's own and is advanced between the two: the hold is
+    measured with it, so a `FakeClock` is what makes the number deterministic
+    rather than wall-clock-dependent.
+    """
+    clock = FakeClock(0.0)
+    gates = [asyncio.Event(), asyncio.Event()]
+    arrived = [asyncio.Event(), asyncio.Event()]
+    calls: list[str] = []
+
+    class Gated(FakeExecutor):
+        """A fake whose calls hold their queue slot until the test lets them go."""
+
+        @override
+        async def exec(self, argv: Sequence[str], deadline: Deadline) -> ExecResult:
+            """Announce the call, then wait on its own gate.
+
+            Two events per call rather than one because the test has to know the
+            call *arrived* before it can advance the clock behind it, and a
+            single event set by the fake is indistinguishable from the one the
+            test is still waiting on.
+
+            Args:
+                argv: The command, unused — the calls are told apart by order,
+                    because every one of them runs the same program.
+                deadline: The engine's deadline, unused: the gate ends this call,
+                    not the budget.
+
+            Returns:
+                The fake's usual result.
+            """
+            index = len(calls)
+            calls.append(str(argv))
+            arrived[index].set()
+            await gates[index].wait()
+            return await super().exec(argv, deadline)
+
+    engine = PoliteEngine(
+        Gated(), edge_cores=8, budget_s=100.0, queue_cap=1, clock=clock
+    )
+
+    async def scenario() -> str | None:
+        """Complete one held call, hold a second, and refuse a third.
+
+        Returns:
+            The `QueueFull` message the refused caller was handed, or `None` if
+                the queue admitted a caller its cap should have refused — a
+                result the caller turns into a failed assertion rather than an
+                exception raised from inside the `finally`.
+        """
+        first = asyncio.ensure_future(engine.run("first", COUNT_ARGV))
+        await arrived[0].wait()
+        clock.advance(7.0)
+        gates[0].set()
+        await first
+
+        second = asyncio.ensure_future(engine.run("second", COUNT_ARGV))
+        await arrived[1].wait()
+
+        third = asyncio.ensure_future(engine.run("third", COUNT_ARGV))
+        try:
+            await third
+        except QueueFull as exc:
+            return str(exc)
+        finally:
+            gates[1].set()
+            await second
+        return None
+
+    message = await scenario()
+
+    assert message is not None, "a third caller was admitted to a queue capped at 1"
+    assert "Retry after 7.0s" in message, (
+        f"the refusal quoted a retry-after that was not the measured hold: {message}"
+    )
+
+
 async def test_callers_that_agree_on_caching_still_coalesce() -> None:
     """The other half: the key change must not split every bypass into real work."""
     fake = FakeExecutor()

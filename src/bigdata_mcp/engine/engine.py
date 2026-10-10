@@ -211,12 +211,22 @@ class PoliteEngine:
         # caller did not want cached. Two callers that disagree here do not
         # coalesce, which costs one extra backend call and keeps the flag honest.
         flight_key = key if use_cache else f"{key}\0nocache"
+        # The engine clock, not `time.monotonic`. Everything else this class
+        # measures — the cache, the single-flight, the deadline in `_guarded` —
+        # reads `self._clock`, and a hold duration from a different clock would
+        # be a number a `FakeClock` test cannot reproduce while the rest of the
+        # engine is deterministic.
+        held_since = self._clock.now()
         try:
             return await self.flight.do(
                 flight_key, lambda: self._guarded(key, argv, use_cache=use_cache)
             )
         finally:
-            self.queue.release()
+            # The slot was held for this long, which is what the queue's retry
+            # hint is a mean of. Releasing without it left `_wait_s` at 0.0, so
+            # the `QueueFull` message promised a retry-after and then said 0.0 —
+            # "come back now", which is the one answer guaranteed to be refused.
+            self.queue.release(waited_s=self._clock.now() - held_since)
 
     async def _guarded(
         self,
