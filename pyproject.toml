@@ -12,7 +12,14 @@ authors = [
 # [tool.ruff] target-version: a lower floor claims support lint and type
 # checking never verified, and the CI matrix only tests 3.14.
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "aiohttp>=3.13.3",
+    # C4 (§14.3): the strict load validates the PARSED TOML against
+    # schemas/config.schema.json with additionalProperties:false. Hand-rolling
+    # that would put a second, divergent definition of the rules in the tree.
+    "jsonschema>=4.25.1",
+    "mcp>=2.3.0",
+]
 
 [project.scripts]
 bigdata-mcp = "bigdata_mcp:main"
@@ -30,6 +37,7 @@ dev = [
     "pytest-testmon>=2.2.0",
     "pytest-xdist>=3.8.0",
     "ruff>=0.16.9",
+    "time-machine>=2.19.0",
     "ty>=0.0.84",
 ]
 
@@ -124,12 +132,24 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["unused-import", "undocumented-public-package"]
+# Both roots, listed separately because TOML has no way to alias one list into
+# another pattern, and the two suites ignore the same four rules for the same
+# reason: `assert` is what pytest evaluates, and `D`/`ANN`/`ARG` are noise on a
+# test. Widening either root's rules has to be done here twice, deliberately.
 "tests/**/*.py" = ["assert", "D", "ANN", "ARG"]
+"scripts/tests/**/*.py" = ["assert", "D", "ANN", "ARG"]
 # Executable tooling, not a library: run by `make` and by the pre-commit hook,
 # so a `__main__` guard and a `print`-based usage message are correct rather
 # than violations. S404/S603 are suppressed at the call site, where the argv is
 # fixed.
 "scripts/**/*.py" = ["T20", "INP"]
+# The capture CLI is the one library module whose job is to talk to a human: its
+# output *is* the deliverable, because an ssh_cli capture cannot be taken
+# programmatically and the manual recipe is the fallback the spec requires be
+# printed rather than discovered. Scoped to the single module so T20 stays live
+# everywhere else -- a stray print in the engine is a stdout-purity failure, and
+# SPEC.md §6.2 requires stdout to be exactly one JSON object.
+"src/bigdata_mcp/capture.py" = ["T20"]
 # S607 (partial-path argv) applies to exactly three call sites, all in the
 # repository's own gates, which spell their argv inline so Opengrep's
 # `dangerous-subprocess-use-audit` sees a literal. The bare name is deliberate:
@@ -138,9 +158,17 @@ ignore = [
 # is preceded by a `shutil.which` check, and pre-commit prepends the hook's venv
 # `bin` to `PATH`, so check and call resolve to the same binary. Scoped per file
 # so the next script spawning a bare name has to come back and say why.
+#
+# One other site is *suppressed* instead of rewritten, and needs no entry here:
+# `tests/test_seam_guard.py` spawns `sys.executable`, which the Opengrep rule
+# reports and no literal can satisfy on the Windows cell of the CI matrix. It
+# carries a `# nosemgrep` naming the rule and the evidence, and
+# `scripts/tests/test_subprocess_literals.py` fails if that justification is ever
+# dropped or copied without one.
 "scripts/coderabbit_advisory.py" = ["start-process-with-partial-path"]
 "scripts/bandit_gate.py" = ["subprocess-without-shell-equals-true", "start-process-with-partial-path"]
 "scripts/codacy_gate.py" = ["subprocess-without-shell-equals-true", "start-process-with-partial-path"]
+"scripts/coverage_gate.py" = ["subprocess-without-shell-equals-true", "start-process-with-partial-path"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -156,8 +184,10 @@ max-returns = 6
 max-statements = 50
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src"]
+testpaths = ["tests", "scripts/tests"]
+# `src` for the package under test, `scripts` so a test there can import the tool
+# it is testing by name instead of rebuilding a path to reach it.
+pythonpath = ["src", "scripts"]
 addopts = "--cov=bigdata_mcp --cov-report=term-missing -v -n auto"
 
 [tool.coverage.run]
@@ -167,11 +197,41 @@ branch = true
 
 [tool.coverage.report]
 # A floor, not a target, and never lower it to make a failing run pass -- fix
-# the missing test instead. Raise toward 90 as the server implementation lands.
-fail_under = 80
+# the missing test instead.
+#
+# 95% is the number, and it lives here as the source of truth for two reasons.
+#
+# * `codecov.yml` states the same 95% for Codecov's `project` and `patch`
+#   statuses. `scripts/tests/test_repo_contracts.py` asserts the two agree, so
+#   neither can be changed alone.
+# * `scripts/coverage_gate.py` reads this value and applies it to every file
+#   individually. Neither coverage.py (a single `fail_under` float, compared
+#   against the total) nor Codecov (`project` and `patch` statuses, also totals)
+#   can enforce a per-file floor, so one file could fall to 50% while the other
+#   twenty-four held the number and every gate stayed green. The gate owns no
+#   percentage of its own -- `make coverage-per-file` and the CI coverage step
+#   both run it, and `make test` chains it after the run that produced the data.
+fail_under = 95
 show_missing = true
 # Nothing to exclude: `src` is on sys.path via pytest's `pythonpath` and the
 # `__main__` guard is exercised by runpy in tests/test_main.py.
+
+[tool.docstrings]
+# The source of truth for `scripts/docstring_gate.py`, in the same shape and for
+# the same reason `[tool.coverage.report].fail_under` is: one number, one file the
+# gate can parse with `tomllib`.
+#
+# 100, not the 80 that is the usual default, and never lowered to make a failing
+# run pass -- document the function instead. `.coderabbit.yaml` states the same
+# value for CodeRabbit's docstring pre-merge check, and
+# `scripts/tests/test_repo_contracts.py` asserts the two agree.
+#
+# The two are not duplicates. CodeRabbit's reviews a diff, so a function that
+# loses its docstring stops being reviewed the moment it ages out of a pull
+# request's range; the gate here reads the whole tree on every commit. The tree sat
+# at 71% while PR #4 reported one narrow finding, which is what a diff-scoped
+# check costs.
+threshold = 100
 
 [tool.bandit]
 # Codacy reported Bandit on every PR as an advisory finding that nothing failed
@@ -182,7 +242,7 @@ show_missing = true
 # than a quiet one.
 #
 # B101 assert_used — a pytest suite is built from `assert`. The ruff equivalent
-#   (S101) is suppressed for `tests/**` above for the same reason, and `make
+#   (S101) is suppressed for both test roots above for the same reason, and `make
 #   test` runs pytest, which is what evaluates those asserts.
 #
 # B404 import_subprocess — fires on ANY import of `subprocess`.

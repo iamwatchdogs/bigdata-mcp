@@ -1,0 +1,19 @@
+{
+  "comment": "SPEC.md \u00a711.1.1: a path outside `allowed_prefixes` is refused by the cluster's own permission model with exit code 1 and a message naming the path. The exit code is the signal; the message is for the human.",
+  "exit_code": 1,
+  "operation": "hdfs dfs -ls /etc/",
+  "request": {
+    "argv": [
+      "hdfs",
+      "dfs",
+      "-ls",
+      "/etc/"
+    ]
+  },
+  "schema_version": "bigdata-mcp/fixture@1",
+  "source": "synthetic",
+  "source_id": "hdfs",
+  "stderr": "ls: `/etc/': Permission denied: user=analyst, access=READ, inode=\n",
+  "stdout": "",
+  "transport": "ssh_cli"
+}

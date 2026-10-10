@@ -1,0 +1,58 @@
+# Codecov status configuration.
+#
+# This file states the coverage policy that Codecov enforces on the PR, and it
+# exists because without it Codecov's own defaults apply: `patch` wants 100% of
+# the diff and `project` compares against the base commit, neither of which is a
+# written number anyone can read from this repository. PR #4 was red for days on
+# an implicit 100% target that no file here mentioned.
+#
+# 95% everywhere, and the number has three homes on purpose:
+#
+#   pyproject.toml [tool.coverage.report].fail_under
+#       Enforced by coverage.py on every `pytest` -- a project total, compared
+#       before anything is pushed. It is the source of truth: `coverage_gate.py`
+#       reads it and applies it per file.
+#
+#   scripts/coverage_gate.py (reads the value above)
+#       The per-file floor. Neither coverage.py nor Codecov can enforce one --
+#       both are totals -- so a single file could fall to 50% while the other
+#       twenty-four held the number and every check stayed green. Wired into
+#       `make test` and the CI coverage step.
+#
+#   this file
+#       Codecov's `project` and `patch` statuses on the PR. Again totals: they
+#       catch a PR whose diff or whose package moved below the floor.
+#
+# `scripts/tests/test_repo_contracts.py` asserts the pyproject value and the
+# `project` target here are the same number, so neither can be changed alone.
+
+coverage:
+  status:
+    project:
+      default:
+        # The whole package, absolute rather than relative to the base commit.
+        target: 95%
+        # A fixed target still allows a drop against it unless the threshold
+        # says otherwise, so this is spelled out: at the floor passes, under
+        # the floor fails.
+        threshold: 0%
+        # Not advisory. Enforced rather than reported, so a red check means the
+        # floor was missed rather than that Codecov had an opinion about it.
+        informational: false
+    patch:
+      default:
+        # Coverage of the lines this PR actually touched. 95% rather than
+        # Codecov's default 100%, which is what PR #4 failed on while every gate
+        # in this repository passed.
+        target: 95%
+        threshold: 0%
+        informational: false
+
+comment:
+  # The full default comment repeats the same summary on every push. `once`
+  # posts it on the first analysis and updates it after; `reach, diff, flags,
+  # files` keeps the parts a reviewer needs to answer "did this PR weaken the
+  # floor?" without scrolling past the rest.
+  layout: "reach, diff, flags, files"
+  behavior: once
+  require_changes: true

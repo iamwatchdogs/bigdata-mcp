@@ -1,0 +1,21 @@
+{
+  "comment": "SPEC.md \u00a711.1.2: `hdfs dfs -count -q -v` on an empty prefix reports `none` for the size and `inf` for the remaining-space percentage. The literal string `NA` is what a shell-formatted parser tends to expect, so this fixture exists to prove the parser does not.",
+  "exit_code": 0,
+  "operation": "hdfs dfs -count -q -v /warehouse/",
+  "request": {
+    "argv": [
+      "hdfs",
+      "dfs",
+      "-count",
+      "-q",
+      "-v",
+      "/warehouse/"
+    ]
+  },
+  "schema_version": "bigdata-mcp/fixture@1",
+  "source": "synthetic",
+  "source_id": "hdfs",
+  "stderr": "",
+  "stdout": "       QUERY_REPONSE       : 0\t\tnone\tnone\tinf\t0\t0\n        QUERY_REPONSE       : 1\t\tnone\t\tnone\t\tnone\t0\t0\n",
+  "transport": "ssh_cli"
+}

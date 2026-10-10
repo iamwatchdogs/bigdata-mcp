@@ -8,7 +8,7 @@ RUN    := $(UV) run
 PYTHON := $(RUN) python
 PREK   := prek
 RUFF   := $(RUN) ruff
-PY     := src tests
+PY     := src tests scripts
 
 # no-commit-to-branch is excluded: it guards `git commit`, not code quality.
 HYGIENE := trailing-whitespace end-of-file-fixer mixed-line-ending \
@@ -17,12 +17,13 @@ HYGIENE := trailing-whitespace end-of-file-fixer mixed-line-ending \
            check-added-large-files
 
 .PHONY: help install update lock hooks uninstall hooks-update hooks-list \
-        hooks-validate lint lint-check format format-check fmt fix typecheck \
-        complexity actionlint workflows test testmon coverage coverage-html \
-        hygiene checks security zizmor osv gitleaks bandit codacy codacy-install \
-        coderabbit \
-        verify ci run build binary \
-        remote clean clean-all
+         hooks-validate lint lint-check format format-check fmt fix typecheck \
+         complexity actionlint workflows test testmon coverage coverage-html \
+         coverage-per-file docstrings \
+         hygiene checks security zizmor osv gitleaks bandit redirect-gate \
+         docstring-gate codacy codacy-install coderabbit \
+         verify ci run build binary \
+         remote clean clean-all
 
 ##@ Setup
 
@@ -83,6 +84,9 @@ actionlint: ## lint GitHub Actions workflows (mirrors actionlint hook)
 
 test: ## Full pytest suite (coverage + xdist via pyproject addopts)
 	$(RUN) pytest
+	@# The per-file floor runs on the report this run just produced, so the gate
+	@# and the measurement can never disagree about which run they describe.
+	@$(MAKE) -s coverage-per-file
 
 testmon: ## pytest-testmon on changed files (mirrors pytest-testmon hook)
 	@# `--no-cov`: testmon runs a subset, so a coverage percentage over it is
@@ -104,6 +108,15 @@ coverage: ## Print terminal coverage report from last test run
 coverage-html: ## Generate htmlcov/ report from last test run
 	$(RUN) coverage html
 
+coverage-per-file: ## Fail if any measured file is under the per-file floor
+	@# Per-file, because `fail_under` is a project total and Codecov's statuses
+	@# are totals too -- a single file can fall to 50% while the other 24 hold
+	@# the number, and every gate stays green. The floor is read from
+	@# `fail_under`, so this target owns no number of its own. It is not in the
+	@# pre-commit stage: testmon runs a subset with `--no-cov` and there is no
+	@# report to read, which the gate treats as a failure rather than a pass.
+	$(PYTHON) scripts/coverage_gate.py
+
 ##@ Hygiene & gates (prek)
 
 hygiene: ## Run commit-time hygiene hooks on all files
@@ -114,6 +127,22 @@ checks: ## Full pre-commit stage on all files (skips branch guard)
 
 security: ## Pre-push gate: zizmor + osv-scanner + gitleaks + codacy + coderabbit (advisory)
 	$(PREK) run --all-files --stage pre-push
+
+redirect-gate: ## Assert only session.py may construct an HTTP client (§4.2 item 2)
+	$(PYTHON) scripts/redirect_gate.py
+
+docstrings: ## Report every function, class or module with no docstring
+	@# Reads the whole tree, not a diff: CodeRabbit's docstring pre-merge check is
+	@# scoped to "functions touched by this diff", so a function that loses its
+	@# docstring later is never examined again. That is how `tests/` reached 71%
+	@# while the pull request reported one narrow finding.
+	$(PYTHON) scripts/docstring_gate.py
+
+docstring-gate: docstrings ## Fail when definition coverage is under the threshold
+	@# Two names because the check is used in two senses: as a report
+	@# (`make docstrings`, tame output, exit 0 or 1) and as a gate that must not
+	@# report success when it could not read a file. The script owns both; this
+	@# alias only exists so the pre-commit hook can name the strict reading.
 
 bandit: ## Python security analysis (commit-time gate)
 	$(PREK) run bandit --all-files

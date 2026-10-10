@@ -1,0 +1,16 @@
+{
+  "comment": "SPEC.md \u00a712: `progress` is a NUMBER from 0 to 1, not a percentage string and not an integer percent. The float is deliberately written as 0.037 so a parser that multiplies by 100 or truncates to int is caught.",
+  "exit_code": 200,
+  "operation": "GET /ws/v1/cluster/apps",
+  "request": {
+    "method": "GET",
+    "params": {},
+    "path": "/ws/v1/cluster/apps"
+  },
+  "schema_version": "bigdata-mcp/fixture@1",
+  "source": "synthetic",
+  "source_id": "yarn_rm",
+  "stderr": "",
+  "stdout": "{\"apps\": {\"app\": [{\"id\": \"application_1730000000_0001\", \"user\": \"analyst\", \"name\": \"hive-query\", \"state\": \"RUNNING\", \"finalStatus\": \"UNDEFINED\", \"progress\": 0.037, \"trackingUrl\": \"https://rm1.corp:8088/proxy/application_1730000000_0001/\"}]}, \"totalApps\": 1}",
+  "transport": "https_api"
+}

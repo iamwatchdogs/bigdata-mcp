@@ -91,6 +91,42 @@ repos:
 
   - repo: local
     hooks:
+      - id: redirect-gate
+        name: "http seam: only session.py may build a client"
+        # SPEC.md §4.2 item 2 promised this rule in v1 and never wrote it.
+        # Fails at commit time rather than at review.
+        #
+        # `scripts/` is in the pattern, and it is in the pattern because the gate
+        # itself lives there: an edit to `scripts/redirect_gate.py` is the edit
+        # most likely to weaken it, and `^(src|tests)/` would skip the hook on
+        # exactly that file. Same failure mode as the bandit hook below.
+        entry: uv run python scripts/redirect_gate.py
+        language: system
+        pass_filenames: false
+        files: ^(src|tests|scripts)/.*\.py$
+
+      - id: docstring-gate
+        name: "docstring coverage: every definition documented"
+        # Routed through `make docstrings` so the hook and the Makefile cannot
+        # drift, the same routing `pytest-testmon` below uses.
+        #
+        # Same `files:` pattern as the redirect gate, and for a sharper version of
+        # the same reason: the gate reads the whole tree from the threshold in
+        # `[tool.docstrings]`, so a hook narrowed to `^(src|tests)/` would skip
+        # the very file most likely to weaken it (`scripts/docstring_gate.py`).
+        #
+        # This is the deterministic half of a rule `.coderabbit.yaml` also states.
+        # That check reviews a diff, so a definition that loses its docstring
+        # stops being reviewed the moment it ages out of the range; the tree sat
+        # at 71% while the PR reported one narrow finding. Neither replaces the
+        # other, and `scripts/tests/test_repo_contracts.py` asserts their
+        # thresholds agree.
+        entry: make docstrings
+        language: system
+        pass_filenames: false
+        files: ^(src|tests|scripts)/.*\.py$
+        types: [python]
+
       - id: pytest-testmon
         name: pytest-testmon on changed Python files
         # Routed through `make testmon` so the hook and the Makefile cannot
@@ -98,7 +134,9 @@ repos:
         # documented on that target.
         entry: make testmon
         language: system
-        files: ^(tests|src)/.*\.py$
+        # `scripts/` because the suite has two roots and a test under
+        # `scripts/tests/` is a test of a tool, not of `src/`.
+        files: ^(src|tests|scripts)/.*\.py$
         types: [python]
 
       - id: bandit
