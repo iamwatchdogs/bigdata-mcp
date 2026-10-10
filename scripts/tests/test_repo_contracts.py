@@ -461,6 +461,47 @@ def test_the_carryover_statement_agrees_with_the_traceability_table() -> None:
     )
 
 
+def test_the_sixteen_example_config_loads_through_the_shipped_schema(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """An example an operator copies must load, or the spec is a trap.
+
+    §16's TOML block is the one thing in the document somebody is guaranteed to
+    paste: `adapters = []` sat *after* the `[server]` keys, so TOML made it a key
+    of that table, and the schema closes every table it does not declare — the
+    schema answered that the property does not exist. `[kerberos]` set both
+    `keytab_ref` and `keytab`, which the schema forbids as a pair. Both refusals
+    are correct behaviour aimed at a config the document itself published.
+
+    Asserted by *loading* it, not by reading lines: the loader is the thing that
+    answers the operator's question, and a fixed example can drift again the
+    moment either side changes.
+    """
+    body = _section_text("16. Configuration")
+    match = re.search(r"```toml\n(.*?)```", body, re.DOTALL)
+    assert match is not None, (
+        "§16 no longer carries a ```toml block. The example is what an operator "
+        "copies, so its absence is a regression this test must fail on"
+    )
+    temporary = tmp_path_factory.mktemp("spec-example")
+    path = temporary / "example.toml"
+    path.write_text(match.group(1), encoding="utf-8")
+
+    # Imported here rather than at module scope: this is the one test in the file
+    # that loads the *product*, and the import belongs next to the assertion it
+    # serves rather than at the top of a module of document checks.
+    from bigdata_mcp.config import load_config
+    from bigdata_mcp.posture import Posture as PostureEnum
+
+    config = load_config(path)
+
+    assert config.posture is PostureEnum.READ_ONLY
+    assert config.adapters == (), (
+        "the example loads but `adapters` is not the empty allowlist §5.2 "
+        "describes as the default"
+    )
+
+
 def test_spec_commits_to_custom_port_family_and_mcp_aggregation() -> None:
     """Assert both capabilities absent from v1 are committed to in writing.
 

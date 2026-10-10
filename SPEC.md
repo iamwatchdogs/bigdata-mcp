@@ -1746,15 +1746,17 @@ TOML, at a path resolved by `--config` or `$BIGDATA_MCP_CONFIG`. Secrets are
 **references only**.
 
 ```toml
+# The ONLY entry-point adapter names that may be resolved. Empty (the default)
+# means no third-party adapter is ever loaded, even if installed. §5.2 states the
+# safety rule; this is the mechanism it was missing in v1. Root-level on purpose:
+# alongside `[server]` TOML would read it as a key of that table, and the schema
+# closes every table it does not declare.
+adapters = []
+
 [server]
 mode = "read_only"                # "read_only" | "read_write" — §2.1
 log_level = "info"                # stderr only
 observer_staleness_s = 5
-
-# The ONLY entry-point adapter names that may be resolved. Empty (the default)
-# means no third-party adapter is ever loaded, even if installed. §5.2 states the
-# safety rule; this is the mechanism it was missing in v1.
-adapters = []
 
 [limits]
 edge_host_concurrency = "auto"    # derived: clamp(cores/2, 2, 8)
@@ -1791,7 +1793,7 @@ credential_shape = "spnego"       # spnego | bearer | basic | cookie
 transport = "native"              # "native" | "curl_subprocess" — §15.9
 ccache_path = "~/.config/bigdata-mcp/ccache"   # a FILE path, never ambient
 keytab_ref = "keychain:bigdata-edge-keytab"     # OR a password from the keyring
-keytab = ""                       # literal path, mutually exclusive with the ref
+# keytab = "~/.krb5.keytab"       # literal path, mutually exclusive with the ref
 
 [solr]                            # a bundled custom-port instance — §13
 enabled = true
