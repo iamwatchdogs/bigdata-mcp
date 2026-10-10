@@ -13,6 +13,6 @@
   "source": "synthetic",
   "source_id": "yarn_rm",
   "stderr": "",
-  "stdout": "{\"apps\": [], \"appTypes\": [], \"totalApps\": 0}",
+  "stdout": "{\"apps\": {\"app\": []}, \"totalApps\": 0}",
   "transport": "https_api"
 }

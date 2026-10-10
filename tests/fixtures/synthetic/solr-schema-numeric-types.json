@@ -1,19 +1,16 @@
 {
-  "comment": "SPEC.md \u00a713.1.1: Solr reports a field's type as a set of literals ('int', 'long', 'string', ...). This fixture pins two int fields so a parser mapping them to str would be caught.",
+  "comment": "Solr's schema-fields handler reports a field's type as a literal string: 'int', 'pint', 'long', 'string', ... This fixture pins two int-shaped fields so a parser that maps every field to str is caught. §13 owns the Solr family this belongs to; the exact type vocabulary is Solr's, which is why it is recorded here rather than in the spec.",
   "exit_code": 200,
-  "operation": "GET /solr/warehouse/select?q=*:*&rows=0",
+  "operation": "GET /solr/warehouse/schema/fields",
   "request": {
     "method": "GET",
-    "params": {
-      "q": "*:*",
-      "rows": "0"
-    },
-    "path": "/solr/warehouse/select"
+    "params": {},
+    "path": "/solr/warehouse/schema/fields"
   },
   "schema_version": "bigdata-mcp/fixture@1",
   "source": "synthetic",
-  "source_id": "solr_query",
+  "source_id": "solr_schema",
   "stderr": "",
-  "stdout": "{\"responseHeader\": {\"status\": 0, \"QTime\": 7}, \"response\": {\"numFound\": 0, \"start\": 0, \"docs\": []}}",
+  "stdout": "{\"responseHeader\": {\"status\": 0, \"QTime\": 3}, \"fields\": [{\"name\": \"row_count\", \"type\": \"pint\", \"stored\": true, \"indexed\": true, \"multiValued\": false}, {\"name\": \"queue_depth\", \"type\": \"int\", \"stored\": true, \"indexed\": true, \"multiValued\": false}], \"defaults\": {\"stored\": true}}",
   "transport": "https_api"
 }
