@@ -110,10 +110,14 @@ repos:
         # Routed through `make docstrings` so the hook and the Makefile cannot
         # drift, the same routing `pytest-testmon` below uses.
         #
-        # Same `files:` pattern as the redirect gate, and for a sharper version of
-        # the same reason: the gate reads the whole tree from the threshold in
+        # Same `files:` pattern as the redirect gate, plus the file the gate's
+        # whole verdict comes from, and for a sharper version of the same
+        # reason: the gate reads the whole tree from the threshold in
         # `[tool.docstrings]`, so a hook narrowed to `^(src|tests)/` would skip
-        # the very file most likely to weaken it (`scripts/docstring_gate.py`).
+        # the very file most likely to weaken it (`scripts/docstring_gate.py`,
+        # and `pyproject.toml` holding its threshold). Editing the threshold is
+        # how the gate is loosened, and a hook that does not run on the edit is
+        # a hook that only hears about it later.
         #
         # This is the deterministic half of a rule `.coderabbit.yaml` also states.
         # That check reviews a diff, so a definition that loses its docstring
@@ -124,8 +128,8 @@ repos:
         entry: make docstrings
         language: system
         pass_filenames: false
-        files: ^(src|tests|scripts)/.*\.py$
-        types: [python]
+        files: ^((src|tests|scripts)/.*\.py|pyproject\.toml)$
+        types: [python, toml]
 
       - id: pytest-testmon
         name: pytest-testmon on changed Python files

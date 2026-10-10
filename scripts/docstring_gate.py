@@ -35,8 +35,8 @@ Two things this deliberately does not do.
 
 **It does not judge the docstring.** A gate cannot tell a sentence that explains
 why from one that restates the function's name, and a check that claimed to would
-be a lint rule about prose. `tests/test_repo_contracts.py` pins the *presence* of
-reasoning on a sample; this one pins presence everywhere.
+be a lint rule about prose. `scripts/tests/test_repo_contracts.py` pins the
+*presence* of reasoning on a sample; this one pins presence everywhere.
 
 **It does not pass when it cannot look.** A missing root, an unparseable file, a
 `pyproject.toml` with no `[tool.docstrings]`: each exits `2`, not `0`. A gate that

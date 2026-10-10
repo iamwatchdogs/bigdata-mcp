@@ -772,6 +772,35 @@ def test_the_docstring_gate_is_wired_into_the_commit_stage() -> None:
     assert hook < config.index("pytest-testmon")
 
 
+def test_the_docstring_gate_hook_fires_on_a_threshold_edit() -> None:
+    """Editing the threshold is how the gate is weakened, so the hook must see it.
+
+    `[tool.docstrings].threshold` lives in `pyproject.toml`, which the hook's
+    filter used to exclude -- a Python-only gate over a config the gate reads.
+    Lowering the threshold to `0` therefore passed commit and push untouched and
+    only showed up as a green run nobody had asked for.
+
+    Mutation evidence: reverting the filter to `^(src|tests|scripts)/.*\\.py$`
+    turns this red, which is the whole assertion.
+    """
+    config = (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    block = config[config.index("docstring-gate") :]
+    block = block[: block.index("- id:")] if "- id:" in block else block
+
+    filter_line = next(
+        line.strip() for line in block.splitlines() if line.strip().startswith("files:")
+    )
+    assert "pyproject" in filter_line, (
+        "the docstring-gate hook's `files:` filter no longer matches "
+        "`pyproject.toml`, so an edit to the threshold it reads does not run "
+        "the gate that enforces it"
+    )
+    assert "toml" in block, (
+        "the hook no longer declares the `toml` file type, so pre-commit does "
+        "not identify `pyproject.toml` as a file this hook covers"
+    )
+
+
 def test_the_docstring_gate_covers_the_same_roots_as_the_linters() -> None:
     """The gate reads `src`, `tests` and `scripts`, and never a narrower set.
 
