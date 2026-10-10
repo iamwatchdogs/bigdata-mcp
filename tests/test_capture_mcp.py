@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shlex
 import sys
 from typing import TYPE_CHECKING
 from typing import Any
@@ -448,9 +449,15 @@ def test_a_server_that_dies_in_the_handshake_is_unreachable_not_a_crash(
     as the `MCPError` the protocol errors arrive as. Rendering the members is
     what makes the message name the actual fault, and the exit code is what
     keeps the operator from reading a traceback as a bug in the capture tool.
+
+    The command is built with `shlex.join`, not an f-string. `capture` splits it
+    back with POSIX `shlex`, where an unquoted `\\` escapes the next character —
+    so on the `windows-latest` cell `D:\\a\\repo\\.venv\\Scripts\\python.exe`
+    would come back as `D:arepo.venvScriptspython.exe` and the test would fail
+    for a reason that has nothing to do with what it is proving.
     """
     out = tmp_path / "schema.json"
-    dead = f"{sys.executable} -c 'import sys; sys.exit(3)'"
+    dead = shlex.join([sys.executable, "-c", "import sys; sys.exit(3)"])
 
     with pytest.raises(BackendUnreachable, match="mcp_client"):
         capture_mcp.capture(

@@ -124,7 +124,7 @@ def capture(
     provenance: str | None = None,
     connect: McpConnect | None = None,
 ) -> Fixture:
-    """Call `tool` over stdio and return what the server answered.
+    r"""Call `tool` over stdio and return what the server answered.
 
     Args:
         tool: The tool name to call.
@@ -144,6 +144,12 @@ def capture(
             program that could not be started at all.
         BackendUnreachable: If the server started and then would not answer --
             a handshake that died, a transport that closed, a protocol fault.
+
+    `command` is split with POSIX `shlex` rules, where an unquoted `\\` escapes
+    the character after it. A Windows path therefore has to be quoted before it
+    reaches here -- `shlex.join` produces that spelling, and an operator who
+    pastes a bare `D:\repo\python.exe` gets `D:repopython.exe` back and a
+    launch failure that names no path they recognise.
     """
     if connect is None:
         connect = _stdio_client
