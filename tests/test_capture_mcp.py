@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import base64
 import json
+import sys
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import Self
@@ -63,6 +64,7 @@ from mcp.types import TextContent
 
 from bigdata_mcp import capture
 from bigdata_mcp import capture_mcp
+from bigdata_mcp.errors import BackendUnreachable
 from bigdata_mcp.errors import ConfigError
 from bigdata_mcp.fixtures import Transport
 from bigdata_mcp.fixtures.fields import load_fixture
@@ -237,7 +239,11 @@ def _connector(server: MCPServer) -> Callable[[Sequence[str]], Client]:
 
 
 def _mcp_argv(
-    out: Path, *, arguments: str = '{"name": "users"}', tool: str = "schema_get"
+    out: Path,
+    *,
+    arguments: str = '{"name": "users"}',
+    tool: str = "schema_get",
+    command: str = UNUSED_ARGV,
 ) -> list[str]:
     """Return a complete `mcp_client` argv.
 
@@ -245,6 +251,8 @@ def _mcp_argv(
         out: Where to write the fixture.
         arguments: The `--arguments` JSON.
         tool: The tool to call.
+        command: The `--command` string. Defaults to the stand-in, because the
+            injected client never spawns it.
 
     Returns:
         An argv list suitable for `capture.main`.
@@ -252,7 +260,7 @@ def _mcp_argv(
     return [
         "mcp_client",
         "--command",
-        UNUSED_ARGV,
+        command,
         "--tool",
         tool,
         "--arguments",
@@ -398,6 +406,65 @@ def test_a_quoted_command_is_split_like_a_shell_would(tmp_path: Path) -> None:
     capture.main(argv, connect=_connector(_registry()))
 
     assert load_fixture(out).request["argv"] == ["python", "-m", "registry"]
+
+
+def test_a_command_that_cannot_start_is_a_refusal_not_a_traceback(
+    tmp_path: Path,
+) -> None:
+    """A missing binary is the operator's mistake, so it answers as exit 5.
+
+    The seam here deliberately does *not* inject: `connect=None` takes the real
+    stdio client, and the command is a path that cannot exist. Before the
+    translation, the `FileNotFoundError` from the SDK's spawn escaped `main`,
+    which catches `BigDataMcpError` and `PermissionError` only — so a mistyped
+    `--command` printed a traceback instead of the refusal every other bad
+    argument gets. This is the one capture path where a real subprocess is the
+    only way to produce the failure.
+    """
+    out = tmp_path / "schema.json"
+
+    with pytest.raises(ConfigError, match="could not be started"):
+        capture_mcp.capture(
+            "schema_get",
+            {},
+            "/no/such/registry-server",
+            source_id="schema-registry",
+            operation="schema",
+        )
+
+    code = capture.main(_mcp_argv(out, command="/no/such/registry-server"))
+
+    assert code == 5, f"expected EXIT_REFUSED (5), got {code}"
+    assert not out.exists(), "a launch that never happened wrote a fixture"
+
+
+def test_a_server_that_dies_in_the_handshake_is_unreachable_not_a_crash(
+    tmp_path: Path,
+) -> None:
+    """A command that starts and exits is `BackendUnreachable`, with a reason.
+
+    Also un-injected, because the failure is inside anyio's TaskGroup: a stdio
+    child that exits during the handshake surfaces as an `ExceptionGroup`, not
+    as the `MCPError` the protocol errors arrive as. Rendering the members is
+    what makes the message name the actual fault, and the exit code is what
+    keeps the operator from reading a traceback as a bug in the capture tool.
+    """
+    out = tmp_path / "schema.json"
+    dead = f"{sys.executable} -c 'import sys; sys.exit(3)'"
+
+    with pytest.raises(BackendUnreachable, match="mcp_client"):
+        capture_mcp.capture(
+            "schema_get",
+            {},
+            dead,
+            source_id="schema-registry",
+            operation="schema",
+        )
+
+    code = capture.main(_mcp_argv(out, command=dead))
+
+    assert code == 5, f"expected EXIT_REFUSED (5), got {code}"
+    assert not out.exists(), "a capture whose server never answered wrote a fixture"
 
 
 def test_every_transport_has_a_capture_path() -> None:

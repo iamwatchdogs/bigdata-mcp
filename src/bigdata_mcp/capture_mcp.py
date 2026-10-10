@@ -42,12 +42,14 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from mcp import Client
+from mcp import MCPError
 from mcp import StdioServerParameters
 from mcp.types import TextContent
 
 if TYPE_CHECKING:
     import argparse
 
+from bigdata_mcp.errors import BackendUnreachable
 from bigdata_mcp.errors import ConfigError
 from bigdata_mcp.fixtures.schema import FIXTURE_SCHEMA_VERSION
 from bigdata_mcp.fixtures.schema import Fixture
@@ -138,7 +140,10 @@ def capture(
         The observed fixture.
 
     Raises:
-        ConfigError: If `command` is empty once the shell has had it.
+        ConfigError: If `command` is empty once the shell has had it, or names a
+            program that could not be started at all.
+        BackendUnreachable: If the server started and then would not answer --
+            a handshake that died, a transport that closed, a protocol fault.
     """
     if connect is None:
         connect = _stdio_client
@@ -164,7 +169,26 @@ def capture(
             result.is_error,
         )
 
-    text, structured, is_error = asyncio.run(call())
+    try:
+        text, structured, is_error = asyncio.run(call())
+    except OSError as exc:
+        # The command never started: a missing binary, a directory without +x,
+        # a path that is not a program. That is what the operator typed, so it
+        # is the same refusal an empty `--command` raises -- `main` catches
+        # `BigDataMcpError` and answers exit 5, where a raw `FileNotFoundError`
+        # used to escape as a traceback.
+        message = f"{shlex.join(argv)} could not be started: {exc}"
+        raise ConfigError(message) from exc
+    except (MCPError, ExceptionGroup) as exc:
+        # The server started and then would not answer. `ExceptionGroup` is
+        # here because a stdio child that exits during the handshake surfaces
+        # through anyio's TaskGroup rather than as an `MCPError`, and an
+        # unconverted library exception from a capture run is exactly what
+        # `capture.main` exists to keep off the operator's terminal.
+        raise BackendUnreachable(
+            endpoint=f"mcp_client {shlex.join(argv)}",
+            detail=_transport_detail(exc),
+        ) from exc
     return _fixture(
         _Call(
             tool=tool,
@@ -241,6 +265,28 @@ def _stdio_client(argv: Sequence[str]) -> Client:
         the context manager is entered.
     """
     return Client(StdioServerParameters(command=argv[0], args=list(argv[1:])))
+
+
+def _transport_detail(exc: BaseException) -> str:
+    """Name the fault behind a transport failure, including the members of a group.
+
+    An `ExceptionGroup` from anyio's TaskGroup carries the real cause one level
+    down -- `BrokenResourceError`, `ClosedResourceError`, `MCPError` -- and the
+    group's own `__str__` reports "unhandled errors in a TaskGroup", which tells
+    an operator nothing they can act on. Rendering each member's type is what
+    makes the message name the actual failure.
+
+    Args:
+        exc: The launch or transport fault.
+
+    Returns:
+        The fault class names, joined when the fault is a group.
+    """
+    if isinstance(exc, BaseExceptionGroup):
+        return "; ".join(
+            f"{type(member).__name__}: {member}" for member in exc.exceptions
+        )
+    return f"{type(exc).__name__}: {exc}"
 
 
 def _text_of(blocks: Sequence[Any]) -> str:
