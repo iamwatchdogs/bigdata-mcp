@@ -381,11 +381,18 @@ def test_linux_counts_hadoop_jvms_even_when_unsupported() -> None:
 
 
 def test_macos_reads_sysctl_and_not_proc() -> None:
-    """This is the v1 defect: `/proc` does not exist on macOS at all."""
+    """This is the v1 defect: `/proc` does not exist on macOS at all.
+
+    The loadavg fixture is the braced `MACOS_LOADAVG` rather than a bare number,
+    which is the shape the kernel actually prints. An unbraced stand-in makes the
+    supported path a case no host produces, and D5 above then passes without the
+    parser having to survive real `sysctl` output — the exact shape of defect the
+    fixture's own note records.
+    """
     reading = detect(
         system="darwin",
         read_command=commands({
-            "vm.loadavg": "2.00\n",
+            "vm.loadavg": MACOS_LOADAVG,
             "hw.ncpu": "8\n",
             "hw.memsize": "17179869184\n",
         }),
@@ -445,7 +452,7 @@ def test_macos_reports_no_memory_rather_than_the_total() -> None:
     reading = detect(
         system="darwin",
         read_command=commands({
-            "vm.loadavg": "2.0\n",
+            "vm.loadavg": MACOS_LOADAVG,
             "hw.ncpu": "8\n",
             "hw.memsize": "17179869184\n",
         }),

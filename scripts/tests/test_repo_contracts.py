@@ -688,7 +688,6 @@ def test_codecov_enforces_the_same_floor_as_pyproject() -> None:
     """
     pyproject_floor = _fail_under_percent()
     codecov_target = _codecov_status_target("project")
-    codecov_target = _codecov_status_target("project")
 
     assert codecov_target == pyproject_floor, (
         f"codecov.yml project target is {codecov_target:g}% but pyproject "
