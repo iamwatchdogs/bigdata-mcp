@@ -119,6 +119,11 @@ repos:
         # how the gate is loosened, and a hook that does not run on the edit is
         # a hook that only hears about it later.
         #
+        # `types_or`, never `types`: pre-commit ANDs the entries of a `types:`
+        # list, so `[python, toml]` would describe a file carrying both tags —
+        # which none does — and the hook would never fire on any file at all.
+        # Spelled out here because the silent-failure half is the whole hazard.
+        #
         # This is the deterministic half of a rule `.coderabbit.yaml` also states.
         # That check reviews a diff, so a definition that loses its docstring
         # stops being reviewed the moment it ages out of the range; the tree sat
@@ -129,7 +134,7 @@ repos:
         language: system
         pass_filenames: false
         files: ^((src|tests|scripts)/.*\.py|pyproject\.toml)$
-        types: [python, toml]
+        types_or: [python, toml]
 
       - id: pytest-testmon
         name: pytest-testmon on changed Python files

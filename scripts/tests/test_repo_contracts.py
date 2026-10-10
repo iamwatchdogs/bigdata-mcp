@@ -924,8 +924,29 @@ def test_the_docstring_gate_hook_fires_on_a_threshold_edit() -> None:
         "`pyproject.toml`, so an edit to the threshold it reads does not run "
         "the gate that enforces it"
     )
+
+    # AND, not OR, is the failure mode worth naming: pre-commit ANDs the entries
+    # of a `types:` list, so `types: [python, toml]` matches a file carrying both
+    # tags -- none does -- and the hook then never fires on anything, including
+    # the threshold edit it exists to catch. A substring check for the two words
+    # passes against that dead configuration, so the list spelling itself is what
+    # is asserted.
+    types_line = next(
+        (
+            line.strip()
+            for line in block.splitlines()
+            if line.strip().startswith("types")
+        ),
+        "",
+    )
+    assert types_line.startswith("types_or:"), (
+        f"the docstring-gate hook declares {types_line or 'no types'!r}. A "
+        "`types:` list is ANDed, so [python, toml] matches no file at all and "
+        "the hook stops firing on every commit. Use `types_or`"
+    )
+
     assert "toml" in block, (
-        "the hook no longer declares the `toml` file type, so pre-commit does "
+        "the hook no longer names the `toml` file type, so pre-commit does "
         "not identify `pyproject.toml` as a file this hook covers"
     )
 
