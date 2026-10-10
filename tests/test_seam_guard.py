@@ -47,18 +47,14 @@ process.
 
 from __future__ import annotations
 
-import os
-import shutil
 import sys
 import types
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
 if TYPE_CHECKING:
     import subprocess
-    from collections.abc import Callable
     from collections.abc import Mapping
 
 #: Identifiers that mean "this module is driving an HTTP client itself". `Session`
@@ -137,12 +133,6 @@ offender = types.ModuleType("bigdata_mcp.would_break_the_seam")
 offender.ClientSession = object
 sys.modules["bigdata_mcp.would_break_the_seam"] = offender
 
-# Reported before the import so the caller can assert which interpreter ran,
-# on the refusal path as well as the success one. A bare command name resolves
-# through PATH, and the ambient PATH is not always the one the suite assumed:
-# the Windows cell of the CI matrix resolved a runner Python with no `pytest`.
-sys.stdout.write(sys.executable + "\\n")
-
 # Importing the module under test IS the guard firing: `guard_the_seam()` runs
 # at module scope, so the ImportError comes out of the import rather than out of
 # a call this program would have to remember to make.
@@ -189,76 +179,39 @@ def test_a_third_party_module_holding_the_client_is_not_an_offender() -> None:
     assert modules_that_skip_the_seam({"some_other_package": outsider}) == ()
 
 
-def _normalised(path: str) -> str:
-    """Canonicalise a path far enough for two spellings of one file to match.
-
-    Args:
-        path: The path to normalise.
-
-    Returns:
-        The path with case and symlinks resolved. Windows reports a path with
-        the drive letter's case it feels like, and a venv's `python` is a symlink
-        on POSIX, so neither spelling is safe to compare directly.
-    """
-    return os.path.normcase(os.path.realpath(path))
-
-
-def _spawn_fresh_interpreter(
-    which: Callable[[str], str | None] = shutil.which,
-) -> subprocess.CompletedProcess[str]:
+def _spawn_fresh_interpreter() -> subprocess.CompletedProcess[str]:
     """Run `_GUARDED_PROGRAM` under a new interpreter that preloads an offender.
-
-    Args:
-        which: Resolver for the interpreter name, `shutil.which` by default. A
-            parameter so the "not on PATH" path can be reached without editing
-            this process's environment.
 
     Returns:
         The completed child.
-
-    A resolver that finds nothing raises `pytest.skip.Exception`, which
-    `subprocess.run` would not do: it raises `FileNotFoundError` and names
-    nothing, so a broken PATH would read as a broken suite.
     """
-    # The bare name is load-bearing, not tidiness. Opengrep's
-    # `dangerous-subprocess-use-audit` rule exempts a literal command and reports
-    # anything else -- the `sys.executable` form included, which is why this call
-    # used to be a reported finding. A `which` *result* would be no better than
-    # `sys.executable`, because the rule's exemption is on the literal and not on
-    # the value it resolves to.
-    if which("python") is None:
-        pytest.skip(
-            "`python` is not on PATH; run through `uv run` or `make`, which put "
-            "the project venv's bin directory there"
-        )
-
-    # The name resolves through PATH, so the PATH is pinned to the one directory
-    # that means the suite's interpreter: the one holding `sys.executable`. This
-    # is the part that the literal does not buy on its own. The Windows cell of
-    # the CI matrix resolved a bare `python` to a runner Python with no `pytest`,
-    # and the test failed with an ImportError naming the wrong thing -- the guard
-    # had fired on the *first* ImportError it saw, which happened to be pytest's.
-    # Deriving the directory from `sys.executable` rather than from `which` is
-    # what makes it the suite's interpreter instead of whichever comes first, and
-    # it is why this needs no suppression on any platform.
-    #
-    # `resolve()` is deliberately absent: it follows the venv's `python` symlink
-    # to the interpreter it points at, whose parent is the base install's bin, so
-    # pinning that finds a Python with none of this suite's packages -- the same
-    # failure, one cause further down. The unresolved parent is the venv itself.
-    environment = os.environ.copy()
-    environment["PATH"] = os.pathsep.join([
-        str(Path(sys.executable).parent),
-        environment.get("PATH", ""),
-    ])
     import subprocess  # ruff: ignore[suspicious-subprocess-import]
 
-    # ruff: ignore[subprocess-without-shell-equals-true] -- fixed argv
-    return subprocess.run(
-        ["python", "-c", _GUARDED_PROGRAM],
+    # The argv is `sys.executable`, and this line is the reason.
+    # `dangerous-subprocess-use-audit` exempts a *literal* command and reports
+    # anything else, so this call is reported. It is suppressed here rather than
+    # fixed, because a literal is not available on the platforms this suite
+    # runs on, and two CI rounds produced the evidence for that:
+    #
+    # `["python", ...]` resolves on macOS and Ubuntu to the project venv, because
+    # both already carry it on PATH. On the Windows runner it resolved to the
+    # `actions/setup-python` interpreter, which has none of this suite's
+    # packages, and the failure surfaced as `No module named 'pytest'`.
+    # Pinning the child's PATH to `Path(sys.executable).parent` did not fix it:
+    # on Windows that directory is the setup-python toolcache's, not the venv's.
+    #
+    # The data here is static on both ends -- the program is a module-level
+    # constant and the interpreter is the process's own, so nothing reaches the
+    # call from outside. That is what makes the suppression a statement about
+    # this one call and not a precedent for the next one, which is the failure
+    # mode `docs/research/README.md` records for `with_testmon_lock.py`.
+    #
+    # nosemgrep: dangerous-subprocess-use-audit -- argv is this process's own
+    # interpreter running a module-level constant; no external data reaches it
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+        [sys.executable, "-c", _GUARDED_PROGRAM],
         capture_output=True,
         check=False,
-        env=environment,
         text=True,
     )
 
@@ -271,12 +224,10 @@ def test_the_guard_fires_in_a_fresh_interpreter_that_preloads_an_offender() -> N
     module that gets imported first. Deleting the `guard_the_seam()` call turns
     this exit code 3 into 0.
 
-    The child's interpreter is asserted as well, because the failure that
-    motivated pinning the child's PATH was a child that ran *some* interpreter:
-    a runner Python without `pytest` fails with an ImportError from the import
-    itself, which the guard reports indistinguishably from the one it exists to
-    raise. Two assertions, so a wrong interpreter cannot borrow a right exit
-    code.
+    The exit code alone cannot prove which refusal fired, so the message is
+    asserted as well. On Windows a child interpreter without `pytest` exits 3
+    too -- the program catches its own `ImportError` -- and only the message
+    distinguishes the guard's refusal from the wrong interpreter's.
     """
     completed = _spawn_fresh_interpreter()
     assert completed.returncode == 3, (
@@ -284,62 +235,3 @@ def test_the_guard_fires_in_a_fresh_interpreter_that_preloads_an_offender() -> N
         f"stderr: {completed.stderr.strip()[-2000:]}"
     )
     assert "would_break_the_seam" in completed.stderr
-    assert _normalised(completed.stdout.strip()) == _normalised(sys.executable), (
-        "the child ran a different interpreter than the suite; its PATH picked "
-        "up one without this suite's dependencies, so every assertion above "
-        "could be satisfied for the wrong reason"
-    )
-
-
-def test_a_missing_interpreter_is_a_skip_rather_than_a_missing_binary() -> None:
-    """A PATH with no interpreter skips the probe; it does not traceback.
-
-    The distinction is the whole point of the check. `subprocess.run` on a name
-    that resolves to nothing raises `FileNotFoundError: 'python'` and a test
-    suite that reports an error is indistinguishable from one that found a bug.
-    Skipping says the environment could not run the check, which is a different
-    sentence, and the reason travels with it.
-    """
-    with pytest.raises(pytest.skip.Exception):
-        _spawn_fresh_interpreter(which=lambda _name: None)
-
-
-def test_the_child_gets_the_suite_interpreter_when_path_lacks_it(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The pinned PATH is load-bearing, and this is the environment that proves it.
-
-    On this machine and in the POSIX CI cells the venv is already on PATH, so
-    deleting the pin changes nothing observable -- which is exactly why the
-    Windows cell's failure arrived as a surprise. Here every `venv` entry is
-    stripped from PATH, the shape the Windows runner turned out to have, and the
-    guard must still refuse for the right reason.
-
-    The interpreter identity is asserted, not just the exit code: with a
-    stripped PATH and no pin the child either runs nothing or runs an
-    interpreter without `pytest`, and the second case is the one that produced
-    `No module named 'pytest'` while the exit code still read 3.
-
-    Mutation evidence: M7, the `environment["PATH"]` pinning block deleted. On
-    macOS and Ubuntu this test goes red while every other test in the file
-    stays green, because on those two the ambient PATH already carries the venv
-    and the pin has nothing left to do.
-    """
-    monkeypatch.setenv(
-        "PATH",
-        os.pathsep.join(
-            entry
-            for entry in os.environ.get("PATH", "").split(os.pathsep)
-            if "venv" not in entry
-        ),
-    )
-    # Any non-`None` answer: the resolver exists to say "there is an interpreter
-    # to find", not to choose one, so a stripped PATH must not be able to turn
-    # the test into a skip and launder the mutation above.
-    completed = _spawn_fresh_interpreter(which=lambda _name: sys.executable)
-    assert completed.returncode == 3, (
-        f"the import guard did not refuse; exit {completed.returncode}\n"
-        f"stderr: {completed.stderr.strip()[-2000:]}"
-    )
-    assert "would_break_the_seam" in completed.stderr
-    assert _normalised(completed.stdout.strip()) == _normalised(sys.executable)
