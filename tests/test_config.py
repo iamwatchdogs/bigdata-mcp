@@ -240,6 +240,51 @@ def test_read_only_refuses_a_write_shaped_tool_name() -> None:
         )
 
 
+def test_a_read_only_portal_named_after_its_reads_is_accepted() -> None:
+    """`list_outputs` is a read, and the whole name is the surface there is.
+
+    Matched as a substring, `put` is inside "outputs" — so a portal named for
+    the read it serves was refused under the posture that forbids nothing it
+    does. `sprouting` is the same collision from the other direction: a word
+    that happens to contain `put` as an accident of English. A refusal that is
+    wrong is a refusal an operator deletes the rule over, so the matcher reads
+    whole `_`- and `-`-separated tokens and nothing else.
+
+    The word `drop_partitions` above still has to be refused, which is what
+    keeps this from being read as permission to loosen the rule.
+    """
+    schema = portal_schema(
+        name="list_outputs",
+        paths={"list": "list partitions"},
+        posture=Posture.READ_ONLY,
+    )
+    assert "method" not in schema["properties"], (
+        "a read-only portal schema grew a verb field"
+    )
+
+    accepted = portal_schema(
+        name="sprouting_jobs",
+        paths={"status": "read the sprout state"},
+        posture=Posture.READ_ONLY,
+    )
+    assert "method" not in accepted["properties"]
+
+
+def test_a_hyphenated_write_token_is_still_a_write() -> None:
+    """Tokens split on `-` as well as `_`: `put-partitions` says put.
+
+    Whole-token matching narrows the rule, so the narrowing has to be pinned at
+    its edge: the same word arrives hyphenated from a portal file written by
+    someone else's convention and must still be refused.
+    """
+    with pytest.raises(PermissionError, match="write verb"):
+        portal_schema(
+            name="put-partitions",
+            paths={"put": "put"},
+            posture=Posture.READ_ONLY,
+        )
+
+
 def test_portal_with_no_endpoints_is_refused() -> None:
     """An empty endpoint list is a bad spec, so it is a `ValueError`.
 

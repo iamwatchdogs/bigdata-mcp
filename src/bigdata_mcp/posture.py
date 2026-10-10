@@ -30,6 +30,7 @@ is.
 from __future__ import annotations
 
 import enum
+import re
 from typing import Any
 from typing import Literal
 
@@ -241,11 +242,18 @@ def _base_schema(name: str, paths: dict[str, str]) -> dict[str, Any]:
 def _names_a_write(name: str) -> bool:
     """Whether a tool name reads as a write verb.
 
+    Whole tokens only, split on `_` and `-`. A substring test reads as tidier
+    and is wrong twice over: `list_outputs` contains `put` inside "outputs", so
+    a read-only portal named for its read-only work is refused for the one verb
+    it does not have; and `sprouting` contains `put` as an accident of English.
+    Both are refusals an operator would have to argue with, and a refusal that
+    is wrong is a refusal that gets disabled.
+
     Args:
         name: The tool name.
 
     Returns:
-        True when any of `WRITE_VERB_WORDS` appears in the lowercased name.
+        True when any of `WRITE_VERB_WORDS` is a whole token of the name.
     """
-    lowered = name.lower()
-    return any(word in lowered for word in WRITE_VERB_WORDS)
+    tokens = set(re.split(r"[-_]", name.lower()))
+    return any(word in tokens for word in WRITE_VERB_WORDS)
