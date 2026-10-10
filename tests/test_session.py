@@ -81,6 +81,7 @@ FAKE_BEARER = "Bearer " + "-".join(("yarn", "secret"))
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -872,7 +873,9 @@ def test_an_https_redirect_is_refused_when_no_ca_bundle_is_configured() -> None:
         tls_server.stop()
 
 
-def test_an_unloadable_ca_bundle_is_a_config_error_not_a_crash() -> None:
+def test_an_unloadable_ca_bundle_is_a_config_error_not_a_crash(
+    tmp_path: Path,
+) -> None:
     """A missing or non-PEM bundle is a config fault, not an unhandled error.
 
     `ssl.create_default_context(cafile=...)` raises `FileNotFoundError` for a
@@ -881,9 +884,23 @@ def test_an_unloadable_ca_bundle_is_a_config_error_not_a_crash() -> None:
     run with a bad `--ca-bundle` used to die with a traceback instead of the
     documented exit 5. Mutation evidence: removing the try/except in
     `build_ssl_context` turns this test red with the raw `FileNotFoundError`.
+
+    The docstring named both failures for a long time while the test only
+    exercised the missing one, which is the quiet kind of drift: the
+    `SSLError` arm could have been deleted and the prose would still have
+    promised it. The not-PEM file is created here rather than assumed, because
+    `create_default_context` opens the path itself — a nonexistent one cannot
+    be non-PEM and a real file has to exist to be wrong.
     """
     with pytest.raises(ConfigError, match="Cannot load CA bundle"):
         build_ssl_context("/nonexistent/ca-bundle.pem")
+
+    not_pem = tmp_path / "not-a-bundle.pem"
+    not_pem.write_text(
+        "-----BEGIN CERTIFICATE-----\nnot base64, not DER\n", encoding="utf-8"
+    )
+    with pytest.raises(ConfigError, match="Cannot load CA bundle"):
+        build_ssl_context(str(not_pem))
 
 
 def test_the_connector_limit_is_explicit_not_aiohttps_unlimited_default() -> None:
