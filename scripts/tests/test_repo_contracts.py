@@ -374,6 +374,93 @@ def test_the_aiohttp_floor_is_the_pin_the_spec_gives_for_it() -> None:
     )
 
 
+def _traceability_rows() -> list[list[str]]:
+    """Return every data row of the traceability table, cell by cell.
+
+    `_traceability_table_cells` returns one cell per row, which is all the
+    leading-integer check needs. This returns the whole row, because the
+    disposition — *verbatim* or *amended* — is in the second cell and asserting
+    on it is the only way to check what the table says *about* a section rather
+    than merely that the section has a row.
+
+    The table is found the same way its sibling finds it: by a header row whose
+    first cell is exactly ``v1 §``. Two parsers of one table would let them
+    disagree about where it ends.
+    """
+    lines = _spec_text().splitlines()
+    header = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if _is_table_row(line)
+            and _table_cells(line)[:1] == [TRACEABILITY_HEADER_MARKER]
+        ),
+        None,
+    )
+    assert header is not None, (
+        f"{SPEC_PATH.name} contains no markdown table whose header row includes "
+        f"{TRACEABILITY_HEADER_MARKER!r}"
+    )
+
+    rows: list[list[str]] = []
+    for line in lines[header + 1 :]:
+        if not _is_table_row(line):
+            break
+        if _is_separator_row(line):
+            continue
+        rows.append(_table_cells(line))
+    assert rows, f"the traceability table in {SPEC_PATH.name} has no data rows"
+    return rows
+
+
+def test_the_carryover_statement_agrees_with_the_traceability_table() -> None:
+    """§1.1 says what carried over; §21 says how. They must not disagree.
+
+    §1.1 listed §4.2 among the sections "carried over verbatim" while §21's own
+    row for §4.2 reads "amended" — the blanket redirect ban replaced by the
+    scoped policy, and two CVE paragraphs added. A document that calls a
+    weakened section verbatim is a document nobody can check by reading one part
+    of it, and §4.2 is the section whose change is the whole point of the
+    rewrite.
+
+    Both halves are asserted because they encode one decision twice: §1.1's
+    claim, and §21's row. Reverting either has to fail.
+    """
+    spec = _spec_text()
+    paragraph = spec[spec.index("**v2 keeps every verified research finding") :]
+    paragraph = paragraph[: paragraph.index("\n\n")]
+    sentence = next((each for each in paragraph.split(". ") if "verbatim" in each), "")
+    assert sentence, (
+        "the §1.1 carryover paragraph no longer says which sections moved "
+        "unchanged. The distinction is the assertion's subject: a carryover "
+        "with no verbatim claim is a carryover nobody can check"
+    )
+    called_verbatim = set(re.findall(r"\d+\.\d+(?:\.\d+)*", sentence))
+    assert "4.2" not in called_verbatim, (
+        f"§1.1 describes §4.2 as carried over verbatim (verbatim list: "
+        f"{sorted(called_verbatim)}), but §21's traceability row for it says "
+        "'amended' — the blanket redirect ban became the scoped policy and two "
+        "CVE paragraphs were added"
+    )
+    assert "4.2" in paragraph, (
+        "the carryover paragraph no longer names §4.2 at all. Its amendment is "
+        "the single most consequential change in the rewrite and a paragraph "
+        "that omits it reads as though the section carried over untouched"
+    )
+
+    amended_rows = [
+        cells[0]
+        for cells in _traceability_rows()
+        if len(cells) > 1 and cells[1] == "amended"
+    ]
+    assert any(row.startswith("4.2 ") for row in amended_rows), (
+        f"§21 no longer marks §4.2 as amended (rows marked amended: "
+        f"{amended_rows}). The row is the record that the redirect ban was "
+        "rescoped; a reader who trusts §1.1's 'verbatim' and finds this row "
+        "missing has no way to learn the section changed"
+    )
+
+
 def test_spec_commits_to_custom_port_family_and_mcp_aggregation() -> None:
     """Assert both capabilities absent from v1 are committed to in writing.
 

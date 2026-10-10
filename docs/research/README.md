@@ -147,7 +147,7 @@ is where the "2 critical / 18 high" almost certainly come from. None of it is
 this project's code.
 
 The complex lizard output *does* read this repository: the highest cyclomatic
-complexity in `tests/test_repo_contracts.py` is 13, under the `complexipy` gate
+complexity in `scripts/tests/test_repo_contracts.py` is 13, under the `complexipy` gate
 of 15 in `pyproject.toml`, so the reported "Complexity 22" is Codacy's own
 aggregate on a different scale and not a regression against our gate.
 
@@ -566,7 +566,8 @@ defence stays unconditional either way.
 
 `SPEC.md` is rewritten as v2 with a §21 traceability table accounting for all 20
 v1 sections, and D1–D5 are left unedited. The rewrite's own contract tests are in
-`tests/test_repo_contracts.py`; this entry's are in `tests/test_research_ledger.py`.
+`scripts/tests/test_repo_contracts.py`; this entry's are in
+`scripts/tests/test_research_ledger.py`.
 
 ## Known unverified
 

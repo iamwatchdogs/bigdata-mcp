@@ -36,9 +36,11 @@ no judge was asked whether the spec delivered the product the owner described
 became the product definition, and a definition expressed only in terms of one
 estate cannot express a fabric.
 
-**v2 keeps every verified research finding from v1.** §4.2, §9.2, §11.1.1, §11.3,
-§13.1.1, §13.1.2 and §13.1.3 are carried over verbatim; §21 says where every other
-section went.
+**v2 keeps every verified research finding from v1.** §9.2, §11.1.1, §11.3, §13.1.1,
+§13.1.2 and §13.1.3 are carried over *verbatim*. §4.2 is the seventh of those
+carryovers and the one exception: it survives **amended**, because the blanket
+redirect ban became the scoped policy §4.2 now states, and CVE-2026-42551 and
+CVE-2026-19650 are new. §21 says where every other section went.
 
 ### 1.2 The workflows it must serve
 
