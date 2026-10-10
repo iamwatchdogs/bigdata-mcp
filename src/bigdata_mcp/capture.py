@@ -19,9 +19,9 @@ What it can reach, and what it cannot:
   turns operator-captured output into a fixture instead, and `--help` says so
   rather than letting it be discovered at the first attempt.
 
-Three things are refused rather than recorded, and all three are the same bug in
-different clothes: a fixture whose recorded request differs from the request the
-server actually received.
+Four things are refused rather than recorded, and all four are the same bug in
+different clothes: a fixture whose recorded exchange differs from the exchange the
+server actually made.
 
 `--params` is encoded into the query string rather than filed alongside the request.
 `Session.get` takes a URL and nothing else, so a `params` field that never reached
@@ -41,6 +41,14 @@ neither: every authenticated capture returned 401, which reads as an expired
 credential on the estate; and the backend learned the secret-store *name*, which is
 a map to wherever the real credential lives. A refusal is loud and correct; a 401
 recorded as an observation is neither.
+
+Four things are refused rather than recorded, and all four are the same bug in
+different clothes: a fixture whose recorded exchange differs from the exchange the
+server actually made. The fourth is a **truncated body** — `Session` replaces
+anything past the byte cap with a notice, so a capture of a larger response would
+record the notice as `stdout` beside `exit_code = 200` and `source = "observed"`.
+A parser built on that fixture learns a response the estate never sent, which is
+the failure this whole tool exists to prevent, so `_capture` refuses it.
 
 Everything written is `source = "observed"` with `captured_at` and `provenance`,
 and an existing file is never replaced without `--force`: silently overwriting a
@@ -371,6 +379,12 @@ def _capture(args: argparse.Namespace) -> Fixture:
             The status, the decoded body, and the URL the body actually came
             from. The last is the *resolved* URL after redirects, because §8.1's
             `resolved_params` exists for a confidently wrong answer.
+
+        Raises:
+            ConfigError: If the byte cap cut the body. `Session` writes a notice
+                in place of the missing bytes, so a fixture built from a cut body
+                would record that notice beside a 200 and call the result an
+                observation — the confident-wrongness this module refuses.
         """
         async with Session(
             allowlist=frozenset({args.allowlist_host}),
@@ -378,6 +392,12 @@ def _capture(args: argparse.Namespace) -> Fixture:
             ca_bundle=str(args.ca_bundle) if args.ca_bundle else None,
         ) as session:
             response = await session.get(url)
+            if response.truncated:
+                message = (
+                    f"response from {response.url} exceeds the byte cap; the body "
+                    "was cut, and a cut body is not an observation"
+                )
+                raise ConfigError(message)
             return response.status, response.body, response.url
 
     status, body, final_url = asyncio.run(call())

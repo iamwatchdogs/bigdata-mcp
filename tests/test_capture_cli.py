@@ -80,6 +80,7 @@ from tests.support.fixture_docs import observed
 from tests.support.http_server import LocalHttpServer
 from tests.support.http_server import json_reply
 from tests.support.http_server import redirect
+from tests.support.http_server import text
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -445,6 +446,51 @@ def test_no_params_means_no_query_string(
     assert code == 0
     assert server.recorded == ["/info"]
     assert "?" not in str(load_fixture(out).request["url"])
+
+
+def test_a_capture_refuses_a_body_the_byte_cap_cut(
+    server: LocalHttpServer, tmp_path: Path
+) -> None:
+    """A cut body is not an observation, so it is not recorded as one.
+
+    `Session` writes a notice in place of anything past the byte cap, so before
+    this refusal a fixture held that notice beside `exit_code = 200` and
+    `source = "observed"` — the confident-wrongness the module docstring names as
+    the failure the tool exists to prevent, committed to the corpus where a
+    parser would learn from it.
+
+    The route really is served: the assertion is on the exit code and on the
+    absence of the file, because "refused" and "never answered" would otherwise
+    be the same outcome. 100 KiB against the 96 KiB cap is enough to fire the
+    cut without a fixture too large to commit by accident.
+    """
+    server.route("/big", lambda _p: text("x" * (100 * 1024)))
+    out = tmp_path / "big.json"
+
+    code = capture.main([
+        "https_api",
+        "--url",
+        server.url(),
+        "--source-id",
+        "yarn_rm",
+        "--operation",
+        "apps",
+        "--allowlist-host",
+        "127.0.0.1",
+        "--path",
+        "/big",
+        "--out",
+        str(out),
+    ])
+
+    assert code == capture.EXIT_REFUSED, (
+        f"a cut body was recorded instead of refused (exit {code})"
+    )
+    assert not out.exists(), "a refused capture still wrote a fixture"
+    assert server.recorded == ["/big"], (
+        "the request was never sent, so the refusal proved nothing about a body "
+        "the cap would have cut"
+    )
 
 
 def test_an_http_capture_records_the_real_status_and_body(
