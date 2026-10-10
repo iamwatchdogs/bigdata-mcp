@@ -361,6 +361,10 @@ class SubprocessExecutor:
                 failure §8.1 names as worst. The child is killed first — see
                 `_terminate`, because a timeout that leaves the work running is not
                 a timeout.
+            asyncio.CancelledError: Re-raised when the *caller* goes away, after
+                the child is killed. Not converted and not swallowed: a
+                cancellation that stops here would leave the task looking healthy
+                while its caller is gone, and the work still running on the host.
         """
         process: asyncio.subprocess.Process | None = None
         try:
@@ -388,6 +392,15 @@ class SubprocessExecutor:
         except TimeoutError:
             await _terminate(process)
             raise DeadlineExceeded(argv[0], deadline.budget_s) from None
+        except asyncio.CancelledError:
+            # The caller went away — a cancelled request, or a server shutting
+            # down. The child is not part of that decision and does not go with
+            # it: reaping is what keeps a cancelled call from leaving a live
+            # process holding the host's pipes. Re-raised, because a
+            # cancellation swallowed here would leave the cleanup half-done and
+            # the task looking healthy.
+            await _terminate(process)
+            raise
         except (OSError, ValueError) as exc:
             return ExecResult(
                 stderr=f"{type(exc).__name__}: {exc}", exit_code=-1, spawn_failed=True

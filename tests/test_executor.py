@@ -288,6 +288,55 @@ async def test_a_timed_out_child_is_dead_and_not_merely_cancelled(
     )
 
 
+async def test_a_cancelled_call_still_reaps_the_child(tmp_path: Path) -> None:
+    """The child is not part of the caller's decision to go away.
+
+    A cancelled request cancels `communicate()`, which cancels the wait — it
+    does not signal the process. So the child kept running after the caller had
+    gone, holding its pipes and whatever the command had opened, and the
+    cancellation propagated past an executor that had stopped watching. Same
+    defect as the timeout case below, arrived at by a different door: the client
+    disconnects, the tool call is cancelled, and nothing in that sequence is a
+    reason for the work to keep running on the host.
+
+    CancelledError has to keep propagating — a swallowed cancellation leaves a
+    task that looks healthy while its caller is gone — so the assertion is on
+    both halves: the marker settles, and the cancellation escapes.
+    """
+    marker = tmp_path / "still-alive"
+    executor = SubprocessExecutor()
+    deadline = Deadline.starting_now(_SPAWN_GRACE_S)
+    program = (
+        "import pathlib, time\n"
+        f"marker = pathlib.Path({str(marker)!r})\n"
+        "while True:\n"
+        "    marker.write_text(str(time.time()))\n"
+        "    time.sleep(0.05)\n"
+    )
+
+    async def scenario() -> None:
+        """Cancel the call once its child is provably alive, then await the task."""
+        task = asyncio.create_task(
+            executor.exec([sys.executable, "-c", program], deadline)
+        )
+        try:
+            assert await _wait_for(marker), (
+                "the child never reached its first write, so nothing was proven "
+                "about whether the executor reaped it when the call was cancelled"
+            )
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            if not task.done():
+                task.cancel()
+
+    await scenario()
+    assert await _settled(marker), (
+        "the child was still running after the call that owned it was cancelled"
+    )
+
+
 @pytest.mark.skipif(
     sys.platform == "win32",
     reason=(
