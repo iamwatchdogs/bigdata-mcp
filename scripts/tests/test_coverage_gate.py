@@ -27,6 +27,10 @@ the other twenty-four hold the total at 98% and every gate stays green.
   `dangerous-subprocess-use-audit` rule (see `scripts/codacy_gate.py` for the same
   reasoning): with a literal program, an absent binary must still fail closed
   rather than escape as `FileNotFoundError`
+* C8 coerce a `fail_under` that is not a number, or default a missing
+  `num_statements` to zero ->
+  `test_a_floor_that_is_not_a_number_is_refused_not_coerced`,
+  `test_a_summary_without_num_statements_is_unreadable_not_empty`
 
 The tests drive `main()` through `--json` and read the floor from the repository's
 own `pyproject.toml`, which is what the gate does in production. They are written
@@ -241,6 +245,59 @@ def test_a_missing_report_is_a_failure_never_a_pass(
         path.write_text(content, encoding="utf-8")
 
     assert main(["--json", str(path)]) == EXIT_NO_REPORT
+
+
+def test_a_floor_that_is_not_a_number_is_refused_not_coerced(tmp_path: Path) -> None:
+    """A floor that is not a finite number is unreadable, not `1`.
+
+    Four shapes, each of which `isinstance(value, (int, float))` accepts:
+
+    * `true`, because `bool` is an `int` subclass and `float(True)` is `1`, so
+      every file would clear a floor nobody wrote;
+    * `"95"`, a string `float()` coerces without complaint — the number that
+      passes here is the number the operator believes is configured;
+    * `nan`, which fails every comparison and so passes every file while still
+      printing as a number;
+    * `inf`, which passes every file honestly and gates nothing.
+
+    TOML writes all four, so all four arrive from a real edit to
+    `pyproject.toml`.
+    """
+    cases = {
+        "bool": "true",
+        "string": '"95"',
+        "nan": "nan",
+        "inf": "inf",
+    }
+    for label, literal in cases.items():
+        fake = tmp_path / f"{label}.toml"
+        fake.write_text(
+            f"[tool.coverage.report]\nfail_under = {literal}\n", encoding="utf-8"
+        )
+        with pytest.raises(NoReport, match="fail_under"):
+            floor_from_pyproject(fake)
+
+
+def test_a_summary_without_num_statements_is_unreadable_not_empty(
+    tmp_path: Path,
+) -> None:
+    """A missing statement count is an unreadable report, not an empty file.
+
+    The gate exempts files carrying zero statements — `__init__.py` files no
+    test can affect — and a `.get(key, 0)` turns "the field is absent" into that
+    same exemption. A report that lost its counts would then pass every file it
+    could not measure, which is exactly the fail-open shape the module docstring
+    says this gate refuses. Booleans and floats are the same defect wearing
+    different clothes: `True` is an `int`, and `10.5` is not a count.
+    """
+    # The four shapes in order: absent (`None`), a bool, a float, and a string.
+    for statements in (None, True, 10.5, "10"):
+        summary: dict[str, object] = {"percent_covered": 0.0}
+        if statements is not None:
+            summary["num_statements"] = statements
+        report: dict[str, object] = {"files": {"x.py": {"summary": summary}}}
+        with pytest.raises(NoReport, match="num_statements"):
+            offenders(report, floor=95.0)
 
 
 def test_a_coverage_failure_is_reported_as_unreadable(

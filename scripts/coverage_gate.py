@@ -40,11 +40,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import]
 import sys
 import tomllib
 from pathlib import Path
+from typing import TypeGuard
 from typing import cast
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -57,6 +59,30 @@ EXIT_NO_REPORT = 2
 
 class NoReport(Exception):
     """The coverage report could not be obtained or understood."""
+
+
+def _is_number(value: object) -> TypeGuard[int | float]:
+    """Whether a value read from a config or a report is a usable number.
+
+    Two exclusions, both of which `isinstance(value, (int, float))` lets
+    through:
+
+    * `bool`, because it is an `int` subclass. TOML's `true` would become a
+      floor of `1`, and every file would then clear a floor nobody wrote.
+    * the non-finite numbers, because `nan` fails every comparison and so
+      passes every file while still printing as a number, and `inf` passes
+      every file honestly.
+
+    Args:
+        value: Anything parsed from TOML or from the report.
+
+    Returns:
+        `True` for an `int` or `float` that is neither a `bool` nor
+            non-finite.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value)
 
 
 def _as_mapping(value: object) -> dict[str, object] | None:
@@ -90,7 +116,10 @@ def floor_from_pyproject(path: Path = PYPROJECT_PATH) -> float:
         NoReport: If the file, section, or key is missing. Raised rather than
             defaulted to some number: a floor the gate invented is a floor
             nobody configured, and silently skipping the check would be worse
-            than not having it.
+            than not having it. Also raised for a value that is not a finite
+            number — `float()` coerces `"95"`, and `bool` and `nan` are numbers
+            to `isinstance`, so the coercion is where a floor of `true` would
+            quietly become `1`.
     """
     try:
         config = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -98,6 +127,11 @@ def floor_from_pyproject(path: Path = PYPROJECT_PATH) -> float:
     except (OSError, tomllib.TOMLDecodeError, KeyError, TypeError) as exc:
         message = f"cannot read [tool.coverage.report].fail_under from {path}"
         raise NoReport(message) from exc
+    if not _is_number(value):
+        message = (
+            f"[tool.coverage.report].fail_under in {path} is not a number: {value!r}"
+        )
+        raise NoReport(message)
     return float(value)
 
 
@@ -114,7 +148,9 @@ def offenders(report: dict[str, object], floor: float) -> list[tuple[str, float]
     Raises:
         NoReport: If the report has no usable file map, or a file's summary is
             missing the numbers this compares. An absent field is not a pass —
-            it is a report this gate cannot read.
+            it is a report this gate cannot read, and `num_statements` missing
+            from a summary is the dangerous shape of that: it reads as an empty
+            file, and an empty file is exempt.
     """
     files = _as_mapping(report.get("files"))
     if not files:
@@ -130,12 +166,12 @@ def offenders(report: dict[str, object], floor: float) -> list[tuple[str, float]
             raise NoReport(message)
 
         percent = summary.get("percent_covered")
-        if not isinstance(percent, (int, float)):
+        if not _is_number(percent):
             message = f"coverage report entry for {name} has no percent_covered"
             raise NoReport(message)
 
-        statements = summary.get("num_statements", 0)
-        if not isinstance(statements, int):
+        statements = summary.get("num_statements")
+        if isinstance(statements, bool) or not isinstance(statements, int):
             message = f"coverage report entry for {name} has no num_statements"
             raise NoReport(message)
         if statements == 0:
