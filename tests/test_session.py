@@ -615,6 +615,27 @@ def test_one_slow_chain_cannot_outlast_the_budget_it_started_with(
         run_async(scenario())
 
 
+def test_a_307_whose_target_is_not_a_url_is_refused(server: LocalHttpServer) -> None:
+    """A `Location` another system wrote is classified, not propagated.
+
+    `urljoin` and `host_of` both raise `ValueError` on a malformed IPv6 literal —
+    an opening bracket with no closing one, as the route below sends — and before
+    this the raw exception left the session. §5.2 admits no library type past
+    `Session.get`, and a caller cannot do anything with a traceback naming
+    `urlsplit`.
+    """
+    malformed = "https://" + "[" + "bad"
+    server.route("/malformed", lambda _p: redirect(malformed))
+
+    async def scenario() -> None:
+        """Follow the malformed redirect."""
+        async with trusted_session() as session:
+            await session.get(server.url("/malformed"))
+
+    with pytest.raises(PermissionError, match="not a URL"):
+        run_async(scenario())
+
+
 def test_a_redirect_chain_longer_than_the_limit_is_an_error(
     server: LocalHttpServer,
 ) -> None:
