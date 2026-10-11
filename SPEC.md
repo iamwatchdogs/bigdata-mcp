@@ -1128,7 +1128,7 @@ Base: `https://<rm>:8088`. **No SSH hop.** Authenticated with **SPNEGO**.
 > and left auth as an open item (§18.4). It is answered: the ResourceManager
 > authenticates with SPNEGO. The owner's verified command is
 > `curl --compressed -fksS --negotiate -u : -L "$url"`. v2 is designed around a
-> Kerberos credential (§15.4) rather than a bearer token.
+> Kerberos credential (§15.9) rather than a bearer token.
 
 | Rule | Detail |
 |---|---|

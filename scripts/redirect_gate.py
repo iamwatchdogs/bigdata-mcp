@@ -73,20 +73,25 @@ class ScanFailed(RuntimeError):
 
     A distinct type rather than a message in the violation list, so `main` can
     tell "found something" from "could not look" and exit differently for each.
+    A *file* that cannot be read is the same class of fact as a directory that
+    is not there: the scan stopped, and where it stopped is all that differs.
 
     Attributes:
-        directory: The directory that was expected to exist and did not.
+        path: The directory that was expected to exist, or the file that could
+            not be read.
     """
 
-    def __init__(self, directory: Path) -> None:
-        """Record which directory was missing.
+    def __init__(self, path: Path, reason: str = "package directory not found") -> None:
+        """Record what could not be scanned, and why.
 
         Args:
-            directory: The package directory that could not be scanned.
+            path: The directory or file the scan stopped at.
+            reason: What went wrong, phrased for the message. Defaults to the
+                missing-directory case this class was written for.
         """
-        message = f"{directory}: package directory not found; nothing was scanned"
+        message = f"{path}: {reason}; nothing was scanned"
         super().__init__(message)
-        self.directory = directory
+        self.path = path
 
 
 def _reporting_root(package_dir: Path) -> Path:
@@ -136,7 +141,15 @@ def find_violations(package_dir: Path = PACKAGE_DIR) -> list[str]:
         if module == allowed:
             continue
         relative = module.relative_to(root)
-        lines = module.read_text(encoding="utf-8").splitlines()
+        try:
+            lines = module.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError) as exc:
+            # Unreadable is not clean, and it is not a violation either: a file
+            # this gate could not read is a tree it could not finish scanning, so
+            # it is the exit-2 fact `ScanFailed` exists for. Left unguarded, a
+            # `UnicodeDecodeError` would escape as a traceback and Python would
+            # exit 1 -- "could not look" reported as "found something".
+            raise ScanFailed(module, f"unreadable: {type(exc).__name__}") from exc
         violations.extend(
             f"{relative}:{number}: {identifier}"
             for number, line in enumerate(lines, 1)

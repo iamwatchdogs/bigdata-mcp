@@ -92,7 +92,7 @@ def test_a_missing_package_directory_is_a_scan_failure_not_a_violation() -> None
     missing = REPO_ROOT / "no-such-package-dir-xyz"
     with pytest.raises(ScanFailed) as caught:
         find_violations(missing)
-    assert caught.value.directory == missing
+    assert caught.value.path == missing
 
 
 def test_main_reports_could_not_scan_separately_from_found_something(
@@ -106,6 +106,25 @@ def test_main_reports_could_not_scan_separately_from_found_something(
     missing = REPO_ROOT / "no-such-package-dir-xyz"
     assert main(missing) == 2
     assert "Cannot scan" in capsys.readouterr().out
+
+
+def test_an_unreadable_module_is_a_scan_failure_not_a_violation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A file this gate cannot read is "could not look", not "found something".
+
+    Both failure shapes are real: a file that is not UTF-8, and a file the
+    process cannot open. Either one escaping unguarded would raise a traceback,
+    and Python's own convention then exits 1 — the exit code that means "a
+    violation was found". An operator reading that would go looking for a seam
+    breach in a file the gate never managed to open.
+    """
+    package = tmp_path / "bigdata_mcp"
+    package.mkdir()
+    (package / "binary.py").write_bytes(b"VALUE = '\xff\xfe'\n")
+
+    assert main(package) == 2, "an unreadable module did not fail closed"
+    assert "unreadable" in capsys.readouterr().out
 
 
 def test_main_returns_zero_when_the_tree_is_clean() -> None:
