@@ -163,16 +163,26 @@ ignore = [
 # `bin` to `PATH`, so check and call resolve to the same binary. Scoped per file
 # so the next script spawning a bare name has to come back and say why.
 #
-# One other site is *suppressed* instead of rewritten, and needs no entry here:
-# `tests/test_seam_guard.py` spawns `sys.executable`, which the Opengrep rule
-# reports and no literal can satisfy on the Windows cell of the CI matrix. It
-# carries a `# nosemgrep` naming the rule and the evidence, and
-# `scripts/tests/test_subprocess_literals.py` fails if that justification is ever
-# dropped or copied without one.
+# One other site is *suppressed* instead of rewritten: `tests/test_seam_guard.py`
+# spawns `sys.executable`, which the Opengrep rule reports and no literal can
+# satisfy on the Windows cell of the CI matrix. It carries a `# nosemgrep` naming
+# the rule and the evidence, and `scripts/tests/test_subprocess_literals.py`
+# fails if that justification is ever dropped or copied without one.
 "scripts/coderabbit_advisory.py" = ["start-process-with-partial-path"]
 "scripts/bandit_gate.py" = ["subprocess-without-shell-equals-true", "start-process-with-partial-path"]
 "scripts/codacy_gate.py" = ["subprocess-without-shell-equals-true", "start-process-with-partial-path"]
 "scripts/coverage_gate.py" = ["subprocess-without-shell-equals-true", "start-process-with-partial-path"]
+# S603 here for the same reason as the four gates above, and with one addition
+# that makes it this file's own entry rather than a fifth of theirs: the same
+# call carries the `# nosemgrep` that silences Opengrep's
+# `dangerous-subprocess-use-audit`, and Opengrep reads a marker only on the line
+# its finding starts on. 88 columns cannot hold that marker beside a
+# `# ruff: ignore[subprocess-without-shell-equals-true]`: the marker line is 86
+# on a 26-character prefix and the directive is 52, so the two together are 140.
+# The ruff half moves here rather than pushing the marker up into a comment
+# block the tool ignores -- a position
+# `scripts/tests/test_subprocess_literals.py` used to accept.
+"tests/test_seam_guard.py" = ["subprocess-without-shell-equals-true"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

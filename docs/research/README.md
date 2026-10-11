@@ -442,6 +442,65 @@ osv-scanner, gitleaks, and CodeQL, plus dependency-review and Scorecard.
 Codacy is to become useful, the exclusion has to be configured in Codacy's own
 analysis settings, not in this repository.
 
+**The `tests/test_seam_guard.py:220` finding, and the suppression that did not
+suppress.** The platform reported
+`Semgrep_python.lang.security.audit.dangerous-subprocess-use-audit` at that line
+long after the repository had decided the call was safe and written a
+`# nosemgrep` for it. The call is a false positive of the *vulnerability* — a
+list argv, no shell, `sys.executable` plus a module-level constant — and the
+finding is nonetheless correct as a report of the *rule*: the rule exempts a
+literal, and `sys.executable` is not one. What was wrong was the suppression.
+
+Opengrep honours a `nosemgrep` marker **on the line its finding starts on**, and
+nowhere else. Measured on 1.26.0 with a replica of the rule carrying the same
+three `pattern-not` guards quoted above, against a multi-line `subprocess.run`
+whose finding starts on the `return subprocess.run(` line:
+
+| Marker position | Finding |
+|---|---|
+| in the comment block directly above the call | still reported |
+| `# nosemgrep` block opened before the `def` | still reported |
+| trailing the line the finding starts on | suppressed |
+
+Two independent things hid this. The contract in
+`scripts/tests/test_subprocess_literals.py` accepted a marker "on the call's own
+line **or in the comment block directly above it**", so the position that
+silences nothing was a position the suite certified — a green test over a
+suppression with no effect, which is the taxidermy failure in its purest form.
+And no local gate could have caught it: `.codacy/tools-configs/semgrep.yaml`
+does not contain this rule, and `--config auto` resolves 290 Python rules that
+do not include it either — proved by running `auto` against an unmarked probe,
+which also reported nothing — so `make codacy` stays green on a finding the
+platform keeps raising.
+
+The platform's own report is the corroboration the measurement cannot give by
+itself: it names line 220, which is the line the finding starts on, and the
+marker was two lines above it. The version is the one caveat. The probe ran on
+1.26.0, `.codacy/codacy.yaml` pins `opengrep@1.16.4`, and the platform's build is
+not visible from here — so the claim is "1.26.0 honoured no marker position other
+than the finding's own line", not "every opengrep does".
+
+Two smaller measurements fell out of the same fix. Ruff's S603 does not read
+`shell=False` as a suppression of itself; it carves out only calls whose argv
+elements are all string literals, verified by removing the keyword (the finding
+stays), by swapping the constant for a literal (it goes), and by dropping both
+(still gone). And the two markers cannot share 88 columns — the marker line is 86
+on a 26-character prefix, `# ruff: ignore[subprocess-without-shell-equals-true]`
+is 52, so the two together are 140 — while ruff's preview `noqa-comments` rule
+bans the shorter `# noqa: S603`. The ruff half therefore became a per-file entry
+in `pyproject.toml`, beside the four gates that already carry one.
+
+**Decision: fix the marker position, and leave the local gate blind on purpose.**
+Adding `dangerous-subprocess-use-audit` to `.codacy/tools-configs/semgrep.yaml`
+would let `make codacy` see this class of drift, and the cost was measured: it
+surfaces 7 findings across the five `scripts/` gates plus
+`with_testmon_lock.py:99`, whose argv is the script's purpose and which this
+ledger already records as expected to stay reported. Converting the gate's
+blindness into a finding storm is a change of its own and was not made here. The
+position contract in `scripts/tests/test_subprocess_literals.py` is a proxy for a
+behaviour no local test can execute; the measurement it stands on is the table
+above, which is why the table lives here and not only in a docstring.
+
 **Not a research decision:** the tooling, hook, and workflow conventions live in
 `AGENTS.md` and the commit history, not here. This ledger tracks decisions about
 the *product*.

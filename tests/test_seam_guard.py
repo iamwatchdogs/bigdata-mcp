@@ -215,12 +215,19 @@ def _spawn_fresh_interpreter() -> subprocess.CompletedProcess[str]:
     # this one call and not a precedent for the next one, which is the failure
     # mode `docs/research/README.md` records for `with_testmon_lock.py`.
     #
-    # nosemgrep: dangerous-subprocess-use-audit -- argv is this process's own
-    # interpreter running a module-level constant; no external data reaches it
-    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+    # The marker rides on the call below and not on this block, because that is
+    # the only position the tool reads: measured on opengrep 1.26.0, a marker in
+    # the comment block directly above a call suppresses nothing, and neither
+    # does one opened before the `def`. `shell=False` is spelled out because the
+    # finding is about shelling out, and ruff's S603 does not read that keyword
+    # as a suppression of itself, so its suppression is the per-file entry
+    # `pyproject.toml` carries for this module. `scripts/tests/
+    # test_subprocess_literals.py` is what keeps the marker on the call's line.
+    return subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit -- static argv
         [sys.executable, "-c", _GUARDED_PROGRAM],
         capture_output=True,
         check=False,
+        shell=False,
         text=True,
     )
 

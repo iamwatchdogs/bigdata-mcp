@@ -17,10 +17,12 @@ tree is written that no single module has a reason to assert about itself.
 
 from __future__ import annotations
 
+import tomllib
 from typing import TYPE_CHECKING
 
 from repo_support import META_TOOL_LITERALS
 from repo_support import NEW_CAPABILITY_LITERALS
+from repo_support import PYPROJECT_PATH
 from repo_support import REPO_ROOT
 from repo_support import _assert_literals_present
 
@@ -145,4 +147,47 @@ def test_repo_support_defines_each_reader_once() -> None:
         f"the second silently wins: {duplicated}. Delete every copy but the last; "
         "the readers pair two configurations that must agree, and two copies can "
         "drift into disagreeing without any gate noticing"
+    )
+
+
+#: The file whose single ``subprocess`` call carries Opengrep's ``# nosemgrep``
+#: marker, and the ruff rule that marker cannot make room for.
+SEAM_GUARD_PATH = "tests/test_seam_guard.py"
+SEAM_GUARD_RUFF_RULE = "subprocess-without-shell-equals-true"
+
+
+def test_seam_guard_ruff_suppression_is_a_per_file_ignore_entry() -> None:
+    """Assert the seam guard's ruff suppression is declared in configuration.
+
+    That call carries two independent suppressions on one physical line, and
+    the line cannot fit both. The Opengrep half is a ``# nosemgrep`` marker, and
+    opengrep reads a marker only on the line its finding starts on -- a marker in
+    the comment block above the call, or in a block opened before the ``def``,
+    suppresses nothing, which is measured and recorded in the module docstring of
+    ``scripts/tests/test_subprocess_literals.py``. The ruff half is
+    ``subprocess-without-shell-equals-true`` (S603): a 36-character rule name
+    against a marker line that already spends 86 of the line's 88 columns, so the
+    inline ``# ruff: ignore[...]`` form has nowhere left to go. Writing ``# noqa``
+    instead is closed off too, because ruff's own preview rule ``noqa-comments``
+    bans ``noqa`` in favour of ``ruff: ignore``.
+
+    The decision this entry records is therefore that the ruff half moves to
+    ``[tool.ruff.lint.per-file-ignores]`` and the marker keeps the line. Revert
+    it and the call goes unsuppressed by ruff while still reading as suppressed
+    by a marker -- the exact combination that left the platform reporting the
+    finding, which the two suppression contracts now guard against together.
+    """
+    configured = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))["tool"][
+        "ruff"
+    ]["lint"]["per-file-ignores"]
+    entry = configured.get(SEAM_GUARD_PATH)
+    assert entry == [SEAM_GUARD_RUFF_RULE], (
+        f"[tool.ruff.lint.per-file-ignores] maps {SEAM_GUARD_PATH!r} to {entry!r} "
+        f"rather than to [{SEAM_GUARD_RUFF_RULE!r}]. That mapping is where the "
+        "S603 suppression for this module lives, because the `# nosemgrep` "
+        "marker already spends 86 of the call line's 88 columns and the rule "
+        "name is 36 characters, leaving no room for an inline directive, and "
+        "`noqa-comments` rules `# noqa` out of this repository. Without the "
+        "entry the call is unsuppressed by ruff while still carrying a marker "
+        "that reads as suppressed."
     )
