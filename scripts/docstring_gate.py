@@ -104,26 +104,58 @@ class Finding(NamedTuple):
     name: str
 
 
+def _coerce_threshold(value: object, source: str) -> float:
+    """Turn a configured threshold into a float, or refuse a non-number.
+
+    The reading half of the check, kept apart from the half that judges the
+    number it read. A value of the wrong type would otherwise escape as an
+    uncaught `ValueError` and exit 1 with a traceback, where every other
+    unreadable-config case exits 2 with a reason.
+
+    Args:
+        value: The raw value, from TOML or from the command line.
+        source: Where it came from, named in the refusal message.
+
+    Returns:
+        The value as a float, with no claim yet made about its magnitude.
+
+    Raises:
+        ScanFailed: If it is not numeric, or does not parse as a float.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        message = (
+            f"{source} must be a number, got {type(value).__name__} ({value!r}); "
+            "a threshold the gate cannot read is not a threshold it can enforce"
+        )
+        raise ScanFailed(message)
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        message = (
+            f"{source} is not a number ({value!r}); a threshold the gate cannot "
+            "read is not a threshold it can enforce"
+        )
+        raise ScanFailed(message) from exc
+
+
 def _checked_threshold(value: object, source: str) -> float:
     """Coerce a configured threshold to a percentage, or refuse it.
 
-    Four refusals, and they are not pedantry. A nonnumeric value would escape
-    as an uncaught `ValueError` and exit 1 with a traceback, where every other
-    unreadable-config case exits 2 with a reason. A `nan` threshold is the one
-    that matters: `actual < nan` is always `False`, so a tree with half its
-    definitions undocumented would be reported **clean**. `inf` would fail a tree
-    that is complete, which is merely wrong rather than dangerous, but a gate
-    that cannot distinguish "wrong number" from "can't read the config" is the
-    shape `scripts/codacy_gate.py`'s docstring records from experience.
+    Four refusals, and they are not pedantry. The two about *reading* the value
+    live in `_coerce_threshold`, which this calls first.
 
-    The fourth refusal is about what the number *is*, not whether it can be
-    compared. Measured coverage cannot leave 0-100, so a threshold that does
-    decides `actual < threshold` by the arithmetic of the floor rather than by
-    the state of the tree: a negative one is one no tree can fall below, which
-    is `nan`'s silent-clean failure reached by a line an editor types by
-    mistake, and one above 100 is one no tree can reach. Refusing rather than
-    clamping, because a clamped gate would report a floor the operator never
-    set.
+    The two here are about the number itself. A `nan` threshold is the one that
+    matters: `actual < nan` is always `False`, so a tree with half its
+    definitions undocumented would be reported **clean**. `inf` would fail a
+    tree that is complete, which is merely wrong rather than dangerous, but a
+    gate that cannot distinguish "wrong number" from "can't read the config" is
+    the shape `scripts/codacy_gate.py`'s docstring records from experience.
+
+    And a threshold outside 0-100 decides `actual < threshold` by the
+    arithmetic of the floor rather than by the state of the tree: a negative
+    one is one no tree can fall below — `nan`'s silent-clean failure reached by
+    a line an editor types by mistake. Refusing rather than clamping, because
+    a clamped gate would report a floor the operator never set.
 
     Args:
         value: The raw value, from TOML or from the command line.
@@ -135,20 +167,7 @@ def _checked_threshold(value: object, source: str) -> float:
     Raises:
         ScanFailed: If it is not a number, not finite, or not a percentage.
     """
-    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-        message = (
-            f"{source} must be a number, got {type(value).__name__} ({value!r}); "
-            "a threshold the gate cannot read is not a threshold it can enforce"
-        )
-        raise ScanFailed(message)
-    try:
-        threshold = float(value)
-    except (TypeError, ValueError) as exc:
-        message = (
-            f"{source} is not a number ({value!r}); a threshold the gate cannot "
-            "read is not a threshold it can enforce"
-        )
-        raise ScanFailed(message) from exc
+    threshold = _coerce_threshold(value, source)
     if not math.isfinite(threshold):
         message = (
             f"{source} is {value!r}, which is not finite; "
