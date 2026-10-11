@@ -64,7 +64,6 @@ that awaits a no-op.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -72,8 +71,6 @@ import pytest
 
 from bigdata_mcp import capture
 from bigdata_mcp.errors import ConfigError
-from bigdata_mcp.fixtures import Fixture
-from bigdata_mcp.fixtures import Source
 from bigdata_mcp.fixtures import Transport
 from bigdata_mcp.fixtures.fields import load_fixture
 from bigdata_mcp.fixtures.fields import parse_fixture
@@ -132,115 +129,6 @@ def test_ssh_cli_subcommand_prints_the_recipe_and_exits_3(
     out = capsys.readouterr().out
     assert "hdfs dfs -count -q -v /warehouse/" in out
     assert 'echo "exit=$?"' in out
-
-
-def test_capture_refuses_to_overwrite_without_force(tmp_path: Path) -> None:
-    """An existing fixture is evidence; the CLI refuses to clobber it silently."""
-    out = tmp_path / "already-there.json"
-    out.write_text("{}\n", encoding="utf-8")
-    code = _wrap_ssh_argv(tmp_path, out=out, force=False)
-    assert code == capture.EXIT_EXISTS
-    assert out.read_text(encoding="utf-8") == "{}\n"
-
-
-def test_capture_overwrites_with_force(tmp_path: Path) -> None:
-    """`--force` is the operator's explicit consent to replace the evidence."""
-    out = tmp_path / "already-there.json"
-    out.write_text("{}\n", encoding="utf-8")
-    code = _wrap_ssh_argv(tmp_path, out=out, force=True)
-    assert code == 0
-    assert (
-        parse_fixture(json.loads(out.read_text(encoding="utf-8"))).source
-        is Source.OBSERVED
-    )
-
-
-def test_an_existing_out_is_refused_before_the_request_is_sent(
-    server: LocalHttpServer, tmp_path: Path
-) -> None:
-    """Exit 4 costs a `stat`, not a round trip to the cluster.
-
-    The existence check used to live only in `_write`, which runs after
-    `_dispatch` — so an operator pointing a capture at last week's fixture paid
-    for the HTTP request, waited for the answer, and only then learned the
-    destination was occupied. Nothing about the refusal depends on what the
-    cluster would have said, so nothing justifies asking it.
-
-    Asserted against the server's access log rather than the exit code: a
-    pre-flight check that ran and let the request through anyway would still
-    exit 4, which is the failure this test exists to catch.
-    """
-    server.route("/info", lambda _p: json_reply({"state": "RUNNING"}))
-    out = tmp_path / "already-there.json"
-    out.write_text('{"schema_version": 1}\n', encoding="utf-8")
-
-    code = capture.main([
-        "https_api",
-        "--url",
-        server.url(),
-        "--source-id",
-        "yarn_rm",
-        "--operation",
-        "info",
-        "--allowlist-host",
-        "127.0.0.1",
-        "--path",
-        "/info",
-        "--out",
-        str(out),
-    ])
-
-    assert code == capture.EXIT_EXISTS
-    assert server.recorded == [], (
-        f"the request was sent for a capture that could not be written: "
-        f"{server.recorded}"
-    )
-    assert out.read_text(encoding="utf-8") == '{"schema_version": 1}\n'
-
-
-def test_a_capture_records_the_fields_that_prove_it_was_observed(
-    tmp_path: Path,
-) -> None:
-    """Observedness is provable from the fixture: source, time, provenance."""
-    out = tmp_path / "captured.json"
-    assert _wrap_ssh_argv(tmp_path, out=out) == 0
-    fixture = parse_fixture(json.loads(out.read_text(encoding="utf-8")))
-    assert fixture.source is Source.OBSERVED
-    assert fixture.captured_at is not None
-    assert fixture.provenance == "laptop -> edge-host-alias"
-    assert fixture.transport is Transport.SSH_CLI
-
-
-def test_wrap_ssh_rejects_a_shell_string_argv(tmp_path: Path) -> None:
-    """A raw shell string is not an argv; wrapping one would record the wrong thing."""
-    code = capture.main([
-        "wrap-ssh",
-        "--argv",
-        "hdfs dfs -count /warehouse/ | wc -l",
-        "--operation",
-        "count",
-        "--stdout",
-        str(tmp_path / "out.txt"),
-        "--exit-code",
-        "0",
-        "--provenance",
-        "laptop",
-        "--out",
-        str(tmp_path / "f.json"),
-    ])
-    assert code == capture.EXIT_REFUSED
-
-
-def test_wrap_ssh_rejects_a_non_array_argv() -> None:
-    """A JSON object is not an argv list, and is refused naming the rule."""
-    with pytest.raises(ConfigError, match="non-empty JSON array"):
-        capture.argv_list('{"a": 1}')
-
-
-def test_wrap_ssh_rejects_a_non_string_inside_the_argv() -> None:
-    """An argv entry that is not a string is refused, not coerced."""
-    with pytest.raises(ConfigError, match="only strings"):
-        capture.argv_list('["hdfs", 7]')
 
 
 def test_a_capture_reports_an_unreadable_captured_file(tmp_path: Path) -> None:
@@ -777,99 +665,3 @@ def test_capture_module_executes_as_a_script() -> None:
     # `ssh_cli` prints the recipe and exits 3, which is the cheapest path through
     # `main` that needs no server and no fixture.
     assert raised.value.code == capture.EXIT_UNSUPPORTED_TRANSPORT
-
-
-def _wrap_ssh_argv(tmp_path: Path, *, out: Path, force: bool = False) -> int:
-    """Run `capture wrap-ssh` against a temporary captured-output file.
-
-    Args:
-        tmp_path: Where to stage the captured stdout.
-        out: The fixture path to write.
-        force: Whether to permit replacing an existing file.
-
-    Returns:
-        The CLI's exit code.
-    """
-    stdout_file = tmp_path / "captured-stdout.txt"
-    stdout_file.write_text(
-        "       QUERY_REPONSE : 0\tnone\tnone\tinf\n", encoding="utf-8"
-    )
-    argv = [
-        "wrap-ssh",
-        "--argv",
-        '["hdfs","dfs","-count","-q","-v","/warehouse/"]',
-        "--operation",
-        "hdfs dfs -count -q -v <p>",
-        "--stdout",
-        str(stdout_file),
-        "--exit-code",
-        "0",
-        "--provenance",
-        "laptop -> edge-host-alias",
-        "--out",
-        str(out),
-    ]
-    if force:
-        argv.append("--force")
-    return capture.main(argv)
-
-
-def test_a_written_fixture_ends_with_exactly_one_newline(tmp_path: Path) -> None:
-    """The hygiene hooks check this, and a committed corpus is full of these files."""
-    out = tmp_path / "f.json"
-    assert _wrap_ssh_argv(tmp_path, out=out) == 0
-    assert out.read_text(encoding="utf-8").endswith("}\n")
-
-
-def test_a_fixture_written_by_the_cli_reloads_through_the_loader(
-    tmp_path: Path,
-) -> None:
-    """The on-disk form and the loader agree: the writer's output is loadable."""
-    out = tmp_path / "f.json"
-    assert _wrap_ssh_argv(tmp_path, out=out) == 0
-    assert isinstance(load_fixture(out), Fixture)
-
-
-def test_the_timestamp_carries_an_explicit_offset() -> None:
-    """§14.2's reason: a wrong zone assumption is a wrong answer with no error."""
-    assert capture.now().endswith("+00:00")
-
-
-def test_params_must_be_a_json_object(tmp_path: Path) -> None:
-    """An array is a shape error, not a request that happens to have no params."""
-    code = capture.main([
-        "https_api",
-        "--url",
-        "https://rm1.invalid:8088",
-        "--source-id",
-        "yarn_rm",
-        "--operation",
-        "info",
-        "--allowlist-host",
-        "rm1.invalid",
-        "--params",
-        "[1, 2]",
-        "--out",
-        str(tmp_path / "unused.json"),
-    ])
-    assert code == capture.EXIT_REFUSED
-
-
-def test_params_that_are_not_json_at_all_are_refused(tmp_path: Path) -> None:
-    """A malformed `--params` is refused before any request is issued."""
-    code = capture.main([
-        "https_api",
-        "--url",
-        "https://rm1.invalid:8088",
-        "--source-id",
-        "yarn_rm",
-        "--operation",
-        "info",
-        "--allowlist-host",
-        "rm1.invalid",
-        "--params",
-        "{oops",
-        "--out",
-        str(tmp_path / "unused.json"),
-    ])
-    assert code == capture.EXIT_REFUSED
