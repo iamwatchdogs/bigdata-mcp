@@ -46,6 +46,7 @@ wide to authenticate to.
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import ssl
 from dataclasses import dataclass
@@ -321,21 +322,45 @@ class Session:
         self._check_initial_scheme(current)
         self._check_host_allowed(host_of(current), current)
         hops = 0
-        while True:
-            try:
-                self._check_https_has_ca_bundle(current)
-                merged = self._headers_for(current, first_origin, headers)
-                async with self._raw().get(
-                    current, headers=merged, allow_redirects=False
-                ) as raw:
-                    if raw.status not in REDIRECT_STATUSES:
-                        return await self._read(raw, current)
-                    if hops >= MAX_REDIRECTS:
-                        self._refuse(RedirectRefusal.TOO_MANY_HOPS, current)
-                    current = self._next_hop(raw.headers.get("Location"), current)
-                    hops += 1
-            except (TimeoutError, aiohttp.ClientError) as exc:
-                raise self._as_unreachable(current, exc) from exc
+        # One budget for the whole chain, not one per hop. The session's
+        # `ClientTimeout(total=...)` is applied by aiohttp to each `.get()`, so
+        # the worst case was `MAX_REDIRECTS + 1` of them: six hops at 20 s is 120 s
+        # against §3's 60 s client budget, on exactly the path — an HA standby
+        # answering slowly before each 307 — where the estate already knows it is
+        # slow. `asyncio.timeout` covers every hop combined, and its expiry raises
+        # the same builtin `TimeoutError` the arm below already converts.
+        try:
+            # One budget for the whole chain, not one per hop. aiohttp applies the
+            # session's `ClientTimeout(total=...)` to each `.get()`, so the worst
+            # case was `MAX_REDIRECTS + 1` of them: six hops at 20 s is 120 s
+            # against §3's 60 s client budget, on exactly the path -- an HA standby
+            # answering slowly before each 307 -- where the estate already knows it
+            # is slow. `asyncio.timeout` covers every hop combined, and its expiry
+            # raises the same builtin `TimeoutError` the arms below convert.
+            async with asyncio.timeout(self._timeout_s):
+                while True:
+                    try:
+                        self._check_https_has_ca_bundle(current)
+                        merged = self._headers_for(current, first_origin, headers)
+                        async with self._raw().get(
+                            current, headers=merged, allow_redirects=False
+                        ) as raw:
+                            if raw.status not in REDIRECT_STATUSES:
+                                return await self._read(raw, current)
+                            if hops >= MAX_REDIRECTS:
+                                self._refuse(RedirectRefusal.TOO_MANY_HOPS, current)
+                            current = self._next_hop(
+                                raw.headers.get("Location"), current
+                            )
+                            hops += 1
+                    except (TimeoutError, aiohttp.ClientError) as exc:
+                        raise self._as_unreachable(current, exc) from exc
+        except TimeoutError as exc:
+            # The chain budget spent. Escaping the loop's own arm uncaught, a bare
+            # `asyncio` exception would leave this method -- §5.2 admits no library
+            # type past it, and a whole chain over budget is a `BackendUnreachable`
+            # with the same message shape a per-hop one carries.
+            raise self._as_unreachable(current, exc) from exc
 
     def _as_unreachable(self, current: str, exc: Exception) -> BackendUnreachable:
         """Convert a transport fault into the typed error §5.2 requires.

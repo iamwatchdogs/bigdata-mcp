@@ -132,12 +132,16 @@ def _refuse_if_unusable(
 
     Raises:
         PermissionError: If the name reads as a write verb, or if per-call headers
-            were supplied, under a posture that allows no writes.
+            were supplied. Headers are refused under *either* posture: the schema
+            has no `headers` property for a caller to put one in, so a portal spec
+            carrying the table is declaring something the tool cannot express --
+            and what cannot be expressed must not be accepted silently.
     """
-    if not posture.allows_writes and headers:
+    if headers:
         message = (
-            f"portal {name!r}: a per-call headers table is not expressible under "
-            "read_only; put static headers in the portal spec file instead"
+            f"portal {name!r}: a per-call headers table is not expressible at "
+            "all; the portal schema has no headers property, because a free-form "
+            "header can carry X-HTTP-Method-Override (CVE-2026-42551)"
         )
         raise PermissionError(message)
     if not posture.allows_writes and _names_a_write(name):
@@ -194,10 +198,12 @@ def portal_schema(
             "enum": ["GET", "POST"],
             "description": "HTTP verb; absent entirely under read_only (§2.1)",
         }
-        schema["properties"]["headers"] = {
-            "type": "object",
-            "description": "Extra headers; forbidden under read_only (§14.2)",
-        }
+        # No `headers` property under either posture. §14.2 and §4.2 both say the
+        # portal spec has no headers table at all, and the reason is
+        # CVE-2026-42551: `X-HTTP-Method-Override` is honoured on safe verbs, so a
+        # free-form header table would let a config turn a `GET` into a `DELETE`
+        # -- and the read-only guarantee is the one thing this schema exists to
+        # make structural.
     return schema
 
 

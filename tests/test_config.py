@@ -168,6 +168,44 @@ def test_read_write_portal_schema_exposes_a_verb_field() -> None:
     assert schema["properties"]["method"]["enum"] == ["GET", "POST"]
 
 
+def test_no_portal_schema_has_a_headers_table() -> None:
+    """§14.2 and §4.2: the portal spec has no headers table under *either* posture.
+
+    `read_write` used to grow an untyped `headers` object, and the reason it must
+    not is CVE-2026-42551: `X-HTTP-Method-Override` is honoured on safe verbs, so a
+    free-form header table lets a config turn a `GET` into a `DELETE` — and it can
+    carry a caller-chosen `Authorization` past the session's credential handling
+    while it does. A read-only guarantee that only holds while the posture is
+    read-only is not a guarantee.
+    """
+    for posture in (Posture.READ_ONLY, Posture.READ_WRITE):
+        schema = portal_schema(
+            name="warehouse",
+            paths={"list": "list partitions"},
+            posture=posture,
+        )
+        assert "headers" not in schema["properties"], (
+            f"{posture.name} grew a headers property, which the portal spec "
+            "format does not have"
+        )
+
+
+def test_a_per_call_headers_table_is_refused_under_read_write_too() -> None:
+    """The schema has no headers property, so a spec carrying one is refused.
+
+    Previously the refusal was keyed on `not posture.allows_writes`, which made
+    the read-write path the one place a headers table could still be declared —
+    the posture with the verb that matters most to override.
+    """
+    with pytest.raises(PermissionError, match="headers"):
+        portal_schema(
+            name="warehouse",
+            paths={"list": "list"},
+            posture=Posture.READ_WRITE,
+            headers={"X-HTTP-Method-Override": "DELETE"},
+        )
+
+
 def test_read_only_refuses_a_per_call_headers_table() -> None:
     """§14.2: a per-call `headers` table is a credential bypass."""
     with pytest.raises(PermissionError, match="headers"):

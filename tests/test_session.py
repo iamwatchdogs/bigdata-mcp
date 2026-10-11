@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import ssl
 import threading
+import time
 from typing import TYPE_CHECKING
 
 import pytest
@@ -82,6 +83,8 @@ FAKE_BEARER = "Bearer " + "-".join(("yarn", "secret"))
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
+
+    from tests.support.http_server import Handler
 
 
 @pytest.fixture
@@ -550,6 +553,66 @@ def test_a_missing_location_is_refused_by_the_hop_rule() -> None:
     with pytest.raises(PermissionError) as caught:
         session._next_hop(None, "https://127.0.0.1:8088/ws")  # ruff: ignore[private-member-access]
     assert RedirectRefusal.NO_LOCATION.value in str(caught.value)
+
+
+def test_one_slow_chain_cannot_outlast_the_budget_it_started_with(
+    server: LocalHttpServer,
+) -> None:
+    """The chain budget is one number, not one number per hop.
+
+    aiohttp applies the session's `ClientTimeout(total=...)` to each `.get()`, so
+    a chain of `MAX_REDIRECTS + 1` requests each inside the budget could spend
+    many times it -- six hops at 20 s is 120 s against §3's 60 s client deadline,
+    on the HA-standby path the estate is slow on already. `asyncio.timeout` now
+    covers the whole chain.
+
+    Two hops, each inside the per-request budget but together outside it: one slow
+    hop would be bounded by the per-hop timeout alone and would still pass before
+    this fix existed, which is why the chain has to be more than one link long.
+    """
+
+    def slow_redirect(target: str, delay_s: float) -> Handler:
+        """Return a handler that stalls, then redirects.
+
+        Args:
+            target: The redirect target.
+            delay_s: How long to hold the request before answering.
+
+        Returns:
+            A route handler. It sleeps in the server's own thread, which blocks
+                this connection and no other, so the second hop really is after
+                the first rather than alongside it.
+        """
+
+        def handler(_path: str) -> Reply:
+            """Stall for `delay_s`, then redirect to `target`.
+
+            Args:
+                _path: The served path, unused.
+
+            Returns:
+                A redirect reply.
+            """
+            time.sleep(delay_s)
+            return redirect(target)
+
+        return handler
+
+    server.route("/slow0", slow_redirect(server.url("/slow1"), 0.15))
+    server.route("/slow1", slow_redirect(server.url("/slow2"), 0.15))
+    server.route("/slow2", lambda _p: text("too late"))
+
+    async def scenario() -> None:
+        """Ask for the chain through a session whose whole budget is 0.2 s."""
+        async with Session(
+            allowlist=frozenset({TRUSTED}),
+            allow_http=True,
+            timeout_s=0.2,
+        ) as session:
+            await session.get(server.url("/slow0"))
+
+    with pytest.raises(BackendUnreachable, match="TimeoutError"):
+        run_async(scenario())
 
 
 def test_a_redirect_chain_longer_than_the_limit_is_an_error(
