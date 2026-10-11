@@ -76,7 +76,6 @@ from bigdata_mcp.fixtures import Source
 from bigdata_mcp.fixtures import Transport
 from bigdata_mcp.fixtures.fields import load_fixture
 from bigdata_mcp.fixtures.fields import parse_fixture
-from tests.support.fixture_docs import observed
 from tests.support.http_server import LocalHttpServer
 from tests.support.http_server import json_reply
 from tests.support.http_server import redirect
@@ -587,11 +586,38 @@ def test_a_capture_records_a_refused_redirect_as_a_failure(
 
 
 def test_an_error_status_is_captured_rather_than_treated_as_a_failure(
-    tmp_path: Path,
+    server: LocalHttpServer, tmp_path: Path
 ) -> None:
-    """A 503 is a real observation; refusing to record it loses the evidence."""
-    fixture = parse_fixture(observed(exit_code=503, stdout="service unavailable"))
+    """A 503 is a real observation; refusing to record it loses the evidence.
+
+    Served from the loopback server rather than assembled with `observed()`: a
+    fixture built in-process proves `parse_fixture` reads a status nobody put
+    there in the first place, and a `_capture` that started refusing non-2xx
+    statuses would leave this test green.
+    """
+    server.route("/down", lambda _p: text("service unavailable", status=503))
+    out = tmp_path / "down.json"
+
+    code = capture.main([
+        "https_api",
+        "--url",
+        server.url(),
+        "--source-id",
+        "yarn_rm",
+        "--operation",
+        "apps",
+        "--allowlist-host",
+        "127.0.0.1",
+        "--path",
+        "/down",
+        "--out",
+        str(out),
+    ])
+
+    assert code == 0, "an error status was treated as a failed capture"
+    fixture = load_fixture(out)
     assert fixture.exit_code == 503
+    assert fixture.stdout == "service unavailable"
 
 
 def _wrap_ssh_argv(tmp_path: Path, *, out: Path, force: bool = False) -> int:

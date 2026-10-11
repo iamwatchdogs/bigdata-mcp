@@ -729,4 +729,7 @@ def test_the_default_reader_reads_a_real_file(tmp_path: Path) -> None:
 
     text = _real_read_text(str(target))
 
-    assert text.startswith("1.50 "), f"read back {text!r}"
+    assert text == "1.50 2.00 3.00 4/512 65530\n", (
+        f"read back {text!r}; a prefix match would still pass on truncated or "
+        "re-encoded content, which is exactly the break this test exists to see"
+    )
