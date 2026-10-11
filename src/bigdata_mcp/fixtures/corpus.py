@@ -34,7 +34,10 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
     from collections.abc import Iterator
 
-#: The corpus this repository ships. Absolute rather than relative to the working
+#: The corpus this checkout carries, at the path a clone resolves it to. The
+#: wheel built from this project packages `src/` alone, so this path exists only
+#: inside a checkout: an installed caller has to name its own corpus through
+#: `load_corpus(directory=...)`. Absolute rather than relative to the working
 #: directory: a relative root resolves against whatever directory the process
 #: happens to be in, and an absent directory loads as an empty corpus with no
 #: error — so a caller standing anywhere else silently measured nothing.
@@ -145,30 +148,39 @@ def load_corpus(directory: Path | None = None) -> Corpus:
     """Load every fixture in a directory.
 
     Args:
-        directory: The corpus root. Defaults to the absolute path this repository
-            ships its corpus at, which holds the committed synthetic fixtures.
+        directory: The corpus root. Defaults to the absolute path this checkout
+            holds the committed synthetic fixtures at. That path is not in the
+            wheel, so a caller outside a checkout names its own instead of
+            relying on the default.
 
     Returns:
         The indexed corpus.
 
     A directory the caller names that is not there is an empty corpus rather than
     a failure, because a project that has captured nothing yet is the expected
-    starting state (§3: the estate is unreachable from here). The *shipped*
-    default is the one path that must exist, so its absence is a failure: this
-    repository cannot run without its own corpus, and an empty corpus with no
-    error is indistinguishable from "nothing captured yet".
+    starting state (§3: the estate is unreachable from here). The default is the
+    one path that must exist, so its absence is a failure: an empty corpus with
+    no error is indistinguishable from "nothing captured yet", and a caller that
+    silently measured nothing learns nothing either.
 
     A malformed fixture refuses the load through `load_fixture`, naming the file
     and the field — validating on load is the entire point of doing it here rather
     than at first use.
 
     Raises:
-        FileNotFoundError: If the shipped default corpus directory is absent.
+        FileNotFoundError: If the default corpus directory is absent. The message
+            distinguishes an incomplete clone from an installed package, since
+            only the first is a defect: `directory=` is how the second names a
+            corpus of its own.
     """
     root = directory if directory is not None else DEFAULT_CORPUS_DIR
     if not root.is_dir():
         if directory is None:
-            message = f"the shipped fixture corpus {root} is absent"
+            message = (
+                f"the default fixture corpus {root} is absent; it is this "
+                f"repository's checkout path, which no wheel ships, so an "
+                f"installed caller must pass directory=<its corpus>"
+            )
             raise FileNotFoundError(message)
         return Corpus(fixtures=(), root=root)
 

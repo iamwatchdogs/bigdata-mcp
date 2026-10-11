@@ -15,12 +15,14 @@ nothing whenever pytest is invoked from somewhere other than the repository root
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from bigdata_mcp.errors import ConfigError
 from bigdata_mcp.fixtures import Source
+from bigdata_mcp.fixtures.corpus import DEFAULT_CORPUS_DIR
 from bigdata_mcp.fixtures.corpus import Corpus
 from bigdata_mcp.fixtures.corpus import load_corpus
 from bigdata_mcp.fixtures.fields import parse_fixture
@@ -156,10 +158,10 @@ def test_for_source_returns_every_fixture_for_a_backend() -> None:
     assert len(corpus.for_source("hdfs")) == 3
 
 
-def test_the_shipped_default_corpus_fails_loudly_when_absent(
+def test_the_default_corpus_fails_loudly_when_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The one path that must exist is the one shipped with this repository.
+    """The one path that must exist is the one this checkout carries.
 
     An *explicitly named* directory that is not there stays an empty corpus,
     because "nothing captured yet" is the expected starting state. The default is
@@ -167,16 +169,64 @@ def test_the_shipped_default_corpus_fails_loudly_when_absent(
     error is indistinguishable from having loaded it — which is how a suite ends
     up asserting nothing for a whole run.
 
-    The shipped path is redirected at a directory that cannot exist, because the
+    The default is redirected at a directory that cannot exist, because the
     real one is asserted by the tests around it and this is about what happens
-    when it does *not*.
+    when it does *not*. That the refusal *also* tells a caller what to do about
+    it is asserted separately, since it is a different claim.
     """
     monkeypatch.setattr(
         "bigdata_mcp.fixtures.corpus.DEFAULT_CORPUS_DIR", CORPUS_DIR / "absent"
     )
 
-    with pytest.raises(FileNotFoundError, match="shipped fixture corpus"):
+    with pytest.raises(FileNotFoundError, match="default fixture corpus"):
         load_corpus()
+
+
+def test_the_default_corpus_is_a_checkout_path_not_a_packaged_one() -> None:
+    """The default resolves inside this checkout, which no wheel contains.
+
+    `DEFAULT_CORPUS_DIR` is `Path(__file__)... / "tests" / "fixtures"`, and the
+    wheel built from this project carries `src/` alone — verified: it holds
+    `bigdata_mcp/fixtures/corpus.py` and zero `tests/` entries. So the default
+    only ever resolves for someone running from a clone, and every other caller
+    has to name a corpus.
+
+    That is a deliberate default rather than a bug, which is why it is pinned
+    here: the two ways to "fix" the loader are to package the corpus or to
+    point the default somewhere else, and either one is a decision about
+    distribution that belongs to a spec, not to a message that happens to be
+    wrong. Turning the tail into a different path is what makes this fail.
+    """
+    assert DEFAULT_CORPUS_DIR.parts[-2:] == ("tests", "fixtures")
+
+
+def test_the_default_corpus_refusal_says_what_to_do_instead(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refusal names the cause and the remedy, not just the missing path.
+
+    An absent default has exactly two explanations to a caller holding this
+    error: the clone is incomplete, or there is no clone because the package
+    was installed. The first is not actionable from here; the second is, and
+    `directory=` is how. Reporting only the path leaves the second caller to
+    guess that a default they never chose is the thing standing between them
+    and a working loader.
+
+    The message is matched rather than quoted because the remedy is the
+    contract: the path it prints and the wording around it are free to change,
+    the two clauses this asserts on are not.
+    """
+    monkeypatch.setattr(
+        "bigdata_mcp.fixtures.corpus.DEFAULT_CORPUS_DIR", CORPUS_DIR / "absent"
+    )
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        load_corpus()
+
+    message = str(excinfo.value)
+    assert str(CORPUS_DIR / "absent") in message
+    assert re.search(r"checkout|not (?:shipped|installed)|no clone", message)
+    assert re.search(r"directory\s*=", message)
 
 
 def test_a_named_directory_that_is_absent_is_still_an_empty_corpus() -> None:
