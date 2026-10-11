@@ -195,9 +195,11 @@ def test_the_default_corpus_is_a_checkout_path_not_a_packaged_one() -> None:
     here: the two ways to "fix" the loader are to package the corpus or to
     point the default somewhere else, and either one is a decision about
     distribution that belongs to a spec, not to a message that happens to be
-    wrong. Turning the tail into a different path is what makes this fail.
+    wrong. Compared whole against `CORPUS_DIR` rather than component by
+    component, so either the checkout-relative root or the tail turning into a
+    different path is what makes this fail.
     """
-    assert DEFAULT_CORPUS_DIR.parts[-2:] == ("tests", "fixtures")
+    assert DEFAULT_CORPUS_DIR == CORPUS_DIR
 
 
 def test_the_default_corpus_refusal_says_what_to_do_instead(
