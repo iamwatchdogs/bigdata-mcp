@@ -32,8 +32,8 @@ import pytest
 
 from bigdata_mcp.engine import BoundedQueue
 from bigdata_mcp.errors import QueueFull
-from tests.test_engine import _answer
-from tests.test_engine import _never
+from tests.support.async_runner import answer as _answer
+from tests.support.async_runner import never as _never
 
 # --------------------------------------------------------------------------
 # The bounded queue

@@ -1008,28 +1008,3 @@ async def test_the_probe_does_not_need_a_permit_to_measure() -> None:
         "the probe could not measure while every permit was held"
     )
     assert gate.in_flight == 0, "a permit the test took was never released"
-
-
-async def _answer(value: int) -> int:
-    """Return `value`.
-
-    Args:
-        value: The number to return.
-
-    Returns:
-        `value`.
-    """
-    await asyncio.sleep(0)
-    return value
-
-
-async def _never() -> int:
-    """Suspend long enough that reaching here means the refusal did not happen.
-
-    Raises:
-        AssertionError: If the sleep completes, which means the queue admitted work
-            it should have refused.
-    """
-    await asyncio.sleep(3600)
-    boom = "the queue ran work it should have refused"
-    raise AssertionError(boom)

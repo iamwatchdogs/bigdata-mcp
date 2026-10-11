@@ -138,11 +138,6 @@ docstrings: ## Report every function, class or module with no docstring
 	@# while the pull request reported one narrow finding.
 	$(PYTHON) scripts/docstring_gate.py
 
-docstring-gate: docstrings ## Fail when definition coverage is under the threshold
-	@# Two names because the check is used in two senses: as a report
-	@# (`make docstrings`, tame output, exit 0 or 1) and as a gate that must not
-	@# report success when it could not read a file. The script owns both; this
-	@# alias only exists so the pre-commit hook can name the strict reading.
 
 bandit: ## Python security analysis (commit-time gate)
 	$(PREK) run bandit --all-files

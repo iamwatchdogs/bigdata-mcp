@@ -52,6 +52,7 @@ import ssl
 from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
+from typing import NoReturn
 from typing import Self
 from urllib.parse import urljoin
 from urllib.parse import urlsplit
@@ -114,6 +115,7 @@ class RedirectRefusal(enum.Enum):
 
     NO_LOCATION = "redirect carried no Location header"
     NOT_ALLOWLISTED = "redirect target is not an allowed host"
+    MALFORMED_TARGET = "redirect target is not a URL this session can check"
     SCHEME_DOWNGRADE = "redirect would downgrade HTTPS to HTTP"
     TOO_MANY_HOPS = "redirect chain exceeded the hop limit"
 
@@ -428,7 +430,7 @@ class Session:
         return merged
 
     @staticmethod
-    def _refuse(reason: RedirectRefusal, detail: str) -> None:
+    def _refuse(reason: RedirectRefusal, detail: str) -> NoReturn:
         """Refuse a redirect, naming both the rule and the URL.
 
         Args:
@@ -527,15 +529,29 @@ class Session:
 
         Every refusal here raises `PermissionError` through `_refuse`, so the
         message names both the rule and the host: an absent `Location`, an
-        HTTPS-to-HTTP downgrade, or a target host that is not allowlisted.
+        HTTPS-to-HTTP downgrade, a target that does not parse as a URL, or a host
+        that is not allowlisted. Anything a caller's own handler can produce is a
+        `Location` from another system, so "unparseable" is a normal outcome to
+        classify and not an exception to propagate — §5.2 admits no library type
+        past this point.
         """
         if not location:
             self._refuse(RedirectRefusal.NO_LOCATION, current)
-        target = urljoin(current, location)
-        was_https = urlsplit(current).scheme.lower() == Scheme.HTTPS
-        if was_https and urlsplit(target).scheme.lower() == Scheme.HTTP:
+        try:
+            target = urljoin(current, location)
+            was_https = urlsplit(current).scheme.lower() == Scheme.HTTPS
+            is_http = urlsplit(target).scheme.lower() == Scheme.HTTP
+            allowed_host = host_of(target)
+        except ValueError:
+            # `urljoin` and `host_of` both raise `ValueError` on a malformed
+            # IPv6 literal -- a `[` with no `]`, or a stray `]`. Such a `Location`
+            # is written by another system, so it is a normal outcome to classify
+            # and not an exception to propagate (§5.2 admits no library type past
+            # this point).
+            self._refuse(RedirectRefusal.MALFORMED_TARGET, f"{current} -> {location}")
+        if was_https and is_http:
             self._refuse(RedirectRefusal.SCHEME_DOWNGRADE, f"{current} -> {target}")
-        self._check_host_allowed(host_of(target), f"{current} -> {target}")
+        self._check_host_allowed(allowed_host, f"{current} -> {target}")
         return target
 
     def _check_host_allowed(self, host: str, detail: str) -> None:

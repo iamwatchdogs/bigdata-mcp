@@ -19,10 +19,6 @@ What it can reach, and what it cannot:
   turns operator-captured output into a fixture instead, and `--help` says so
   rather than letting it be discovered at the first attempt.
 
-Four things are refused rather than recorded, and all four are the same bug in
-different clothes: a fixture whose recorded exchange differs from the exchange the
-server actually made.
-
 `--params` is encoded into the query string rather than filed alongside the request.
 `Session.get` takes a URL and nothing else, so a `params` field that never reached
 the wire describes a filtered query whose body is the unfiltered response. §8.1's

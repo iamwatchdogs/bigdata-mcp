@@ -120,11 +120,11 @@ def _refuse_if_unusable(
 ) -> None:
     """Refuse a portal declaration the posture cannot express.
 
-    The three refusals live together because they are one policy: a read-only
-    portal is refused anything that would let a caller express a write, however
-    it arrives. A literal verb in the name, a per-call header that overrides the
-    store, or an endpoint list that is empty -- each is a way the same thing slips
-    through, so each is checked at the same place.
+    The checks live together because they are one policy: a portal is refused
+    anything that would let a caller express a write the schema cannot, however it
+    arrives. A literal verb in the name, a per-call header table the schema has no
+    property for, or an endpoint list that is empty -- each is a way the same
+    thing slips through, so each is checked at the same place.
 
     Args:
         name: The tool name being declared.

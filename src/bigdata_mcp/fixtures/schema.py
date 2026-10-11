@@ -23,7 +23,7 @@ from bigdata_mcp.errors import ConfigError
 
 #: The format's version identifier. Mirrors §14.2's portal pin
 #: (`schema = "bigdata-mcp/port@1"`) rather than inventing a second convention: one
-#: naming scheme across the repo, and an unknown value is refused by exact string
+#: naming scheme across the repo, and an unknown value is refused by exact string.
 
 
 FIXTURE_SCHEMA_VERSION = "bigdata-mcp/fixture@1"

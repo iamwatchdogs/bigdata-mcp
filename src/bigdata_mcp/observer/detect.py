@@ -360,7 +360,7 @@ def _real_read_text(path: str) -> str:
     Returns:
         Its text.
     """
-    return pathlib.Path(path).open(encoding="utf-8").read()
+    return pathlib.Path(path).read_text(encoding="utf-8")
 
 
 def _no_commands(_argv: Sequence[str]) -> str:

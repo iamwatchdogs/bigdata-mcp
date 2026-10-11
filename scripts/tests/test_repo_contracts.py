@@ -269,9 +269,9 @@ def test_every_v1_section_is_accounted_for_in_the_traceability_table() -> None:
     )
     assert not extra, (
         f"traceability row(s) {extra} name a section number that does not exist "
-        f"in v1. {SPEC_PATH.name} v2 had 20 top-level sections; a row pointing "
-        "past 20 is either a typo or a pointer to something the parser is "
-        "misreading"
+        "in v1. The traceability table accounts for v1's 20 top-level sections; a "
+        "row pointing past 20 is either a typo or a pointer to something the "
+        "parser is misreading"
     )
 
 
