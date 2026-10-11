@@ -65,6 +65,7 @@ that awaits a no-op.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -76,6 +77,7 @@ from bigdata_mcp.fixtures import Source
 from bigdata_mcp.fixtures import Transport
 from bigdata_mcp.fixtures.fields import load_fixture
 from bigdata_mcp.fixtures.fields import parse_fixture
+from tests.support.fixture_docs import observed
 from tests.support.http_server import LocalHttpServer
 from tests.support.http_server import json_reply
 from tests.support.http_server import redirect
@@ -83,7 +85,6 @@ from tests.support.http_server import text
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
 
 @pytest.fixture
@@ -665,6 +666,117 @@ def test_an_error_status_is_captured_rather_than_treated_as_a_failure(
     fixture = load_fixture(out)
     assert fixture.exit_code == 503
     assert fixture.stdout == "service unavailable"
+
+
+def test_the_write_guard_still_refuses_when_the_preflight_is_bypassed(
+    tmp_path: Path,
+) -> None:
+    """`_write` keeps its own check, because `main`'s can lose a race.
+
+    The pre-flight in `main` is what an operator normally meets; `_write` is the
+    second guard behind it, and a file that appears between the two `stat` calls
+    is exactly the case it is for. Exercised by calling `_write` directly, since
+    nothing on the CLI path can reach it any more.
+    """
+    from bigdata_mcp.capture import _write
+
+    out = tmp_path / "already-there.json"
+    out.write_text("{}\n", encoding="utf-8")
+
+    assert _write(parse_fixture(observed()), out, force=False) == capture.EXIT_EXISTS
+    assert out.read_text(encoding="utf-8") == "{}\n"
+
+
+def test_dispatch_refuses_a_command_with_no_capture_path(tmp_path: Path) -> None:
+    """`_dispatch` is the last line between a parsed namespace and a path.
+
+    The parser restricts the choices, so this branch is unreachable from the CLI
+    — which is why it is called directly: a transport added to the enum without a
+    branch here would otherwise read `args.url` off a namespace that does not have
+    it, and the refusal is the only thing standing in the way.
+    """
+    from bigdata_mcp.capture import _dispatch
+
+    namespace = capture.build_parser().parse_args([
+        "https_api",
+        "--url",
+        "https://rm1.invalid:8088",
+        "--source-id",
+        "yarn_rm",
+        "--operation",
+        "apps",
+        "--allowlist-host",
+        "rm1.invalid",
+        "--path",
+        "/ws/v1/cluster/apps",
+        "--out",
+        str(tmp_path / "unused.json"),
+    ])
+    namespace.transport = "no-such-transport"
+
+    with pytest.raises(ConfigError, match="no capture path"):
+        _dispatch(namespace)
+
+
+def test_capture_module_executes_as_a_script() -> None:
+    """`python -m bigdata_mcp.capture` reaches `main`, as the guard promises.
+
+    Follows `tests/test_main.py`'s pattern rather than inventing a second one:
+    the call is asserted through `sys.settrace` because `runpy` yields a callable
+    `main` whether or not the guard exists, so a namespace check would pass with
+    the guard deleted. `sys.argv` is set for the duration because the guard now
+    dispatches on it, and left alone the test fails on whatever flag pytest
+    happens to pass.
+    """
+    import runpy
+    import sys
+    from typing import Any
+
+    script = Path(__file__).resolve().parents[1] / "src" / "bigdata_mcp" / "capture.py"
+    assert script.is_file(), f"capture script is missing: {script}"
+
+    calls: list[tuple[str, int]] = []
+    previous_tracer = sys.gettrace()
+
+    def tracer(frame: Any, event: Any, arg: Any) -> Any:
+        """Record every `call` to a function named `main`, with its file.
+
+        Args:
+            frame: The frame the event fired for.
+            event: The event name. Only `call` is of interest here.
+            arg: The event's payload, unused.
+
+        Returns:
+            Whatever the previously installed trace function returns, so coverage
+                measurement keeps running: a test that silently disabled it to
+                prove a packaging fact would be a poor trade.
+        """
+        if event == "call" and frame.f_code.co_name == "main":
+            calls.append((frame.f_code.co_filename, frame.f_code.co_firstlineno))
+        if previous_tracer is not None:
+            return previous_tracer(frame, event, arg)
+        return None
+
+    previous_argv = sys.argv
+    sys.argv = ["capture-fixtures", "ssh_cli"]
+    sys.settrace(tracer)
+    try:
+        with pytest.raises(SystemExit) as raised:
+            runpy.run_path(str(script), run_name="__main__")
+    finally:
+        sys.settrace(previous_tracer)
+        sys.argv = previous_argv
+
+    here = [where for where in calls if where[0] == str(script)]
+    assert len(here) == 1, (
+        f"executing {script.name} as __main__ called a `main` defined in that "
+        f"file {len(here)} times ({here!r}); expected exactly 1. Without the "
+        'guard `if __name__ == "__main__": raise SystemExit(main())` the module '
+        "defines an entry point that never runs"
+    )
+    # `ssh_cli` prints the recipe and exits 3, which is the cheapest path through
+    # `main` that needs no server and no fixture.
+    assert raised.value.code == capture.EXIT_UNSUPPORTED_TRANSPORT
 
 
 def _wrap_ssh_argv(tmp_path: Path, *, out: Path, force: bool = False) -> int:
