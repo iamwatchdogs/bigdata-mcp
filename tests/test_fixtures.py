@@ -65,6 +65,14 @@ from tests.support.fixture_docs import synthetic
 # --------------------------------------------------------------------------
 
 
+#: The committed corpus, resolved from this file rather than from the working
+#: directory. `load_corpus` treats an absent directory as an empty corpus with no
+#: error, so a relative path here would make every test below pass while asserting
+#: nothing whenever pytest is invoked from somewhere other than the repository
+#: root -- the exact failure the corpus loader's own docstring names.
+CORPUS_DIR = Path(__file__).resolve().parent / "fixtures"
+
+
 def test_a_source_that_is_neither_value_is_refused() -> None:
     """Refuse rather than default, because this is the field a reader trusts.
 
@@ -377,7 +385,7 @@ def test_the_committed_synthetic_corpus_loads() -> None:
     bound is a floor, so capturing another fixture is not also a test edit — what
     each file claims is the next test's business.
     """
-    corpus = load_corpus(Path("tests/fixtures"))
+    corpus = load_corpus(CORPUS_DIR)
     assert len(corpus) >= 7
 
 
@@ -390,7 +398,7 @@ def test_every_committed_fixture_is_labelled_synthetic_and_commented() -> None:
     Walking all of them is what stops one hand-edited file from quietly becoming
     unlabelled while the rest stay correct.
     """
-    corpus = load_corpus(Path("tests/fixtures"))
+    corpus = load_corpus(CORPUS_DIR)
     for fixture in corpus:
         assert fixture.source is Source.SYNTHETIC, fixture.source_id
         assert fixture.comment, f"{fixture.operation} has no comment"
@@ -426,7 +434,7 @@ def test_a_corpus_under_a_dot_directory_still_loads(tmp_path: Path) -> None:
 
 def test_a_synthetic_only_corpus_cannot_validate_a_parser() -> None:
     """§17.2, as code. False at any size."""
-    corpus = load_corpus(Path("tests/fixtures"))
+    corpus = load_corpus(CORPUS_DIR)
     assert corpus.validates_parsers is False
     assert "CANNOT validate a parser" in corpus.summarise()
 
@@ -460,7 +468,7 @@ def test_the_index_groups_by_source_and_operation() -> None:
     pair would compare two different calls and report the gap as a parser
     disagreement.
     """
-    corpus = load_corpus(Path("tests/fixtures"))
+    corpus = load_corpus(CORPUS_DIR)
     hits = corpus.lookup("yarn_rm", "GET /ws/v1/cluster/apps?states=RUNNING")
     assert len(hits) == 1
     assert hits[0].source_id == "yarn_rm"
@@ -474,7 +482,7 @@ def test_a_lookup_that_matches_nothing_returns_empty_not_none() -> None:
     missing index looks like. The empty tuple iterates and compares as it stands,
     so no caller needs a guard that would also hide the broken-index case.
     """
-    corpus = load_corpus(Path("tests/fixtures"))
+    corpus = load_corpus(CORPUS_DIR)
     assert corpus.lookup("nothing", "nothing") == ()
 
 
@@ -486,7 +494,7 @@ def test_for_source_returns_every_fixture_for_a_backend() -> None:
     exact rather than a floor, so a new HDFS fixture surfaces here as the visible
     edit it should be.
     """
-    corpus = load_corpus(Path("tests/fixtures"))
+    corpus = load_corpus(CORPUS_DIR)
     assert len(corpus.for_source("hdfs")) == 3
 
 
@@ -541,7 +549,7 @@ def test_the_synthetic_corpus_documents_the_shape_it_encodes() -> None:
     `progress` a percent parser gets wrong. What it catches is a comment
     rewritten until it stops naming the claim it was written to name.
     """
-    corpus = load_corpus(Path("tests/fixtures"))
+    corpus = load_corpus(CORPUS_DIR)
     comments = {fixture.operation: fixture.comment or "" for fixture in corpus}
     assert any("apps: []" in comment for comment in comments.values())
     assert any("none" in comment and "inf" in comment for comment in comments.values())

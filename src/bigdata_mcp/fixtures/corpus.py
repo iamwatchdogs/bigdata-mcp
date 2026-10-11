@@ -34,7 +34,11 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
     from collections.abc import Iterator
 
-DEFAULT_CORPUS_DIR = Path("tests/fixtures")
+#: The corpus this repository ships. Absolute rather than relative to the working
+#: directory: a relative root resolves against whatever directory the process
+#: happens to be in, and an absent directory loads as an empty corpus with no
+#: error — so a caller standing anywhere else silently measured nothing.
+DEFAULT_CORPUS_DIR = Path(__file__).resolve().parents[3] / "tests" / "fixtures"
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,8 +145,8 @@ def load_corpus(directory: Path | None = None) -> Corpus:
     """Load every fixture in a directory.
 
     Args:
-        directory: The corpus root. Defaults to `tests/fixtures`, which holds the
-            committed synthetic corpus.
+        directory: The corpus root. Defaults to the absolute path this repository
+            ships its corpus at, which holds the committed synthetic fixtures.
 
     Returns:
         The indexed corpus. An absent directory is an empty corpus rather than a
