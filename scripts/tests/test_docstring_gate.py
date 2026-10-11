@@ -31,6 +31,13 @@ undocumented on the day this gate was added.
   non-finite cases
 * D9 delete `scan`'s `findings.sort(...)` ->
   `test_findings_are_ordered_by_file_then_line`
+* D10 drop the range guard in `_checked_threshold` (the `0 <= t <= 100` check) ->
+  `test_a_threshold_outside_the_percentage_range_is_refused_not_degraded`, all
+  three cases. The bug it pins is the same one D7 pins by a different route: with
+  `threshold = -1` on a 50%-documented tree the gate printed
+  `clean, 2 definitions all documented (50.00%, floor -1%)` and exited 0. Not a
+  wrong answer so much as a self-contradictory one, and the config line had
+  become a no-op without a definition being touched.
 
 D9 exists because that test was, until this ledger entry, a taxidermy test: it
 scanned the real tree, which is clean, so `findings == []` and the ordering
@@ -422,6 +429,76 @@ def test_a_threshold_the_gate_cannot_trust_is_refused_not_degraded(
         # argparse and into `_checked_threshold`. Load-bearing syntax:
         # `--threshold -inf` as two argv entries reads as a flag to argparse.
         assert main(["--root", str(root), f"--threshold={poison}"]) == EXIT_UNSCANNABLE
+
+
+@pytest.mark.parametrize(
+    "poison",
+    [
+        pytest.param("-1", id="below-zero"),
+        pytest.param("101", id="one-past-the-top"),
+        pytest.param("1000", id="far-past-the-top"),
+    ],
+)
+def test_a_threshold_outside_the_percentage_range_is_refused_not_degraded(
+    tmp_path: Path, poison: str
+) -> None:
+    """A number the gate can *compare* is not therefore a number it should.
+
+    The finite and the numeric guards catch what cannot be ordered against a
+    measured percentage. They say nothing about what the percentage *is*, and a
+    value outside 0-100 is outside the domain of the comparison it is used for:
+    a negative floor is one no tree can fall below, so the gate reports clean
+    whatever is undocumented, and a floor above 100 is one no tree can reach, so
+    the gate fails a tree that is complete.
+
+    The dangerous half is the negative one, and it is the same failure as `nan`
+    reached by a different route: the config line becomes a no-op without
+    touching a definition. Refusing is the point — the alternative, clamping,
+    would report a threshold the operator never set.
+
+    Mutation evidence: removing the range guard in `_checked_threshold` leaves
+    all three green here with `main` returning `EXIT_CLEAN` on an undocumented
+    tree, because `50.0 < -1` and `50.0 < 101` are respectively False and True
+    whatever the tree contains.
+    """
+    root = _repo(tmp_path, {"src/module.py": UNDOCUMENTED_FILE})
+    _write(root / "pyproject.toml", f"[tool.docstrings]\nthreshold = {poison}\n")
+
+    with pytest.raises(ScanFailed, match=r"outside"):
+        threshold_from_pyproject(root / "pyproject.toml")
+
+    # `--threshold=-1` as one argv entry, because the two-entry form reads as a
+    # flag to argparse and would be refused by the parser, not by the gate.
+    assert main(["--root", str(root), f"--threshold={poison}"]) == EXIT_UNSCANNABLE
+
+
+@pytest.mark.parametrize(
+    ("floor", "expected"),
+    [
+        pytest.param(0, EXIT_CLEAN, id="floor-is-nothing"),
+        pytest.param(100, EXIT_UNDOCUMENTED, id="floor-is-everything"),
+    ],
+)
+def test_the_ends_of_the_range_are_still_accepted(
+    tmp_path: Path, floor: int, expected: int
+) -> None:
+    """0 and 100 are percentages too, and the gate must keep honouring both.
+
+    A range guard written slightly too wide would reject 100, which is this
+    repository's own configured value — the gate would refuse to start, and
+    `test_the_repository_threshold_is_100` would be the only thing that noticed.
+    The endpoints are pinned here so a guard that rejects them fails on its own
+    terms rather than as a mysterious outage.
+
+    The fixture tree is 50% documented (one documented module, one undocumented
+    function), so 0 clears and 100 does not: the boundary is being honoured in
+    both directions, not merely accepted.
+    """
+    root = _repo(tmp_path, {"src/module.py": UNDOCUMENTED_FILE})
+    _write(root / "pyproject.toml", f"[tool.docstrings]\nthreshold = {floor}\n")
+
+    assert threshold_from_pyproject(root / "pyproject.toml") == pytest.approx(floor)
+    assert main(["--root", str(root)]) == expected
 
 
 def test_the_repository_threshold_is_100() -> None:
