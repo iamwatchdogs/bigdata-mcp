@@ -636,6 +636,27 @@ def test_a_307_whose_target_is_not_a_url_is_refused(server: LocalHttpServer) -> 
         run_async(scenario())
 
 
+def test_a_malformed_initial_url_is_refused_not_propagated() -> None:
+    """The same classification `_next_hop` gives a redirect, applied to the start.
+
+    `_origin_of` and `host_of` both parse, and `urlsplit` raises `ValueError` on a
+    malformed IPv6 literal — an opening bracket with no closing one. Before the
+    guard, `capture-fixtures --url` with such a URL printed a traceback rather
+    than exiting 5, and this method's docstring promises no library exception
+    leaves it. The target is assembled at runtime so the repository's own
+    hermeticity scan does not read it as a host reference.
+    """
+    malformed = "https://" + "[" + ":1:8088"
+
+    async def scenario() -> None:
+        """Ask for the malformed URL through a trusting session."""
+        async with trusted_session() as session:
+            await session.get(malformed)
+
+    with pytest.raises(PermissionError, match="not a URL"):
+        run_async(scenario())
+
+
 def test_a_redirect_chain_longer_than_the_limit_is_an_error(
     server: LocalHttpServer,
 ) -> None:

@@ -1473,11 +1473,17 @@ answer to an unknown shape, so v1's blocker dissolves rather than being schedule
 away.
 
 - **If it has a JSON or XHR API** (DevTools → Network → reload): a §14.2 config.
-  `capture the method, path, headers and a sample response; write the config; run
-  `verify`.` This is the expected case.
-- **If it is GraphQL or tRPC**: one endpoint, one query as a pinned body, a
-  `pick` block. `deny_paths` must not block it here, so a GraphQL portal is
-  declared explicitly rather than being denied by default.
+  Capture the method, path and a sample response; write the config; run `verify`.
+  **No headers and no body** — §14.2 gives the portal neither, and CVE-2026-19650
+  is a GraphQL mutation carried on a `GET`, so a body-shaped surface is exactly
+  what the format refuses. This is the expected case.
+- **If it is GraphQL or tRPC**: the query cannot be expressed as a §14.2 portal,
+  because §14.2 has no body key to pin it in and §14.4's `deny_paths` would refuse
+  the GraphQL path by default. So a GraphQL portal is **not configurable** here:
+  either it is code-backed domain logic — written as an adapter the way Solr's
+  schema surface is, with its own contract test — or it is an open item on the
+  §18 list. Declaring it as a portal with a pinned body would require the body key
+  §14.2 exists to withhold.
 - **If the data is only in the HTML** (Next.js, server-rendered): last resort, and
   it must be pinned by a **fixture-based contract test** so breakage surfaces in CI
   rather than in front of a user. Note that **Next.js App Router does not emit

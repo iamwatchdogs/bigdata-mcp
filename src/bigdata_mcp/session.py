@@ -307,38 +307,23 @@ class Session:
         Returns:
             The response, with `url` set to where the body actually came from.
 
-        A `BackendUnreachable` escapes when the endpoint cannot be reached.
-        `aiohttp` types never escape this method — §5.2 requires a clean tool
-        error, never a library exception reaching an adapter — and the session's
-        own timeout budget is included: its builtin `TimeoutError` is not an
-        `aiohttp.ClientError`. Both go through `_as_unreachable`, which names the
-        endpoint and the fault class. Named in prose rather than under `Raises:`
-        because it is raised by that callee, not by this method.
-
-        A `PermissionError` also escapes, from `_check_initial_scheme`,
-        `_check_host_allowed`, or `_next_hop`, but only ever with a message naming
-        the rule that fired.
+        A `BackendUnreachable` escapes when the endpoint cannot be reached —
+        including a per-hop or whole-chain timeout, whose builtin `TimeoutError` is
+        not an `aiohttp.ClientError`. No `aiohttp` type leaves this method (§5.2),
+        and both faults go through `_as_unreachable`, which names the endpoint and
+        the fault class. A `PermissionError` also escapes from the three policy
+        checks, always with the rule that fired. Both are named in prose rather
+        than under `Raises:` because they are raised by callees, not by this frame.
         """
         current = url
+        self._check_initial(current)
         first_origin = _origin_of(current)
-        self._check_initial_scheme(current)
-        self._check_host_allowed(host_of(current), current)
         hops = 0
-        # One budget for the whole chain, not one per hop. The session's
-        # `ClientTimeout(total=...)` is applied by aiohttp to each `.get()`, so
-        # the worst case was `MAX_REDIRECTS + 1` of them: six hops at 20 s is 120 s
-        # against §3's 60 s client budget, on exactly the path — an HA standby
-        # answering slowly before each 307 — where the estate already knows it is
-        # slow. `asyncio.timeout` covers every hop combined, and its expiry raises
-        # the same builtin `TimeoutError` the arm below already converts.
+        # One budget for the whole chain, not one per hop: aiohttp applies the
+        # session's `ClientTimeout` to each `.get()`, so six hops at 20 s was 120 s
+        # against §3's 60 s client budget -- the HA-standby path the estate is slow
+        # on already. Its expiry raises the same `TimeoutError` the arms convert.
         try:
-            # One budget for the whole chain, not one per hop. aiohttp applies the
-            # session's `ClientTimeout(total=...)` to each `.get()`, so the worst
-            # case was `MAX_REDIRECTS + 1` of them: six hops at 20 s is 120 s
-            # against §3's 60 s client budget, on exactly the path -- an HA standby
-            # answering slowly before each 307 -- where the estate already knows it
-            # is slow. `asyncio.timeout` covers every hop combined, and its expiry
-            # raises the same builtin `TimeoutError` the arms below convert.
             async with asyncio.timeout(self._timeout_s):
                 while True:
                     try:
@@ -363,6 +348,35 @@ class Session:
             # type past it, and a whole chain over budget is a `BackendUnreachable`
             # with the same message shape a per-hop one carries.
             raise self._as_unreachable(current, exc) from exc
+
+    def _check_initial(self, url: str) -> str:
+        """Classify the URL the caller asked for, before any hop is taken.
+
+        Hoisted out of `get` for the same reason the hop loop was: that function
+        had grown past the length this repository's gate allows. `host_of` and
+        `_origin_of` both parse, and `urlsplit` raises `ValueError` on a malformed
+        IPv6 literal — an opening bracket with no closing one — so
+        `capture-fixtures --url` with such a URL would print a traceback rather
+        than exit 5. Same classification `_next_hop` gives a redirect target.
+
+        Args:
+            url: The absolute URL the caller asked for.
+
+        Returns:
+            The host of the initial URL, for the allowlist check.
+
+        A `PermissionError` escapes through `_refuse` when the URL does not parse
+        — a bare library exception reaching a caller is the failure §5.2 exists to
+        prevent. Named in prose rather than under `Raises:` because it is raised
+        by that callee, not by this frame.
+        """
+        try:
+            initial_host = host_of(url)
+        except ValueError:
+            self._refuse(RedirectRefusal.MALFORMED_TARGET, url)
+        self._check_initial_scheme(url)
+        self._check_host_allowed(initial_host, url)
+        return initial_host
 
     def _as_unreachable(self, current: str, exc: Exception) -> BackendUnreachable:
         """Convert a transport fault into the typed error §5.2 requires.

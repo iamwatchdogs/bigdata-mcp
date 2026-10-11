@@ -385,8 +385,8 @@ def test_the_synthetic_corpus_documents_the_shape_it_encodes() -> None:
     The format requires a comment on every synthetic fixture precisely because
     the file is the only place the claim survives, and this pins the three shapes
     the corpus exists for: an empty list where `null` is the reflex, the `none`
-    and `inf` literals `-count` emits for an empty prefix, and a fractional
-    `progress` a percent parser gets wrong. What it catches is a comment
+    and `inf` literals `-count` emits for an empty prefix, and the `progress`
+    percentage a fraction-reading parser gets wrong. What it catches is a comment
     rewritten until it stops naming the claim it was written to name.
     """
     corpus = load_corpus(CORPUS_DIR)
@@ -394,7 +394,7 @@ def test_the_synthetic_corpus_documents_the_shape_it_encodes() -> None:
     assert any("apps: []" in comment for comment in comments.values())
     assert any("none" in comment and "inf" in comment for comment in comments.values())
     assert any(
-        "0.037" in comment or "number" in comment.lower()
+        "percentage" in comment.lower() or "0-100" in comment
         for comment in comments.values()
     )
 

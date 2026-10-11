@@ -205,8 +205,14 @@ def _report_from_coverage() -> dict[str, object]:
     if shutil.which("coverage") is None:
         message = "`coverage` is not on PATH; run through `uv run` or `make`"
         raise NoReport(message)
+    # `--fail-under=0` disables the *total* check for this call. coverage.json
+    # applies `[tool.coverage.report].fail_under` itself and exits 2 when the
+    # project total is under it, so without this the run that most needs the
+    # per-file list is the one this gate reports as "no report" — and the total
+    # is already enforced by pytest on every run. This gate owns the per-file
+    # decision and nothing else.
     completed = subprocess.run(
-        ["coverage", "json", "-o", "-"],
+        ["coverage", "json", "-o", "-", "--fail-under=0"],
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,

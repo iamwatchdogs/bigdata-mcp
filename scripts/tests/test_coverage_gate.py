@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from coverage_gate import EXIT_BELOW_FLOOR
@@ -52,6 +53,9 @@ from coverage_gate import NoReport
 from coverage_gate import floor_from_pyproject
 from coverage_gate import main
 from coverage_gate import offenders
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REAL_PYPROJECT = REPO_ROOT / "pyproject.toml"
@@ -342,6 +346,53 @@ def test_a_coverage_failure_is_reported_as_unreadable(
     monkeypatch.setattr("coverage_gate.subprocess.run", fail)
 
     assert main([]) == EXIT_NO_REPORT
+
+
+def test_the_gate_disables_the_total_check_it_does_not_own(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The total is pytest's decision; a failing total must not hide the files.
+
+    `coverage json` applies `[tool.coverage.report].fail_under` itself and exits 2
+    when the project total is under it. Read as "the report could not be read",
+    that turned the one run needing the per-file list into `EXIT_NO_REPORT` with no
+    file names at all — while pytest had already enforced the total on the same
+    run. Asserted on the argv, because that is the whole fix.
+    """
+    seen: list[list[str]] = []
+
+    def record(argv: Sequence[str], **_kwargs: object) -> object:
+        """Record the argv the gate would have spawned.
+
+        Args:
+            argv: The gate's `coverage json` command, recorded.
+            **_kwargs: Anything else the gate passes, unused.
+
+        Returns:
+            A stand-in for `CompletedProcess` carrying a clean, parseable report.
+        """
+        seen.append(list(argv))
+
+        class Result:
+            """Carry the three fields the gate reads, with a clean report."""
+
+            returncode = 0
+            stdout = json.dumps(_report({"a.py": 100.0}))
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr("coverage_gate.subprocess.run", record)
+
+    assert main([]) == EXIT_CLEAN, (
+        "the gate did not read the canned report, so the argv was never built"
+    )
+
+    assert seen, "the gate never invoked `coverage json`"
+    assert "--fail-under=0" in seen[0], (
+        f"the gate did not disable the total check, so a project total under the "
+        f"floor exits 2 and is reported as an unreadable report: {seen[0]}"
+    )
 
 
 def test_a_stdout_that_is_not_json_is_reported_as_unreadable(

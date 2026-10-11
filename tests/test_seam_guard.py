@@ -233,10 +233,11 @@ def test_the_guard_fires_in_a_fresh_interpreter_that_preloads_an_offender() -> N
     module that gets imported first. Deleting the `guard_the_seam()` call turns
     this exit code 3 into 0.
 
-    The exit code alone cannot prove which refusal fired, so the message is
-    asserted as well. On Windows a child interpreter without `pytest` exits 3
-    too -- the program catches its own `ImportError` -- and only the message
-    distinguishes the guard's refusal from the wrong interpreter's.
+    The message is asserted as well as the exit code, because an exit code alone
+    cannot prove which refusal fired. On Windows a child interpreter without
+    `pytest` raises its own `ImportError`, and the program exits **4** for that
+    one -- the codes are distinct precisely so the two causes cannot be
+    confused.
     """
     completed = _spawn_fresh_interpreter()
     assert completed.returncode == 3, (

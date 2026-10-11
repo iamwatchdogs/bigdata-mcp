@@ -227,12 +227,31 @@ def _add_http_command(commands: Subparsers, transport: Transport) -> None:
     command.add_argument(
         "--method", default="GET", help="HTTP method; anything but GET is refused"
     )
+    _add_allowlist_argument(command)
+
+
+def _add_allowlist_argument(command: argparse.ArgumentParser) -> None:
+    """Register `--allowlist-host`, which repeats for YARN HA's two RMs.
+
+    Split out because the flag's reason is one paragraph and `_add_http_command`
+    is already at the length this repository's gate allows. `append` is the fix:
+    YARN's standby answers 307 pointing at the active peer, so a single host left
+    the HA path uncapturable through the seam §4.2 designed for it — the owner
+    could only point `--url` at the active RM, recording a different exchange
+    from the one production makes.
+
+    Args:
+        command: The subparser to extend.
+    """
     command.add_argument(
         "--allowlist-host",
         required=True,
+        action="append",
         help=(
-            "host the redirect policy is told about; required rather than "
-            "inferred, because an empty allowlist cannot follow YARN HA"
+            "host the redirect policy is told about; repeat for every peer, "
+            "because YARN HA is a 307 between two RMs and one host cannot "
+            "follow it. Required rather than inferred: an empty allowlist cannot "
+            "follow YARN HA at all"
         ),
     )
     command.add_argument(
@@ -389,7 +408,7 @@ def _capture(args: argparse.Namespace) -> Fixture:
                 observation — the confident-wrongness this module refuses.
         """
         async with Session(
-            allowlist=frozenset({args.allowlist_host}),
+            allowlist=frozenset(args.allowlist_host),
             allow_http=args.url.startswith("http://"),
             ca_bundle=str(args.ca_bundle) if args.ca_bundle else None,
         ) as session:

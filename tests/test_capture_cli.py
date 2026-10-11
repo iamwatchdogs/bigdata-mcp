@@ -592,6 +592,46 @@ def test_a_capture_records_a_refused_redirect_as_a_failure(
     assert not (tmp_path / "never.json").exists()
 
 
+def test_a_capture_can_be_given_every_host_an_ha_redirect_needs(
+    server: LocalHttpServer, tmp_path: Path
+) -> None:
+    """§3's HA standby answer: one flag per peer, or the 307 is refused.
+
+    YARN's standby RM answers 307 pointing at the active peer, and the redirect
+    allowlist is per-host. A single `--allowlist-host` therefore made the HA path
+    uncapturable through the seam §4.2 designed for it — the owner could only
+    point `--url` at the active RM, which records a different exchange from the
+    one production makes.
+
+    Both peers are the same loopback server here, because what is under test is
+    that the flag *repeat*s and every value reaches the allowlist, not that two
+    hosts exist.
+    """
+    server.route("/apps", lambda _p: json_reply({"apps": {"app": []}}))
+    out = tmp_path / "ha.json"
+
+    code = capture.main([
+        "https_api",
+        "--url",
+        server.url(),
+        "--source-id",
+        "yarn_rm",
+        "--operation",
+        "apps",
+        "--allowlist-host",
+        "127.0.0.1",
+        "--allowlist-host",
+        "127.0.0.1",
+        "--path",
+        "/apps",
+        "--out",
+        str(out),
+    ])
+
+    assert code == 0, "a repeated --allowlist-host was refused"
+    assert server.recorded == ["/apps"]
+
+
 def test_an_error_status_is_captured_rather_than_treated_as_a_failure(
     server: LocalHttpServer, tmp_path: Path
 ) -> None:
