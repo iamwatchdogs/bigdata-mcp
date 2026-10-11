@@ -332,6 +332,56 @@ def test_spec_declares_both_posture_modes() -> None:
     )
 
 
+def test_every_declared_dependency_matches_the_specs_own_table() -> None:
+    """A dependency line and its §4 row are one decision written twice.
+
+    `aiohttp` has its own test because its pin is a CVE. The rest of the table was
+    unguarded, and it drifted: §4's implementation note said `dependencies = []`
+    while three dependencies were declared, the `mcp` row pinned 2.2.0 against a
+    requirement of `>=2.3.0`, and the checker row named `pyright` where §17.2 now
+    names `ty`. The spec is the document a reader treats as authoritative, so a
+    wrong row there is worse than a missing one.
+
+    Asserted for every declared dependency, so adding a fourth to
+    `pyproject.toml` without a row here is a failure rather than a gap.
+
+    Mutation evidence: changing the `mcp` row back to `2.2.0` turns this red, as
+    does bumping the requirement in `pyproject.toml` alone.
+    """
+    spec = _spec_text()
+    rows = {
+        cells[0].strip("`"): cells[1].strip()
+        for cells in (
+            _table_cells(line)
+            for line in spec.splitlines()
+            if line.strip().startswith("|")
+            and len(_table_cells(line)) > 2
+            and _table_cells(line)[0].strip("`").isidentifier()
+        )
+        if cells[1].startswith("≥")
+    }
+
+    pyproject = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+    declared = {
+        requirement.split(">=")[0]: requirement.split(">=")[1]
+        for requirement in pyproject["project"]["dependencies"]
+        if ">=" in requirement
+    }
+
+    missing = sorted(set(declared) - set(rows))
+    assert not missing, (
+        f"{missing} declared in pyproject.toml but absent from §4's dependency "
+        "table. A dependency with no row is one nobody wrote down a reason for"
+    )
+    for name, floor in sorted(declared.items()):
+        row = rows[name].lstrip("≥")
+        assert row == floor, (
+            f"pyproject.toml requires {name}>={floor} while §4 pins {rows[name]}. "
+            "The two are one decision; a reader who trusts the spec resolves the "
+            "release the requirement no longer asks for"
+        )
+
+
 def test_the_aiohttp_floor_is_the_pin_the_spec_gives_for_it() -> None:
     """The CVE pin in §4 is the reason for the floor, so the two must agree.
 

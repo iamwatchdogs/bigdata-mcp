@@ -166,20 +166,24 @@ each one is a design input, not a preference.
 **Python 3.14, GIL build** (not free-threaded — `orjson` had no `cp314t` wheel in
 testing, and the workload does not need it).
 
-> **Implementation status.** `pyproject.toml` currently declares
-> `dependencies = []`. The table below is a *plan*, not the installed state, and
-> v2 adds `pyspnego` (§12) and a TOML parser. Nothing here is installed yet; the
-> repository contains a callable stub.
+> **Implementation status.** The repository is early: `pyproject.toml` declares
+> `aiohttp`, `jsonschema` and `mcp`, and the table below names everything v2
+> intends to ship alongside them — `pyspnego` (§12) and a TOML parser are not
+> installed yet, and the rows still below the declared three are the plan. The
+> declared floors are asserted against this table by
+> `scripts/tests/test_repo_contracts.py`, so a row and a requirement cannot drift
+> apart silently.
 
 | Dependency | Version | Why this one |
 |---|---|---|
-| `mcp` | 2.2.0 | Official Tier 1 SDK. `FastMCP` was renamed **`MCPServer`** in v2 — the old import path is gone, not deprecated. |
+| `mcp` | ≥2.3.0 | Official Tier 1 SDK. `FastMCP` was renamed **`MCPServer`** in v2 — the old import path is gone, not deprecated. |
 | `asyncssh` | 2.24.0 | Best-maintained SSH client available. `tcp_keepalive` defaults **True**; `x/crypto/ssh` has no client keepalive at all. Native multi-hop `tunnel=`. |
+| `jsonschema` | ≥4.25.1 | Validates the PARSED TOML against `schemas/config.schema.json`. Hand-rolling that would put a second, divergent definition of the rules in the tree (§16). |
 | `aiohttp` | ≥3.14.1 | YARN + Solr. **Chosen over `httpx2` — see §4.2.** Ships no synchronous request API, so the coroutine-blocking failure mode is not expressible. Pin ≥3.14.1: CVE-2026-54280 leaked the response on mid-body disconnect, which is exactly our streaming-abort path. |
 | `orjson` | latest | **2.2× faster than Go's `encoding/json`** on our payloads. |
 | `pydantic` | v2 | Schema derivation + boundary validation. Beats `json.Unmarshal`, which silently yields `0` for a failed float. |
 | `hypothesis` | latest | Property tests for the parser and the quoter. Better shrinking than Go's fuzzing. |
-| `pyright` (strict) + `ruff` | latest | Closes most of the static-analysis gap vs Go. |
+| `ty` (strict, warnings as errors) + `ruff` | latest | Closes most of the static-analysis gap vs Go. §17.2 names `ty` as the checker this repository runs. |
 
 ### 4.1 Why not Go — the honest record
 
@@ -2084,7 +2088,7 @@ entirely. *deleted* = removed.
 | 2.2 In scope | rewritten | 2.2 | 10 components, including the four families and the auth tiers |
 | 2.3 Out of scope | amended | 2.3 | HBase tools deleted in favour of a portal config; writes deferred with the posture plumbing retained |
 | 3 Environment constraints | amended | 3 | Adds YARN SPNEGO, the HA 307, a live ccache, macOS observer support, and the 4 s consequence for auth |
-| 4 Language and runtime | amended | 4 | Records that `dependencies = []` today and that v2 adds `pyspnego` |
+| 4 Language and runtime | amended | 4 | Records the three declared dependencies and their floors, and that v2 adds `pyspnego` |
 | 4.1 Why not Go | verbatim | 4.1 | — |
 | 4.2 Why `aiohttp` | amended | 4.2 | The blanket redirect ban replaced by the scoped policy; CVE-2026-42551 and CVE-2026-19650 added as the reason the portal schema has no header or body surface |
 | 4.3 Reversibility mandates | amended | 4.3 | Mandate 1 extended to cover the portal spec; "13 in v1" dropped |
