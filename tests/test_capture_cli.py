@@ -480,7 +480,14 @@ def test_a_path_without_a_leading_slash_reaches_the_path_it_names(
     assert server.recorded == ["/ws/v1/cluster/info"], (
         f"the joined URL did not name the route: {server.recorded}"
     )
-    assert str(load_fixture(out).request["url"]).endswith("/ws/v1/cluster/info")
+
+    request = load_fixture(out).request
+    assert str(request["url"]).endswith("/ws/v1/cluster/info")
+    assert request["path"] == "/ws/v1/cluster/info", (
+        "the fixture recorded the path the operator typed rather than the one "
+        "that was sent; a replay built on this fixture issues a request the "
+        "original capture never made"
+    )
 
 
 def test_a_capture_refuses_a_body_the_byte_cap_cut(

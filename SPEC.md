@@ -1809,7 +1809,7 @@ fail_if_open = true               # refuse to run against an unauthenticated Sol
 # the table names the file and the credential it uses. Secrets are never here.
 [portals]
 portal_dir = "~/.config/bigdata-mcp/portals"
-enabled = ["acme-warehouse"]      # explicit allowlist; "" disables the family
+enabled = ["acme-warehouse"]      # explicit allowlist; [] disables the family
 
 [auth]
 tier = "auto"                     # auto | oidc | oidc_entra | custom

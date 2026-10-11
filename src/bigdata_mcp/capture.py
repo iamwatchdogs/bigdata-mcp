@@ -409,7 +409,10 @@ def _capture(args: argparse.Namespace) -> Fixture:
     status, body, final_url = asyncio.run(call())
     request: dict[str, Any] = {
         "method": args.method,
-        "path": args.path,
+        # The normalised path, not `args.path`. The URL above was built from the
+        # normalised one, so recording the raw spelling would file a request the
+        # server never received -- the same confident wrongness in reverse.
+        "path": path,
         "params": params,
         "url": final_url,
     }

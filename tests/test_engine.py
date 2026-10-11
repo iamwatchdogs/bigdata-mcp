@@ -1010,18 +1010,6 @@ async def test_the_probe_does_not_need_a_permit_to_measure() -> None:
     assert gate.in_flight == 0, "a permit the test took was never released"
 
 
-def test_time_machine_is_a_usable_deterministic_clock() -> None:
-    """§18.2, closed: verified rather than assumed, on this interpreter."""
-    import datetime
-
-    import time_machine
-
-    pinned = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
-    with time_machine.travel(pinned):
-        assert datetime.datetime.now(datetime.UTC) == pinned
-    assert datetime.datetime.now(datetime.UTC) != pinned
-
-
 async def _answer(value: int) -> int:
     """Return `value`.
 

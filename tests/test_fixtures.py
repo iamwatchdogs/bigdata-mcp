@@ -498,9 +498,32 @@ def test_for_source_returns_every_fixture_for_a_backend() -> None:
     assert len(corpus.for_source("hdfs")) == 3
 
 
-def test_an_absent_corpus_directory_is_empty_not_an_error() -> None:
-    """§3: nothing has been captured yet, and that is the expected state."""
-    corpus = load_corpus(Path("tests/fixtures/does-not-exist"))
+def test_the_shipped_default_corpus_fails_loudly_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one path that must exist is the one shipped with this repository.
+
+    An *explicitly named* directory that is not there stays an empty corpus,
+    because "nothing captured yet" is the expected starting state. The default is
+    different: it is this repository's own corpus, and an empty result with no
+    error is indistinguishable from having loaded it — which is how a suite ends
+    up asserting nothing for a whole run.
+
+    The shipped path is redirected at a directory that cannot exist, because the
+    real one is asserted by the tests around it and this is about what happens
+    when it does *not*.
+    """
+    monkeypatch.setattr(
+        "bigdata_mcp.fixtures.corpus.DEFAULT_CORPUS_DIR", CORPUS_DIR / "absent"
+    )
+
+    with pytest.raises(FileNotFoundError, match="shipped fixture corpus"):
+        load_corpus()
+
+
+def test_a_named_directory_that_is_absent_is_still_an_empty_corpus() -> None:
+    """§3: nothing captured yet is the expected starting state, not an error."""
+    corpus = load_corpus(CORPUS_DIR / "does-not-exist")
     assert len(corpus) == 0
     assert corpus.validates_parsers is False
 

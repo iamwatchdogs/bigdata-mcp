@@ -14,8 +14,9 @@ there.
 **Two exception types, and callers need both.** A portal declaration with no
 endpoints raises `ValueError` — that is a mistake in the spec file, the kind an
 operator fixes by editing it. A declaration the posture cannot express raises
-`PermissionError`: per-call `headers` under `read_only`, or a tool name that reads
-as a write verb.
+`PermissionError`: a tool name that reads as a write verb, or a per-call `headers`
+table — the latter under *either* posture, because the schema has no `headers`
+property at all and CVE-2026-42551 is the reason (§4.2).
 
 `PermissionError` is deliberately not a subclass of `ValueError`. A caller writing
 `except ValueError` around `portal_schema` is handling a bad spec, and must not

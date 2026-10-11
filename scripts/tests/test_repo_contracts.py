@@ -991,6 +991,76 @@ def test_the_docstring_gate_is_wired_into_the_commit_stage() -> None:
     assert hook < config.index("pytest-testmon")
 
 
+def test_the_dev_clock_named_in_the_spec_is_usable_on_this_interpreter() -> None:
+    """§18.2's open question, closed by verifying rather than assuming.
+
+    §18 says the TTL, rate limiter and queue-deadline tests are deterministic
+    "given `time-machine`", and that its availability had to be *verified* before
+    anything relied on it. Nothing in the product suite uses `time-machine` — the
+    engine's determinism comes from `FakeClock` — so this assertion is about the
+    dev dependency the spec names, which makes it repository wiring and puts it
+    here rather than in the product suite.
+
+    A checker that patches nothing would otherwise be discovered on the day a
+    suite starts depending on it.
+
+    Raises:
+        AssertionError: If `time-machine` is declared but cannot be imported,
+            which is the state §18.2 said had to be verified rather than assumed.
+    """
+    import datetime
+
+    spec = _spec_text()
+    assert "time-machine" in spec, (
+        "the specification no longer names `time-machine`, so the open question "
+        "§18.2 records either moved or was dropped; this verification has to "
+        "point at whatever replaced it"
+    )
+
+    try:
+        import time_machine
+    except ImportError as exc:  # pragma: no cover - the dev group declares it
+        message = "time-machine is declared in the dev group but not importable"
+        raise AssertionError(message) from exc
+
+    pinned = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
+    with time_machine.travel(pinned):
+        assert datetime.datetime.now(datetime.UTC) == pinned
+    assert datetime.datetime.now(datetime.UTC) != pinned
+
+
+def test_the_commit_stage_hooks_cover_scripts_and_not_only_src() -> None:
+    """A commit touching only `scripts/` must not skip the gates that read it.
+
+    The tooling gates live under `scripts/`, so that directory is the one an edit
+    most likely to weaken them lands in. The patterns are asserted rather than
+    trusted: a filter narrowed to `^(src|tests)/` looks harmless in review and
+    quietly exempts the gate's own source, the hook's own file, and third of this
+    repository's Python.
+
+    The pattern is a regex, so this checks it *matches* rather than requiring one
+    literal — the `ty` hook's trigger is a directory prefix and the others are
+    file patterns, and reading them all as file paths would fail for the right
+    reason on the wrong hook.
+    """
+    config = (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    for hook_id in ("ty", "redirect-gate", "docstring-gate", "bandit"):
+        position = config.index(f"id: {hook_id}")
+        block = config[position:]
+        block = block[
+            : block.index("\n      - id: ") if "\n      - id: " in block else len(block)
+        ]
+        pattern = next(
+            line.strip()
+            for line in block.splitlines()
+            if line.strip().startswith("files:")
+        )
+        assert "scripts" in pattern, (
+            f"the {hook_id} hook's `files:` pattern no longer mentions `scripts`. "
+            "The gate lives there, so a commit that edits it must run it"
+        )
+
+
 def test_the_docstring_gate_hook_fires_on_a_threshold_edit() -> None:
     """Editing the threshold is how the gate is weakened, so the hook must see it.
 

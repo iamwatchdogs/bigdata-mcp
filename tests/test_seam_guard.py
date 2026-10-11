@@ -134,13 +134,20 @@ import types
 offender = types.ModuleType("bigdata_mcp.would_break_the_seam")
 offender.ClientSession = object
 sys.modules["bigdata_mcp.would_break_the_seam"] = offender
+OFFENDER = "bigdata_mcp.would_break_the_seam"
 
 # Importing the module under test IS the guard firing: `guard_the_seam()` runs
 # at module scope, so the ImportError comes out of the import rather than out of
-# a call this program would have to remember to make.
+# a call this program would have to remember to make. The message has to name the
+# offender too: an ImportError from anything else -- a module that simply cannot
+# be imported -- is not the guard, and reporting it as one is how this test
+# starts passing for the wrong reason.
 try:
     import tests.test_seam_guard  # noqa: F401
 except ImportError as exc:
+    if OFFENDER not in str(exc):
+        sys.stderr.write(str(exc) + "\\n")
+        raise SystemExit(4)
     sys.stderr.write(str(exc) + "\\n")
     raise SystemExit(3)
 

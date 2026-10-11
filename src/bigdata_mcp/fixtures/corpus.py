@@ -149,16 +149,27 @@ def load_corpus(directory: Path | None = None) -> Corpus:
             ships its corpus at, which holds the committed synthetic fixtures.
 
     Returns:
-        The indexed corpus. An absent directory is an empty corpus rather than a
-        failure, because a project that has captured nothing yet is the expected
-        starting state (§3: the estate is unreachable from here).
+        The indexed corpus.
 
-    A malformed fixture refuses the load with a message naming the file and the
-    field, because validating on load is the entire point of doing it here rather
+    A directory the caller names that is not there is an empty corpus rather than
+    a failure, because a project that has captured nothing yet is the expected
+    starting state (§3: the estate is unreachable from here). The *shipped*
+    default is the one path that must exist, so its absence is a failure: this
+    repository cannot run without its own corpus, and an empty corpus with no
+    error is indistinguishable from "nothing captured yet".
+
+    A malformed fixture refuses the load through `load_fixture`, naming the file
+    and the field — validating on load is the entire point of doing it here rather
     than at first use.
+
+    Raises:
+        FileNotFoundError: If the shipped default corpus directory is absent.
     """
     root = directory if directory is not None else DEFAULT_CORPUS_DIR
     if not root.is_dir():
+        if directory is None:
+            message = f"the shipped fixture corpus {root} is absent"
+            raise FileNotFoundError(message)
         return Corpus(fixtures=(), root=root)
 
     fixtures = [
