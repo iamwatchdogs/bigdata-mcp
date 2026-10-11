@@ -35,11 +35,6 @@ CORPUS_DIR = Path(__file__).resolve().parent / "fixtures"
 # --------------------------------------------------------------------------
 
 
-# --------------------------------------------------------------------------
-# The corpus
-# --------------------------------------------------------------------------
-
-
 def test_the_committed_synthetic_corpus_loads() -> None:
     """The committed corpus is validated by being loaded, on every run.
 

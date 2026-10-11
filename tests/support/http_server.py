@@ -446,15 +446,6 @@ class LocalTlsServer(LocalHttpServer):
         return f"https://127.0.0.1:{self.port}{path}"
 
 
-#: PEM encodings, named because the triple reads worse than the constants do.
-_PEM_CERT = serialization.Encoding.PEM
-_PEM_KEY = (
-    serialization.Encoding.PEM,
-    serialization.PrivateFormat.TraditionalOpenSSL,
-    serialization.NoEncryption(),
-)
-
-
 #: PEM encodings, named because the key's triple reads worse inline.
 _PEM = serialization.Encoding.PEM
 _KEY_ENCODING = (
