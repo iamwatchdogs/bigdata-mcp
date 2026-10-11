@@ -24,11 +24,12 @@ is worth more than a review comment:
    context, and no path that builds one and then does not use it.
 5. **A credential does not outlive its origin.** `Authorization`,
    `Proxy-Authorization` and `Cookie` are dropped the moment a hop leaves the
-   `(scheme, host, port)` the request started on. See the note on manual
-   redirect following below for why this is not aiohttp's job here.
+   `(scheme, host, port)` the request started on.
 
 `TCPConnector(limit_per_host=2)` is set explicitly because aiohttp's `0` means
-*unlimited*, which would make every politeness guarantee in §10 decorative.
+*unlimited*, which would make every politeness guarantee in §10 decorative. The
+names that decide a hop live in `bigdata_mcp.redirects`, and the one `SSLContext`
+this process builds lives in `bigdata_mcp.tls`.
 
 Redirects are followed **manually**, one hop at a time, rather than by handing a
 whole chain to aiohttp. That is what makes per-hop allowlist checking possible at
@@ -39,20 +40,16 @@ It also gives up one thing aiohttp does for free, and property 5 exists to get i
 back: its follower strips `Authorization` when a hop leaves the origin. Following
 hops by hand means sending what you were given, so a YARN RM that redirects to an
 allowlisted Solr host would hand that host the YARN credential. Being allowlisted
-is not a reason to keep a credential — the allowlist is keyed on *host* precisely
-so HA peers on different hosts stay reachable, which is the same reason it is too
-wide to authenticate to.
+is keyed on *host*, precisely so HA peers stay reachable — too wide to
+authenticate to.
 """
 
 from __future__ import annotations
 
 import asyncio
-import enum
-import ssl
 from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
-from typing import NoReturn
 from typing import Self
 from urllib.parse import urljoin
 from urllib.parse import urlsplit
@@ -60,84 +57,27 @@ from urllib.parse import urlsplit
 import aiohttp
 
 from bigdata_mcp.errors import BackendUnreachable
-from bigdata_mcp.errors import ConfigError
 from bigdata_mcp.errors import MissingCABundleError
 from bigdata_mcp.hosts import host_of
+from bigdata_mcp.redirects import CREDENTIAL_HEADERS
+from bigdata_mcp.redirects import LIMIT_PER_HOST
+from bigdata_mcp.redirects import MAX_REDIRECTS
+from bigdata_mcp.redirects import REDIRECT_STATUSES
+from bigdata_mcp.redirects import RedirectRefusal
+from bigdata_mcp.redirects import Scheme
+from bigdata_mcp.redirects import lower_headers as _lower
+from bigdata_mcp.redirects import origin_of as _origin_of
+from bigdata_mcp.redirects import refuse_redirect
+from bigdata_mcp.tls import build_ssl_context
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from types import TracebackType
 
-#: §4.2 item 3. A chain longer than this is an error, not a retry.
-MAX_REDIRECTS: int = 5
-
-#: §4.2 item 7. aiohttp's own default of 0 means *unlimited*.
-LIMIT_PER_HOST: int = 2
-
-REDIRECT_STATUSES: frozenset[int] = frozenset({301, 302, 303, 307, 308})
-
-#: Header names that carry a credential, dropped when a hop leaves the origin the
-#: request started on. §4.2 item 2's per-hop allowlist is what makes cross-origin
-#: redirects possible at all, so the credential has to be what is re-checked.
-CREDENTIAL_HEADERS: frozenset[str] = frozenset({
-    "authorization",
-    "proxy-authorization",
-    "cookie",
-})
-
-
-class Scheme(enum.StrEnum):
-    """The two schemes this seam speaks.
-
-    Attributes:
-        HTTP: Refused as a redirect target from an HTTPS request, and refused
-            entirely as an initial scheme unless explicitly permitted.
-        HTTPS: The only scheme a request may use when TLS is required.
-    """
-
-    HTTP = "http"
-    HTTPS = "https"
-
-
-class RedirectRefusal(enum.Enum):
-    """Why a redirect was not followed.
-
-    An enum rather than loose message strings, so the reason is a value a test can
-    assert on and a caller can branch on, and so the wording lives in one place.
-
-    Attributes:
-        NO_LOCATION: A 3xx with no `Location`. A broken server rather than a
-            policy call, but still not something to follow.
-        NOT_ALLOWLISTED: The hop target is not a configured host.
-        SCHEME_DOWNGRADE: The hop target drops from HTTPS to HTTP.
-        TOO_MANY_HOPS: The chain exceeded `MAX_REDIRECTS`.
-    """
-
-    NO_LOCATION = "redirect carried no Location header"
-    NOT_ALLOWLISTED = "redirect target is not an allowed host"
-    MALFORMED_TARGET = "redirect target is not a URL this session can check"
-    SCHEME_DOWNGRADE = "redirect would downgrade HTTPS to HTTP"
-    TOO_MANY_HOPS = "redirect chain exceeded the hop limit"
-
 
 @dataclass(frozen=True, slots=True)
 class Response:
-    """What a caller gets back. Deliberately not an `aiohttp` type.
-
-    Returning the library's own response would leak its lifetime requirements — the
-    session must outlive the body — into every adapter, and an object whose
-    correctness depends on `__aexit__` running is not something to hand to code
-    three layers away.
-
-    Attributes:
-        status: HTTP status code.
-        body: Decoded body text, already truncated to the byte cap.
-        url: Where the body actually came from, after any redirects. The final
-            URL, not the requested one — §8.1's `resolved_params` exists because
-            a confidently wrong answer is the worst outcome.
-        headers: Response headers with lowercased keys.
-        truncated: Whether the byte cap cut the body.
-    """
+    """One fetched page: status, body, final URL, headers, truncation flag."""
 
     status: int
     body: str
@@ -146,52 +86,12 @@ class Response:
     truncated: bool = False
 
 
-def build_ssl_context(ca_bundle: str) -> ssl.SSLContext:
-    """Build the one `SSLContext` this process uses for a CA bundle.
-
-    Never built from a default trust source: §3's environment is corporate, and
-    a library default would either fail on every internal host or — worse, if
-    someone "fixed" that by turning verification off — pass silently. Nothing
-    here returns a permissive context.
-
-    Args:
-        ca_bundle: Path to a PEM bundle. Required; `create_default_context`
-            with no path loads the library's default trust roots, which is the
-            path §3 forbids.
-
-    Returns:
-        A verifying context with hostname checking on.
-
-    Raises:
-        ValueError: If `ca_bundle` is empty.
-        ConfigError: If the bundle cannot be read or parsed — a missing path or
-            a file that is not PEM. Surfaced as a config fault so callers that
-            treat `BigDataMcpError` as a refusal (the capture CLI's exit 5) do
-            not emit a traceback instead.
-    """
-    if not ca_bundle:
-        message = "An https session needs an explicit ca_bundle: no PEM path given"
-        raise ValueError(message)
-    try:
-        context = ssl.create_default_context(cafile=ca_bundle)
-    except OSError as exc:
-        # A missing file raises `FileNotFoundError` and an unreadable or non-PEM
-        # one raises `ssl.SSLError`; both are `OSError` subclasses. Left as-is
-        # they surface as a traceback from the CLI's capture path instead of the
-        # documented refusal — a configuration fault is not a crash.
-        message = f"Cannot load CA bundle {ca_bundle}: {exc}"
-        raise ConfigError(message) from exc
-    context.check_hostname = True
-    context.verify_mode = ssl.CERT_REQUIRED
-    return context
-
-
 class Session:
     """The wrapper every HTTP source goes through.
 
-    Owns the connection pool, the TLS context, the timeout, the byte cap, and the
-    scoped redirect policy. Nothing else in the package constructs an
-    `aiohttp.ClientSession`, and `scripts/redirect_gate.py` enforces that.
+    Owns the connection pool, the TLS context, the timeout, and the byte cap.
+    Nothing else in the package constructs an `aiohttp.ClientSession`, and
+    `scripts/redirect_gate.py` enforces that.
 
     Args:
         allowlist: Hosts the initial request and each of its redirects may reach.
@@ -335,7 +235,7 @@ class Session:
                             if raw.status not in REDIRECT_STATUSES:
                                 return await self._read(raw, current)
                             if hops >= MAX_REDIRECTS:
-                                self._refuse(RedirectRefusal.TOO_MANY_HOPS, current)
+                                refuse_redirect(RedirectRefusal.TOO_MANY_HOPS, current)
                             current = self._next_hop(
                                 raw.headers.get("Location"), current
                             )
@@ -373,7 +273,7 @@ class Session:
         try:
             initial_host = host_of(url)
         except ValueError:
-            self._refuse(RedirectRefusal.MALFORMED_TARGET, url)
+            refuse_redirect(RedirectRefusal.MALFORMED_TARGET, url)
         self._check_initial_scheme(url)
         self._check_host_allowed(initial_host, url)
         return initial_host
@@ -442,22 +342,6 @@ class Session:
                 if name.lower() not in CREDENTIAL_HEADERS
             }
         return merged
-
-    @staticmethod
-    def _refuse(reason: RedirectRefusal, detail: str) -> NoReturn:
-        """Refuse a redirect, naming both the rule and the URL.
-
-        Args:
-            reason: Which of the four rules fired.
-            detail: The URL the rule fired at, plus whatever context helps.
-
-        Raises:
-            PermissionError: Always. A named rule beats a bare string: an operator
-                reading the log should not have to work out which check refused,
-                and a model should not have to retry to discover it.
-        """
-        message = f"{reason.value}: {detail} (hop limit {MAX_REDIRECTS})"
-        raise PermissionError(message)
 
     def _raw(self) -> aiohttp.ClientSession:
         """Return the live underlying session.
@@ -550,7 +434,7 @@ class Session:
         past this point.
         """
         if not location:
-            self._refuse(RedirectRefusal.NO_LOCATION, current)
+            refuse_redirect(RedirectRefusal.NO_LOCATION, current)
         try:
             target = urljoin(current, location)
             was_https = urlsplit(current).scheme.lower() == Scheme.HTTPS
@@ -562,9 +446,11 @@ class Session:
             # is written by another system, so it is a normal outcome to classify
             # and not an exception to propagate (§5.2 admits no library type past
             # this point).
-            self._refuse(RedirectRefusal.MALFORMED_TARGET, f"{current} -> {location}")
+            refuse_redirect(
+                RedirectRefusal.MALFORMED_TARGET, f"{current} -> {location}"
+            )
         if was_https and is_http:
-            self._refuse(RedirectRefusal.SCHEME_DOWNGRADE, f"{current} -> {target}")
+            refuse_redirect(RedirectRefusal.SCHEME_DOWNGRADE, f"{current} -> {target}")
         self._check_host_allowed(allowed_host, f"{current} -> {target}")
         return target
 
@@ -585,7 +471,7 @@ class Session:
         """
         if host not in self._allowlist:
             allowed = ", ".join(sorted(self._allowlist)) or "(nothing)"
-            self._refuse(
+            refuse_redirect(
                 RedirectRefusal.NOT_ALLOWLISTED,
                 f"{host}, from {detail}. Allowed: {allowed}",
             )
@@ -636,39 +522,6 @@ class Session:
             headers=_lower(raw.headers),
             truncated=cut or (declared is not None and received < declared),
         )
-
-
-def _origin_of(url: str) -> str:
-    """Return a URL's origin as `(scheme, host, port)`, lowercased.
-
-    Compared as a triple rather than as a string prefix: two URLs differing only
-    by a default port, or by the *case* of the host, are the same origin, and a
-    prefix comparison would treat `http://rm1` and `http://rm1.evil` as related
-    while treating `http://rm1:80` and `http://rm1` as unrelated.
-
-    Args:
-        url: The URL to inspect.
-
-    Returns:
-        The origin, or an empty string when the URL carries no host.
-    """
-    parts = urlsplit(url)
-    host = (parts.hostname or "").lower()
-    port = parts.port
-    default = 443 if parts.scheme.lower() == Scheme.HTTPS else 80
-    return f"{parts.scheme.lower()}://{host}:{port or default}"
-
-
-def _lower(headers: Mapping[str, str]) -> dict[str, str]:
-    """Lowercase response header names.
-
-    Args:
-        headers: An `aiohttp` header mapping.
-
-    Returns:
-        A plain dict with lowercased keys, so a lookup cannot miss on case.
-    """
-    return {key.lower(): value for key, value in headers.items()}
 
 
 __all__ = [
