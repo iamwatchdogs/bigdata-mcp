@@ -674,6 +674,79 @@ async def test_the_retry_hint_reports_the_hold_the_queue_actually_had() -> None:
     )
 
 
+async def test_a_spawn_failure_is_not_cached_for_the_full_ttl() -> None:
+    """A caller that could not start is not an answer to serve for five minutes.
+
+    `singleflight` shares a failure for `FAILURE_TTL_S = 1.0` because a backend
+    that just failed to start will probably fail again, and the cache path was
+    caching that same failure for the clamped 5-300 s -- so one missing binary on
+    an edge host became an outage that outlived the host it failed on.
+
+    A non-zero *exit code* is a real answer and is still cached, which is the
+    other half of the assertion: the fix has to be about how the command ended,
+    not about every result that is not a clean success.
+    """
+    failing_calls = 0
+    refused_calls = 0
+
+    class Failing(FakeExecutor):
+        """A fake whose command never starts."""
+
+        @override
+        async def exec(self, argv: Sequence[str], deadline: Deadline) -> ExecResult:
+            """Count the call and report a spawn failure.
+
+            Args:
+                argv: The command.
+                deadline: The deadline, unused.
+
+            Returns:
+                A result carrying `spawn_failed`, the shape a missing binary
+                    produces.
+            """
+            nonlocal failing_calls
+            failing_calls += 1
+            return ExecResult(exit_code=-1, spawn_failed=True)
+
+    class SayingNo(FakeExecutor):
+        """A fake whose command runs and answers with a non-zero status."""
+
+        @override
+        async def exec(self, argv: Sequence[str], deadline: Deadline) -> ExecResult:
+            """Count the call and answer with exit 1.
+
+            Args:
+                argv: The command.
+                deadline: The deadline, unused.
+
+            Returns:
+                A result carrying a non-zero exit code from a started process.
+            """
+            nonlocal refused_calls
+            refused_calls += 1
+            return ExecResult(exit_code=1)
+
+    async def scenario() -> None:
+        """Ask each engine twice, with both callers agreeing to use the cache."""
+        failing_engine = PoliteEngine(Failing(), edge_cores=8)
+        await failing_engine.run("k", COUNT_ARGV)
+        await failing_engine.run("k", COUNT_ARGV)
+
+        refused_engine = PoliteEngine(SayingNo(), edge_cores=8)
+        await refused_engine.run("k", COUNT_ARGV)
+        await refused_engine.run("k", COUNT_ARGV)
+
+    await scenario()
+
+    assert failing_calls == 2, (
+        "a spawn failure was served from the cache to the second caller"
+    )
+    assert refused_calls == 1, (
+        "a command that ran and answered with a non-zero status was not cached; "
+        "that answer is real and must not be re-fetched"
+    )
+
+
 async def test_callers_that_agree_on_caching_still_coalesce() -> None:
     """The other half: the key change must not split every bypass into real work."""
     fake = FakeExecutor()

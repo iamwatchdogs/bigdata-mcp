@@ -272,7 +272,13 @@ class PoliteEngine:
             finally:
                 self._counters.in_flight -= 1
 
-        if use_cache:
+        # A spawn failure is not an answer. `singleflight` shares one for
+        # `FAILURE_TTL_S` on purpose — a backend that just failed to start will
+        # probably fail again, and caching that for the full TTL turns a transient
+        # blip into a five-minute outage — and the cache path has to decline the
+        # same way rather than holding the failure for the clamped 5-300 s. A
+        # non-zero *exit code* is a real answer and is still cached.
+        if use_cache and not result.spawn_failed:
             self.cache.put(key, result)
         return result
 
