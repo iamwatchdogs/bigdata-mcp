@@ -64,7 +64,21 @@ def test_a_capture_records_a_refused_redirect_as_a_failure(
     server: LocalHttpServer,
     tmp_path: Path,
 ) -> None:
-    """A 307 somewhere the policy does not allow must not become a fixture."""
+    """A 307 somewhere the policy does not allow must not become a fixture.
+
+    The exit code is pinned rather than checked non-zero, because the CLI has
+    three failure codes and only one of them means "the policy said no". A
+    caller that branches on the reason -- and `test_capture_cli.py` documents
+    which is which -- would be satisfied by an assertion this loose, so the test
+    would keep passing if a refusal started being reported as, say, a missing
+    file.
+
+    `recorded` is the other half: it holds every path the server was asked for,
+    so `["/ws"]` is what separates "the request went out and the *redirect* was
+    refused" from "nothing was sent at all". The second would make this test
+    pass against a pre-flight that fires first, and the redirect policy would
+    then be covered by nothing.
+    """
     server.route("/ws", lambda _p: redirect("http://elsewhere.invalid/x"))
     code = capture.main([
         "https_api",
@@ -81,7 +95,8 @@ def test_a_capture_records_a_refused_redirect_as_a_failure(
         "--out",
         str(tmp_path / "never.json"),
     ])
-    assert code != 0
+    assert code == capture.EXIT_REFUSED
+    assert server.recorded == ["/ws"]
     assert not (tmp_path / "never.json").exists()
 
 
