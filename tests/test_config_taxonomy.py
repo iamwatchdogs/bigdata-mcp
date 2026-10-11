@@ -25,9 +25,6 @@ from bigdata_mcp.errors import ConfigError
 from bigdata_mcp.posture import Posture
 from tests.support.config_files import fresh_dir as _fresh_dir
 from tests.support.config_files import write_config
-
-#: A literal shaped like a credential, composed at runtime for the reason the
-#: support module records: a committed literal is what secret scanners flag.
 from tests.test_config import VALID_TOML
 
 #: A literal shaped like a credential, composed at runtime for the reason the
