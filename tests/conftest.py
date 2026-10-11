@@ -21,8 +21,11 @@ from typing import Any
 
 import pytest
 
+from tests.support.http_server import LocalHttpServer
+
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from collections.abc import Iterator
 
 
 @pytest.fixture(autouse=True)
@@ -40,6 +43,21 @@ def _no_inherited_config_path(monkeypatch: pytest.MonkeyPatch) -> None:
     after this fixture has run, and that is the whole of the interaction.
     """
     monkeypatch.delenv("BIGDATA_MCP_CONFIG", raising=False)
+
+
+@pytest.fixture
+def server() -> Iterator[LocalHttpServer]:
+    """Return a started loopback HTTP server.
+
+    Lives here rather than in a test module because two suites need it and a
+    fixture is the one thing a test module cannot import from another -- so the
+    second copy was a rename away from serving a stale class.
+
+    Yields:
+        A running `LocalHttpServer`, stopped when the test finishes.
+    """
+    with LocalHttpServer() as running:
+        yield running
 
 
 def pytest_pyfunc_call(

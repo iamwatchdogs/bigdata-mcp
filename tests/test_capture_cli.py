@@ -65,7 +65,6 @@ that awaits a no-op.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 
@@ -79,20 +78,6 @@ from tests.support.http_server import LocalHttpServer
 from tests.support.http_server import json_reply
 from tests.support.http_server import redirect
 from tests.support.http_server import text
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
-
-
-@pytest.fixture
-def server() -> Iterator[LocalHttpServer]:
-    """Return a started loopback HTTP server.
-
-    Yields:
-        A running `LocalHttpServer`, stopped when the test finishes.
-    """
-    with LocalHttpServer() as running:
-        yield running
 
 
 def test_help_states_the_transport_asymmetry() -> None:
