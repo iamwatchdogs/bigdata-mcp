@@ -13,12 +13,10 @@ if TYPE_CHECKING:
 import pytest
 from repo_support import CI_PATH
 from repo_support import CODECOV_PATH
-from repo_support import CODERABBIT_DOCSTRINGS_BLOCK
 from repo_support import CONTRIBUTING_PATH
 from repo_support import COVERAGE_FLOOR_PERCENT
 from repo_support import MAKEFILE_PATH
 from repo_support import PYPROJECT_PATH
-from repo_support import _coderabbit_text
 
 # --------------------------------------------------------------------------
 # The coverage floor: one number, three configurations
@@ -256,45 +254,3 @@ def test_contributing_states_the_same_coverage_floor() -> None:
         "their missing test. Update the prose to match, or raise the floor in "
         "all four places in one commit"
     )
-
-
-#: The docstring threshold this repository commits to, in percent. Two
-#: configurations state it -- `pyproject.toml`, which the deterministic
-#: `scripts/docstring_gate.py` reads, and `.coderabbit.yaml`, whose docstring
-#: pre-merge check CodeRabbit runs on the diff. Asserted equal below, so neither
-#: can be edited alone.
-def _coderabbit_docstrings_threshold() -> float:
-    """Read the `threshold` under `.coderabbit.yaml`'s `docstrings:` block.
-
-    There is no YAML parser available to tests -- same reason
-    `_codecov_status_target` gives -- so this walks indentation under the
-    `docstrings:` header, which is also what stops it matching some *other*
-    `threshold` key in a file that carries one per check.
-
-    Returns:
-        The threshold as a float percentage.
-
-    Raises:
-        AssertionError: If the block or its `threshold` cannot be located. That is
-            a change to the config's shape rather than to its policy, and both
-            need a human -- but only one of them needs one urgently.
-    """
-    lines = _coderabbit_text().splitlines()
-    header = re.compile(r"^(\s*)docstrings:\s*$")
-    threshold = re.compile(r"^\s*threshold:\s*([0-9]+(?:\.[0-9]+)?)")
-    for index, line in enumerate(lines):
-        match = header.match(line)
-        if match is None:
-            continue
-        indent = len(match.group(1))
-        for nested in lines[index + 1 :]:
-            if nested.strip() and len(nested) - len(nested.lstrip()) <= indent:
-                break
-            found = threshold.match(nested)
-            if found:
-                return float(found.group(1))
-        block = CODERABBIT_DOCSTRINGS_BLOCK
-        message = f".coderabbit.yaml has an `{block}` block with no `threshold`"
-        raise AssertionError(message)
-    message = ".coderabbit.yaml has no `docstrings` pre-merge check"
-    raise AssertionError(message)

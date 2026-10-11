@@ -100,3 +100,49 @@ def _stranded_marker(path: Path, lines: list[str], index: int) -> str:
             return location
         return ""
     return ""
+
+
+#: The definitions in ``repo_support.py`` that have been pasted twice by
+#: accident. Each name is the *reader* for one half of a two-configuration
+#: contract, so a duplicate does not fail anything — Python keeps the second
+#: definition and every import keeps working.
+_SINGLE_COPY_DEFINITIONS = (
+    "CODERABBIT_DOCSTRINGS_BLOCK =",
+    "def _docstrings_threshold_percent(",
+    "def _coderabbit_text(",
+    "def _coderabbit_docstrings_threshold(",
+)
+
+
+def test_repo_support_defines_each_reader_once() -> None:
+    """Assert ``repo_support.py`` holds one copy of each shared reader.
+
+    The readers that pair ``pyproject.toml`` with ``.coderabbit.yaml`` were
+    pasted twice into this module, and the first copy was dead in the plainest
+    way a Python duplicate can be: the second definition silently shadowed it,
+    so both copies stayed byte-identical, both compiled, and the suite stayed
+    green. Nothing reads a name from the middle of a file, so the only thing
+    that could notice was a count.
+
+    The risk is not the waste but the edit. Changing the refusal message, the
+    regex, or the assertion in one copy and not the other leaves two readers
+    that disagree about what the configuration says, and which one wins is
+    decided by position in the file rather than by anyone's intent — a
+    difference no gate would report, because both copies satisfy their callers.
+
+    A third reader of the same name in a *different* module is allowed: the
+    consumer in ``test_tooling_contracts.py`` imports these by name, and a
+    module-local copy elsewhere is a separate decision. This asserts only that
+    the shared module is not carrying two.
+    """
+    source = (REPO_ROOT / "scripts" / "tests" / "repo_support.py").read_text(
+        encoding="utf-8"
+    )
+    counts = {name: source.count(name) for name in _SINGLE_COPY_DEFINITIONS}
+    duplicated = {name: count for name, count in counts.items() if count != 1}
+    assert duplicated == {}, (
+        "repo_support.py defines these more than once, so the first is dead and "
+        f"the second silently wins: {duplicated}. Delete every copy but the last; "
+        "the readers pair two configurations that must agree, and two copies can "
+        "drift into disagreeing without any gate noticing"
+    )
