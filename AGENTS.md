@@ -175,8 +175,28 @@ Additional instructions:
 - Generate relevant unit/integration/regression/e2e tests based on the users requirement.
 - Prefer creating test before changes.
 - Config-only changes are not exempt from tests. Add an assertion in
-  `tests/test_repo_contracts.py` that the configuration encodes the decision it
-  exists for, and that fails if the decision is reverted.
+  `scripts/tests/test_repo_contracts.py` that the configuration encodes the decision
+  it exists for, and that fails if the decision is reverted.
+
+### Where a test lives
+
+The suite has two roots, and which one a test belongs in follows from what it is
+testing:
+
+| Test is about | Lives in |
+| --- | --- |
+| Behaviour of the package in `src/bigdata_mcp/` | `tests/` |
+| A tool in `scripts/` — a gate, a script, a repository contract | `scripts/tests/` |
+
+`tests/` is for `src/`. A test that reads `SPEC.md`, `pyproject.toml`, the
+Makefile, or the source text of a gate is a test of the repository's wiring, and
+keeping it in `tests/` couples the product suite to that wiring: `make test` then
+fails for a reason that has nothing to do with the product. The research ledger
+(`docs/research/README.md` D5) records this decision and a contract test that was
+deleted from `tests/` on exactly these grounds.
+
+`pytest` runs both roots (`testpaths` in `pyproject.toml`), and a test for a script
+lives beside that script so a rename is obvious rather than a dangling import.
 
 Two failure modes to name explicitly in a PR description, because both survive
 review unnoticed:

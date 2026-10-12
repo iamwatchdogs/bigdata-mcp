@@ -69,6 +69,17 @@ ANALYSE_TIMEOUT_SECONDS = 600
 
 
 def _fail(message: str) -> int:
+    """Report the reason the gate is failing and return the failing exit status.
+
+    Every exit from this script carries a reason on stderr, because a gate that
+    exits non-zero in silence is a gate the operator has to read the source of.
+
+    Args:
+        message: What failed, put in front of the operator as-is.
+
+    Returns:
+        `1`, the exit status `main` hands back to the caller.
+    """
     print(f"codacy: {message}", file=sys.stderr)
     return 1
 

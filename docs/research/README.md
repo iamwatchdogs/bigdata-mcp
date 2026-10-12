@@ -13,9 +13,10 @@ verification status.
 
 | File | Question it answers | Status |
 |---|---|---|
-| [`language-evaluation.md`](language-evaluation.md) | Go or Rust for a local-first read-only big-data MCP server? | Verdict recorded; six items explicitly unverified |
-| [`polite-engine-and-adapters.md`](polite-engine-and-adapters.md) | How do the polite engine's five layers and the adapter set actually work? | Design, with a verification-status legend per claim |
-| [`../council-log/2026-09-27-validate-spec.md`](../council-log/2026-09-27-validate-spec.md) | Three independent judges' review of `SPEC.md` | WARN verdict, high confidence, two rounds each |
+| [`language-evaluation.md`](language-evaluation.md) | Go or Rust for a local-first big-data MCP server? | Verdict recorded; six items explicitly unverified. **Superseded in part** — D6 corrects the OpenDAL `services-all` note |
+| [`polite-engine-and-adapters.md`](polite-engine-and-adapters.md) | How do the polite engine's five layers and the adapter set actually work? | Design, with a verification-status legend per claim. **Superseded on three points** — D6: its closed `Connector.id` union, closed `kind` enum, and filesystem-shaped `Connector` interface are all replaced by `SPEC.md` v2 §5.2. Not edited; read it for the reasoning |
+| [`../council-log/2026-09-27-validate-spec.md`](../council-log/2026-09-27-validate-spec.md) | Three independent judges' review of `SPEC.md` v1 | WARN verdict, high confidence, two rounds each. **Factually complete, scope-blind** — D6: every external fact held, and no judge evaluated scope |
+| [`../specs/scope-realignment-mcp-server-v2_20261005_124933.spec.md`](../specs/scope-realignment-mcp-server-v2_20261005_124933.spec.md) | Why the scope changed from v1 to v2, and what each decision rested on | Agreed. The decision record behind `SPEC.md` v2 |
 
 ## Decision ledger
 
@@ -146,7 +147,7 @@ is where the "2 critical / 18 high" almost certainly come from. None of it is
 this project's code.
 
 The complex lizard output *does* read this repository: the highest cyclomatic
-complexity in `tests/test_repo_contracts.py` is 13, under the `complexipy` gate
+complexity in `scripts/tests/test_repo_contracts.py` is 13, under the `complexipy` gate
 of 15 in `pyproject.toml`, so the reported "Complexity 22" is Codacy's own
 aggregate on a different scale and not a regression against our gate.
 
@@ -441,9 +442,191 @@ osv-scanner, gitleaks, and CodeQL, plus dependency-review and Scorecard.
 Codacy is to become useful, the exclusion has to be configured in Codacy's own
 analysis settings, not in this repository.
 
+**The `tests/test_seam_guard.py:220` finding, and the suppression that did not
+suppress.** The platform reported
+`Semgrep_python.lang.security.audit.dangerous-subprocess-use-audit` at that line
+long after the repository had decided the call was safe and written a
+`# nosemgrep` for it. The call is a false positive of the *vulnerability* — a
+list argv, no shell, `sys.executable` plus a module-level constant — and the
+finding is nonetheless correct as a report of the *rule*: the rule exempts a
+literal, and `sys.executable` is not one. What was wrong was the suppression.
+
+Opengrep honours a `nosemgrep` marker **on the line its finding starts on**, and
+nowhere else. Measured on 1.26.0 with a replica of the rule carrying the same
+three `pattern-not` guards quoted above, against a multi-line `subprocess.run`
+whose finding starts on the `return subprocess.run(` line:
+
+| Marker position | Finding |
+|---|---|
+| in the comment block directly above the call | still reported |
+| `# nosemgrep` block opened before the `def` | still reported |
+| trailing the line the finding starts on | suppressed |
+
+Two independent things hid this. The contract in
+`scripts/tests/test_subprocess_literals.py` accepted a marker "on the call's own
+line **or in the comment block directly above it**", so the position that
+silences nothing was a position the suite certified — a green test over a
+suppression with no effect, which is the taxidermy failure in its purest form.
+And no local gate could have caught it: `.codacy/tools-configs/semgrep.yaml`
+does not contain this rule, and `--config auto` resolves 290 Python rules that
+do not include it either — proved by running `auto` against an unmarked probe,
+which also reported nothing — so `make codacy` stays green on a finding the
+platform keeps raising.
+
+The platform's own report is the corroboration the measurement cannot give by
+itself: it names line 220, which is the line the finding starts on, and the
+marker was two lines above it. The version is the one caveat. The probe ran on
+1.26.0, `.codacy/codacy.yaml` pins `opengrep@1.16.4`, and the platform's build is
+not visible from here — so the claim is "1.26.0 honoured no marker position other
+than the finding's own line", not "every opengrep does".
+
+Two smaller measurements fell out of the same fix. Ruff's S603 does not read
+`shell=False` as a suppression of itself; it carves out only calls whose argv
+elements are all string literals, verified by removing the keyword (the finding
+stays), by swapping the constant for a literal (it goes), and by dropping both
+(still gone). And the two markers cannot share 88 columns — the marker line is 86
+on a 26-character prefix, `# ruff: ignore[subprocess-without-shell-equals-true]`
+is 52, so the two together are 140 — while ruff's preview `noqa-comments` rule
+bans the shorter `# noqa: S603`. The ruff half therefore became a per-file entry
+in `pyproject.toml`, beside the four gates that already carry one.
+
+**Decision: fix the marker position, and leave the local gate blind on purpose.**
+Adding `dangerous-subprocess-use-audit` to `.codacy/tools-configs/semgrep.yaml`
+would let `make codacy` see this class of drift, and the cost was measured: it
+surfaces 7 findings across the five `scripts/` gates plus
+`with_testmon_lock.py:99`, whose argv is the script's purpose and which this
+ledger already records as expected to stay reported. Converting the gate's
+blindness into a finding storm is a change of its own and was not made here. The
+position contract in `scripts/tests/test_subprocess_literals.py` is a proxy for a
+behaviour no local test can execute; the measurement it stands on is the table
+above, which is why the table lives here and not only in a docstring.
+
 **Not a research decision:** the tooling, hook, and workflow conventions live in
 `AGENTS.md` and the commit history, not here. This ledger tracks decisions about
 the *product*.
+
+### D6 — Scope realignment: a fabric, not a single-estate instrument — 2026-10-05
+
+**This entry changes D2's implicit scope, not D1.** Python stands, `mcp` 2.2.0
+stands, and every dependency decision in §4 is untouched. What changed is *what
+the server is for*.
+
+**The finding.** `SPEC.md` v1 described four hard-coded connectors. The project's
+stated intent is an **aggregation fabric** whose sources are configurable, and two
+of those sources were absent from every document in the repository:
+
+| Intent item | v1 status |
+|---|---|
+| **Custom ports** — arbitrary internal web portals, credentials typed or OIDC/OAuth, whose own APIs are treated as resource tooling, manually configured | Absent. `web_session` survived only as a `Literal` type |
+| **Other MCP clients** — other existing MCP servers added to this one | Absent. **Zero occurrences** in `SPEC.md`, both research documents, or any of the six council judge files |
+
+Neither was rejected. Neither was deferred. Neither was considered.
+
+**Why it went unnoticed, recorded because the cause generalises.** The council
+diagnosed its own blind spot correctly —
+
+> "The axes were partitioned by **source domain, not by section**. That is
+> exactly why external facts came back clean and why ~40% of an 816-line spec —
+> the parts asserting things about *itself* — went unread."
+
+— but that diagnosis names only the first half. There is a **third** blind spot
+the synthesis never states: all three judges held a *fact domain* mandate, so §1
+and §2 (purpose and scope) were read by exactly one judge, and only for
+tool-count arithmetic. **No judge was asked whether the spec delivered the
+product the user described.** A validation pass partitioned by the *thing being
+validated* rather than by *what could be wrong with it* will keep passing while
+the product is wrong.
+
+Two structural biases compounded it, and both are traceable to this repository's
+own research:
+
+- `polite-engine-and-adapters.md` closed the adapter space three separate ways —
+  `Connector.id` as the string union `"hdfs" | "yarn" | "solr" | "hbase"`; the
+  config `kind` as a closed three-value set; and the `Connector` interface itself
+  as filesystem-shaped (`Path`, `stat`, `readPrefix`, `RangeReader`). There is no
+  HTTP-request role port and no session primitive anywhere in it.
+- `SPEC.md` §1.1 expressed the product as six Hadoop-shaped workflows. A product
+  definition written only in terms of one estate cannot express a fabric.
+
+**The consequence for that research document:** it is **superseded** on those
+three points by `SPEC.md` v2 §5.2, which groups capabilities by source shape and
+adds `EndpointCapable` and `ToolRelayCapable`. The document is deliberately
+**not** edited. Rewriting 1,773 lines of research to match a decision it did not
+make would destroy the record of what the research actually found — which is the
+whole reason this ledger exists. Read it for the reasoning; take the current
+adapter model from `SPEC.md`.
+
+**Four research conclusions that had no home until now.** Each is a finding, not
+a preference, and each changed a decision:
+
+1. **`GET` is not read, so the portal schema has no verb, header, or body
+   surface.** CVE-2026-42551 (CVSS 7.5) — `X-HTTP-Method-Override` is honoured on
+   safe verbs, so `GET /item/42?_method=DELETE` executes as `DELETE`.
+   CVE-2026-19650 (CVSS 7.1) — GitLab GraphQL mutations over `GET`. Consequence:
+   a config that can name a header cannot carry a read-only guarantee. This is
+   the single most valuable output of the portal research.
+2. **A Stainless-shaped endpoint spec is structurally disqualified, not merely
+   heavy.** Its grammar *is* "verb + path", and `create: post` / `delete: delete`
+   are its *recommended* method names, so read-only is filterable there and never
+   expressible. Weight was the lesser objection: it is also a codegen input
+   paired with an OpenAPI 3.1 document, proprietary, account-gated, and versioned
+   by dated *editions* with breaking changes between them.
+3. **Refresh-token rotation is not single-flight across processes, so v1's
+   design was a permanent-lockout bug.** A host that `SIGKILL`s and respawns the
+   server every ~4 s makes concurrent refresh of one grant the *normal* case.
+   RFC 9700 §4.14.2 requires rotation or sender-constraining for public clients —
+   **MUST**, not the commonly-quoted RECOMMENDED — and on replay detection
+   "will revoke the active refresh token". Server grace cannot be relied on:
+   Okta 30 s, **Auth0's overlap period disabled by default**, **Keycloak's
+   `Refresh Token Max Reuse` default 0**. v1 §15.2 ("the refresh token lives in
+   the vault and is re-exchanged on every server start") is exactly the naive
+   version. Fixed by a cross-process lock plus a write-before-`prev` retry path
+   (`SPEC.md` §15.7).
+4. **The auth tier axis was wrong.** One `credential_provider` axis cannot express
+   SPNEGO, because Kerberos is not a bearer-token problem. Split into a credential
+   *shape* axis (`spnego` / `bearer` / `basic` / `cookie`) orthogonal to a grant
+   *tier* axis. Two vendor facts made the tiers concrete: Entra publishes **no
+   RFC 8414 document** (both endpoints 404) and omits `grant_types_supported`
+   entirely, so capability gating on that key fails on the most likely corporate
+   IdP; and Entra returns no `verification_uri_complete`, so device flow has no QR
+   or deep link.
+
+**Two corrections to recorded claims.** Both are cases where this ledger's own
+"unverified rather than guessed" discipline let a stale item survive:
+
+- The council recorded, and this ledger's D5-era notes repeated, that *OpenDAL's
+  Python binding exposes `hdfs-native` only under the `services-all` feature*.
+  Current official documentation states the opposite: "All services included —
+  the wheel bundles every backend; there are no build flags to enable." The v2
+  native-HDFS path is simpler than recorded.
+- The `README.md` in this directory describes the ledger as covering three
+  documents. It now also records a scope change, and the `Documents` table's
+  status column is stale in the same way §1.2 of v1 was.
+
+**Owner-supplied evidence that changed the design.** The owner's working YARN
+command — `curl --compressed -fksS --negotiate -u : -L "$url"` — closed open
+item 18.4 and contradicted two load-bearing v1 decisions. `--negotiate -u :`
+proves SPNEGO, so v1's "plain HTTPS, no SSH hop" was wrong about auth. `-L`
+proves the HA 307 to the peer RM must be followed, so v1's blanket redirect ban
+was over-correction solving SSRF by removing a capability the estate needs.
+**A working reference implementation beats a spec's claim about the same
+system**, and this ledger should not have needed three rounds of council review
+to notice that.
+
+**Decision:** scope realigned. The v1 scope was four hard-coded connectors; v2 is
+three adapter families — `ssh_cli` (HDFS), `web_session` and `https_api` (YARN,
+Solr as a bundled instance, and user portals), and `mcp_client` (other MCP
+servers) — so that **a new source is a config change, not a code change**. The
+always-loaded tool surface is held at a constant 19 regardless of configuration.
+Read-only became a **declared posture** (`read_only` by default, `read_write` an
+explicit opt-in) rather than an unconditional architectural claim, so the
+read-only machinery stops being a straightjacket if writes ever arrive; injection
+defence stays unconditional either way.
+
+`SPEC.md` is rewritten as v2 with a §21 traceability table accounting for all 20
+v1 sections, and D1–D5 are left unedited. The rewrite's own contract tests are in
+`scripts/tests/test_repo_contracts.py`; this entry's are in
+`scripts/tests/test_research_ledger.py`.
 
 ## Known unverified
 

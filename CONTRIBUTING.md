@@ -66,7 +66,7 @@ make lint-check        # ruff check, read-only
 make format-check      # ruff format --check
 make typecheck         # ty, strict
 make complexity        # cognitive complexity gate
-make test              # full suite, coverage enforced at 80%
+make test              # full suite, coverage enforced at 95% per file
 make workflows         # parse every workflow + actionlint
 make actionlint        # actionlint only
 make testmon           # tests touching only changed files

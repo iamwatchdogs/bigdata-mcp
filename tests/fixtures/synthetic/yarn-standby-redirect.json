@@ -1,0 +1,16 @@
+{
+  "comment": "SPEC.md \u00a73: a YARN HA standby answers 307 pointing at the active ResourceManager. Captured here as a fixture with no body, because the redirect *is* the response; the point is that the hop must be validated, not followed blindly.",
+  "exit_code": 307,
+  "operation": "GET /ws/v1/cluster/info (307 to the active RM)",
+  "request": {
+    "method": "GET",
+    "params": {},
+    "path": "/ws/v1/cluster/info"
+  },
+  "schema_version": "bigdata-mcp/fixture@1",
+  "source": "synthetic",
+  "source_id": "yarn_rm",
+  "stderr": "",
+  "stdout": "",
+  "transport": "https_api"
+}

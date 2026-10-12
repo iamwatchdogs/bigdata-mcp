@@ -1,0 +1,21 @@
+{
+  "comment": "SPEC.md \u00a711.1.2: `hdfs dfs -count -q -v` prints eight columns \u2014 QUOTA, REM_QUOTA, SPACE_QUOTA, REM_SPACE_QUOTA, DIR_COUNT, FILE_COUNT, CONTENT_SIZE, PATHNAME \u2014 and with no quota set the two QUOTA columns read `none` and the two REM_ columns read `inf`. An empty prefix reports zero in all three count columns, so a parser looking for a percentage string, or for a number in a `none` column, finds neither.",
+  "exit_code": 0,
+  "operation": "hdfs dfs -count -q -v /warehouse/",
+  "request": {
+    "argv": [
+      "hdfs",
+      "dfs",
+      "-count",
+      "-q",
+      "-v",
+      "/warehouse/"
+    ]
+  },
+  "schema_version": "bigdata-mcp/fixture@1",
+  "source": "synthetic",
+  "source_id": "hdfs",
+  "stderr": "",
+  "stdout": "       QUOTA       REM_QUOTA     SPACE_QUOTA REM_SPACE_QUOTA    DIR_COUNT   FILE_COUNT       CONTENT_SIZE PATHNAME\n        none             inf            none             inf            0            0                  0 /warehouse\n",
+  "transport": "ssh_cli"
+}

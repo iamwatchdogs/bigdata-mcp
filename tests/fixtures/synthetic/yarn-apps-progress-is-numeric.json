@@ -1,0 +1,16 @@
+{
+  "comment": "SPEC.md \u00a79.2.5: `progress` is a percentage 0\u2013100, not [0,1] (AppInfo.java:80,173). The value 41.5 is deliberately not a whole number and not near either end, so a parser that divides by 100 or reads 0.037 as 3.7% is caught.",
+  "exit_code": 200,
+  "operation": "GET /ws/v1/cluster/apps",
+  "request": {
+    "method": "GET",
+    "params": {},
+    "path": "/ws/v1/cluster/apps"
+  },
+  "schema_version": "bigdata-mcp/fixture@1",
+  "source": "synthetic",
+  "source_id": "yarn_rm",
+  "stderr": "",
+  "stdout": "{\"apps\": {\"app\": [{\"id\": \"application_1730000000_0001\", \"user\": \"analyst\", \"name\": \"hive-query\", \"state\": \"RUNNING\", \"finalStatus\": \"UNDEFINED\", \"progress\": 41.5, \"trackingUrl\": \"https://rm1.corp:8088/proxy/application_1730000000_0001/\"}]}, \"totalApps\": 1}",
+  "transport": "https_api"
+}

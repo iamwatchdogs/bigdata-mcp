@@ -1,0 +1,455 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bigdata-mcp/config.schema.json",
+  "title": "bigdata-mcp configuration",
+  "description": "Validates the PARSED form of the TOML file described by SPEC.md §16. Every object sets additionalProperties:false, so an unknown key is a refusal rather than a warning: §4.3 mandate 1 requires this file to be the neutral artefact, and §16 requires the load to be strict.",
+  "type": "object",
+  "additionalProperties": false,
+  "comment": "Neither the root nor [server] requires `mode`: §2.1 makes read_only the default precisely so a config that omits it is safe rather than unparseable. A typo in the key is still caught, because every object here is closed.",
+  "properties": {
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "description": "Declared posture, defaulting to read_only. Drives the generated capability vocabulary; under read_only no schema exposes a verb field (§2.1).",
+          "default": "read_only",
+          "enum": [
+            "read_only",
+            "read_write"
+          ]
+        },
+        "log_level": {
+          "enum": [
+            "debug",
+            "info",
+            "warning",
+            "error"
+          ]
+        },
+        "observer_staleness_s": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "adapters": {
+      "description": "The ONLY entry-point adapter names that may be resolved. Empty means no third-party adapter is ever loaded (§5.2).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "edge_host_concurrency": {
+          "description": "\"auto\" derives clamp(cores/2, 2, 8) from the edge host; an integer pins it.",
+          "anyOf": [
+            {
+              "const": "auto"
+            },
+            {
+              "type": "integer",
+              "minimum": 1
+            }
+          ]
+        },
+        "queue_depth": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_rows": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_output_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "timeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backend_call_s": {
+          "description": "MUST be under the client's 60s default so a clean error is returned instead of the connection being severed (§3). The bound is deliberately NOT expressed here: config.py owns it, so the rule has one implementation and one message rather than two that can disagree.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "ssh_handshake_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "stall_probe_interval_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "hdfs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "known_hosts"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "entrypoint": {
+          "description": "Server-side alias. NEVER caller-supplied (§11.1).",
+          "type": "string"
+        },
+        "namenode_uri": {
+          "type": "string"
+        },
+        "allowed_prefixes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "known_hosts": {
+          "description": "A path, or the literal \"disabled\". Never omit: absence is not a legal state (§11.1.1).",
+          "anyOf": [
+            {
+              "const": "disabled"
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            }
+          ]
+        },
+        "bastion_known_hosts": {
+          "type": "string"
+        },
+        "allow_insecure": {
+          "type": "boolean"
+        },
+        "auth": {
+          "enum": [
+            "key",
+            "password"
+          ]
+        },
+        "key_path": {
+          "type": "string"
+        },
+        "password_ref": {
+          "$ref": "#/$defs/secretRef"
+        }
+      },
+      "allOf": [
+        {
+          "comment": "§16: allow_insecure = true exists so that known_hosts = 'disabled' can be requested, so the arrow runs FROM disabled TO the flag. The reverse would forbid the opt-in it exists to permit.",
+          "if": {
+            "properties": {
+              "known_hosts": {
+                "const": "disabled"
+              }
+            },
+            "required": [
+              "known_hosts"
+            ]
+          },
+          "then": {
+            "properties": {
+              "allow_insecure": {
+                "const": true
+              }
+            },
+            "required": [
+              "allow_insecure"
+            ]
+          }
+        }
+      ]
+    },
+    "yarn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "base_urls": {
+          "description": "All of these are on the redirect allowlist (§4.2). A 307 to anything else is refused and names the host.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "credential_shape": {
+          "enum": [
+            "spnego",
+            "bearer",
+            "basic",
+            "cookie"
+          ]
+        }
+      }
+    },
+    "kerberos": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "transport": {
+          "enum": [
+            "native",
+            "curl_subprocess"
+          ]
+        },
+        "ccache_path": {
+          "description": "A FILE path, never the ambient ccache (§15.9).",
+          "type": "string"
+        },
+        "keytab_ref": {
+          "$ref": "#/$defs/secretRef"
+        },
+        "keytab": {
+          "description": "A literal path. Mutually exclusive with keytab_ref, which is the preferred form.",
+          "type": "string"
+        }
+      },
+      "not": {
+        "required": [
+          "keytab_ref",
+          "keytab"
+        ]
+      }
+    },
+    "solr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "base_urls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "credential_shape": {
+          "enum": [
+            "spnego",
+            "bearer",
+            "basic",
+            "cookie"
+          ]
+        },
+        "password_ref": {
+          "$ref": "#/$defs/secretRef"
+        },
+        "fail_if_open": {
+          "type": "boolean"
+        }
+      }
+    },
+    "portals": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "portal_dir": {
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Explicit allowlist of portal spec files. Empty or absent disables the family (§14).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tier": {
+          "enum": [
+            "auto",
+            "oidc",
+            "oidc_entra",
+            "custom"
+          ]
+        },
+        "issuer": {
+          "type": "string"
+        },
+        "client_id": {
+          "type": "string"
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resource": {
+          "description": "Audience pin. Verified on the token before use, to stop cross-resource confusion (§15.8).",
+          "type": "string"
+        },
+        "store": {
+          "$ref": "#/$defs/secretRef"
+        },
+        "lock_path": {
+          "type": "string"
+        },
+        "refresh_leeway_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "entra": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tenant"
+          ],
+          "properties": {
+            "tenant": {
+              "description": "MANDATORY; /common fails against Entra (§15.4).",
+              "type": "string",
+              "minLength": 1
+            },
+            "authority": {
+              "type": "string"
+            },
+            "use_broker": {
+              "anyOf": [
+                {
+                  "const": "auto"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "instance_discovery": {
+              "type": "boolean"
+            }
+          }
+        },
+        "custom": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "discovery_url": {
+              "type": "string"
+            },
+            "device_endpoint": {
+              "type": "string"
+            },
+            "extra_scopes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "extra_headers": {
+              "description": "Fixed headers for the Tier 3 IdP. A map, not a closed object: the keys are whatever the IdP calls its headers. A credential-shaped key here is still refused by the second load pass, which is why this map cannot smuggle a literal secret in.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "field_aliases": {
+              "description": "Maps this server's canonical field names onto an IdP's own names.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "mcp_servers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "servers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/mcpServer"
+          }
+        }
+      }
+    },
+    "sqlite": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "secretRef": {
+      "description": "A secret REFERENCE, never a literal. Resolution order is keychain: -> exec: -> file:, and there is no plaintext tier (§15.8).",
+      "type": "string",
+      "pattern": "^(keychain:|exec:|file:)\\S+$"
+    },
+    "mcpServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "transport"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transport": {
+          "enum": [
+            "stdio",
+            "streamable_http",
+            "sse"
+          ]
+        },
+        "command": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "url": {
+          "type": "string"
+        },
+        "resource": {
+          "description": "Audience pin (§15.8).",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

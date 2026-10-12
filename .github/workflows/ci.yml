@@ -180,7 +180,18 @@ jobs:
         run: uv sync --locked
 
       - name: Run linting
-        run: uv run ruff check src tests
+        # The three roots, spelled out to match `PY` in the Makefile. Passing
+        # `src tests` here skipped `scripts/` entirely, which was fine while every
+        # test lived under `tests/` and stopped being fine the moment some moved to
+        # `scripts/tests/` — those files would still be linted locally by
+        # `make lint-check` and silently unlinted in CI, which is the worst of both.
+        #
+        # Not left to ruff's default discovery either. With no paths it happens to
+        # reach the same 53 files today, but `[tool.pytest.ini_options] testpaths`
+        # is a test-only setting, so a gate that leans on it is one config edit
+        # away from dropping `src/`. A CI gate should be readable rather than
+        # clever.
+        run: uv run ruff check src tests scripts
 
       - name: Run type checking
         # No path argument: `[tool.ty.src] include` in pyproject.toml owns the
@@ -254,6 +265,14 @@ jobs:
       - name: Run tests with coverage
         if: env.IS_COVERAGE_RUN == 'true'
         run: uv run pytest --cov-report=xml
+
+      - name: Enforce per-file coverage floor
+        # Runs against the report the previous step just wrote, so the gate
+        # and the measurement are the same run. `fail_under` in pyproject and
+        # the statuses in codecov.yml are both totals; this is the only check
+        # that a *single* file did not fall below the floor.
+        if: env.IS_COVERAGE_RUN == 'true'
+        run: uv run python scripts/coverage_gate.py
 
       - name: Run tests without coverage
         if: env.IS_COVERAGE_RUN != 'true'
