@@ -90,6 +90,7 @@ import ast
 from pathlib import Path
 from typing import TypeGuard
 
+import pytest
 from docstring_gate import python_files
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -187,14 +188,26 @@ def _justification_window(node: ast.Call, lines: list[str]) -> str:
 def _names_the_rule(marker: str) -> bool:
     """Whether a marker names this rule at all, with or without a reason.
 
+    The text between `nosemgrep` and the `--` separator is the rule-ID list --
+    an optional leading `:` then comma-separated IDs -- and the tool matches
+    IDs exactly, so a substring of a longer ID names a different rule, and a
+    spelling of `AUDIT_RULE` in the trailing explanation names nothing.
+
     Args:
         marker: Marker text, from `_marker_on_call_line`.
 
     Returns:
-        `True` when the text following `nosemgrep` names `AUDIT_RULE`.
+        `True` when the rule-ID list following `nosemgrep` carries `AUDIT_RULE`
+            as an exact ID.
     """
     _before, directive, tail = marker.partition("nosemgrep")
-    return bool(directive) and AUDIT_RULE in tail
+    if not directive:
+        return False
+    rule_list, _separator, _reason = tail.partition("--")
+    identifiers = {
+        identifier.strip().lstrip(":").strip() for identifier in rule_list.split(",")
+    }
+    return AUDIT_RULE in identifiers
 
 
 def _names_the_rule_with_a_reason(marker: str) -> bool:
@@ -390,3 +403,65 @@ def test_every_interpreter_rooted_command_carries_a_reason() -> None:
     assert sites, _NO_SITES
     assert misplaced == [], _MISPLACED.format(locations=", ".join(misplaced))
     assert unjustified == [], _UNJUSTIFIED.format(locations=", ".join(unjustified))
+
+
+@pytest.mark.parametrize(
+    ("marker", "expected"),
+    [
+        (
+            f"    return subprocess.run(  # nosemgrep: {AUDIT_RULE} -- static argv",
+            True,
+        ),
+        (f"    return subprocess.run(  # nosemgrep: {AUDIT_RULE}", True),
+        (
+            "    return subprocess.run(  # nosemgrep: some.other.rule "
+            f"-- because {AUDIT_RULE} fires here",
+            False,
+        ),
+        (
+            f"    return subprocess.run(  # nosemgrep: not-{AUDIT_RULE} -- reason",
+            False,
+        ),
+        (
+            "    return subprocess.run(  # nosemgrep: rule.a, "
+            f"{AUDIT_RULE}, rule.b -- reason",
+            True,
+        ),
+        ("    return subprocess.run(  # nosemgrep -- just a reason", False),
+        (
+            f"    subprocess.run(cmd)  # plain comment mentioning {AUDIT_RULE}",
+            False,
+        ),
+    ],
+    ids=[
+        "exact-id-with-reason",
+        "exact-id-no-reason",
+        "named-only-in-reason",
+        "substring-id",
+        "exact-id-among-several",
+        "no-rule-ids",
+        "no-marker",
+    ],
+)
+def test_a_marker_names_the_rule_only_as_an_exact_rule_id(
+    marker: str, *, expected: bool
+) -> None:
+    """A marker names this rule only when its rule-ID list carries it exactly.
+
+    The text after `nosemgrep`, up to a `--` separator, is the rule-ID list: an
+    optional leading `:` then comma-separated IDs, whitespace tolerated.
+    Everything after `--` is the trailing explanation -- prose the tool never
+    reads as an ID, so a marker that spells `AUDIT_RULE` only in its
+    explanation names nothing. An ID that contains the rule name as a substring
+    (`not-dangerous-subprocess-use-audit`) is a different rule for the same
+    reason, and a marker carrying no list at all names nothing either. Whether
+    an exact ID also says *why* is `_names_the_rule_with_a_reason`'s question,
+    so the bare exact ID counts as naming the rule here.
+
+    Mutation evidence: cases three and four (`named-only-in-reason`,
+    `substring-id`) are the ones that fail against the pre-fix implementation,
+    the substring check `AUDIT_RULE in tail` -- both spell the rule somewhere
+    the exact-ID parse rejects. They turn green only when the list before `--`
+    is parsed and matched ID-for-ID; the other five pass either way.
+    """
+    assert _names_the_rule(marker) is expected
