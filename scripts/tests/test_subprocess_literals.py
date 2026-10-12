@@ -87,6 +87,8 @@ write at all.
 from __future__ import annotations
 
 import ast
+import tokenize
+from io import StringIO
 from pathlib import Path
 from typing import TypeGuard
 
@@ -135,19 +137,25 @@ def _marker_on_call_line(node: ast.Call, lines: list[str]) -> str:
     whole of the position opengrep honours -- the table in the module docstring
     is the measurement, and both neighbouring positions suppress nothing.
     Reading the comment block above as well is precisely what let a suppression
-    the tool ignores pass here as one it reads.
+    the tool ignores pass here as one it reads. Tokenizing the module keeps
+    marker text inside string literals from being mistaken for a comment.
 
     Args:
         node: The `subprocess` call whose line is needed.
         lines: The module's source lines, read by index.
 
     Returns:
-        The line's text, or `""` when that line carries no marker.
+        The line's comment token, or `""` when that comment carries no marker.
     """
     start = node.lineno - 1
     if not 0 <= start < len(lines) or "nosemgrep" not in lines[start]:
         return ""
-    return lines[start]
+    for token in tokenize.generate_tokens(StringIO("\n".join(lines)).readline):
+        if token.start[0] > node.lineno:
+            break
+        if token.type == tokenize.COMMENT and token.start[0] == node.lineno:
+            return token.string if "nosemgrep" in token.string else ""
+    return ""
 
 
 def _justification_window(node: ast.Call, lines: list[str]) -> str:
@@ -432,6 +440,11 @@ def test_every_interpreter_rooted_command_carries_a_reason() -> None:
             f"    subprocess.run(cmd)  # plain comment mentioning {AUDIT_RULE}",
             False,
         ),
+        (
+            f'    subprocess.run([sys.executable, "# nosemgrep: {AUDIT_RULE} '
+            '-- reason"])  # unrelated comment',
+            False,
+        ),
     ],
     ids=[
         "exact-id-with-reason",
@@ -441,6 +454,7 @@ def test_every_interpreter_rooted_command_carries_a_reason() -> None:
         "exact-id-among-several",
         "no-rule-ids",
         "no-marker",
+        "marker-in-string",
     ],
 )
 def test_a_marker_names_the_rule_only_as_an_exact_rule_id(
@@ -456,12 +470,16 @@ def test_a_marker_names_the_rule_only_as_an_exact_rule_id(
     (`not-dangerous-subprocess-use-audit`) is a different rule for the same
     reason, and a marker carrying no list at all names nothing either. Whether
     an exact ID also says *why* is `_names_the_rule_with_a_reason`'s question,
-    so the bare exact ID counts as naming the rule here.
+    so the bare exact ID counts as naming the rule here. A marker inside a
+    string literal is not a comment and cannot suppress the call.
 
     Mutation evidence: cases three and four (`named-only-in-reason`,
     `substring-id`) are the ones that fail against the pre-fix implementation,
     the substring check `AUDIT_RULE in tail` -- both spell the rule somewhere
     the exact-ID parse rejects. They turn green only when the list before `--`
-    is parsed and matched ID-for-ID; the other five pass either way.
+    is parsed and matched ID-for-ID; the other five original cases pass either
+    way. The `marker-in-string` case fails when extraction returns the whole
+    call line, and passes when extraction reads only its comment token.
     """
-    assert _names_the_rule(marker) is expected
+    call = ast.Call(func=ast.Name(id="run"), args=[], keywords=[], lineno=1)
+    assert _names_the_rule(_marker_on_call_line(call, [marker])) is expected
