@@ -8,7 +8,7 @@
 #
 # The distro is spelled out because the bare `3.14` tag is an alias that has
 # moved to trixie. Do not shorten it.
-FROM mcr.microsoft.com/devcontainers/python:3.14-bookworm@sha256:8179b9d5f68dab0def4e113f924e6aed989a636e65ab58fbe0c8e808b046ac40
+FROM mcr.microsoft.com/devcontainers/python:3.15-bookworm@sha256:25ac34e3c1a4c5b19a89ece73ed0278e92afc1cfd25ecb51714891e82bede421
 
 # shellcheck is not optional. `make workflows` exits 1 without it, and says so
 # at Makefile:135-139. ripgrep and jq mirror ci.yml, which installs ripgrep
